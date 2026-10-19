@@ -4689,6 +4689,60 @@ teste('premoldados-laje-pe', async (b, t) => {
   await ctx.close();
 });
 
+teste('recibos-ver-cadastros', async (b, t) => {
+  // para ver os dados completos de um funcionário era preciso abrir o
+  // Editar. Agora há o olho ao lado de cada funcionário (ativos, em teste,
+  // desligados, lixeira), terceiro, ficha de admissão e entrevista: abre
+  // tudo para ler, sem campo, com o Editar lá dentro. Dados fictícios.
+  if (!fs.existsSync(path.join(RAIZ, 'recibos_rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'recibos_rm' });
+  await semLogin(pg);
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    const l = document.getElementById('loginScreen'); if (l) l.style.setProperty('display', 'none', 'important');
+    state.employees = [
+      { id: 'v1', nome: 'PESSOA FICTICIA UM', docTipo: 'CPF', doc: '529.982.247-25', status: 'ativo', funcao: 'MONTADOR', banco: 'Banco Exemplo', registro: '123', telefone: '(51) 90000-0000',
+        dtInicio: '2025-02-03', dtCarteira: '2025-03-01', nascimento: '1990-05-10', salario: 3000, salarioCarteira: 2500, metodo: 'banco', insalubridade: 20, obsCadastro: 'Observação fictícia',
+        historicoSalario: [{ data: '2026-01-01', anterior: 2800, novo: 3000 }], afastHist: [], emprestimos: [] },
+      { id: 'v2', nome: 'PESSOA FICTICIA DOIS', docTipo: 'CPF', doc: '', status: 'desligado', dtDesligamento: '2026-06-30', emprestimos: [] },
+      { id: 'v3', nome: 'PESSOA FICTICIA TRES', docTipo: 'CPF', doc: '', status: 'excluido', emprestimos: [] }];
+    state.terceiros = [{ id: 't1', nome: 'EMPRESA FICTICIA', docTipo: 'CNPJ', doc: '00.000.000/0001-00', servico: 'Pintura', metodo: 'pix', pix: 'chave-ficticia', dadosBanc: 'Banco 000 ag 0000', contratos: [{ obra: 'Obra Exemplo', valor: 1000 }] }];
+    state.fichasAdm = { f1: { id: 'f1', empId: 'v1', criadaEm: '2026-01-01T10:00:00Z', atualizadaEm: '2026-01-02T10:00:00Z', campos: { nome: 'PESSOA FICTICIA UM', cpf: '529.982.247-25', mae: 'MAE FICTICIA', funcao: 'Montador' }, deps: [{}] } };
+    state.entrevistas = state.entrevistas || {};
+    if (typeof entTodas === 'function') { const et = entTodas(); et.en1 = { id: 'en1', nome: 'CANDIDATO FICTICIO', data: '2026-09-01', fone: '(51) 90000-0001', funcao: 'Ajudante', notas: 'Anotação completa da entrevista, com mais de noventa caracteres para conferir que aparece inteira na tela de ver.' }; }
+    renderEmps(); renderTerc(); admListaRender(); if (typeof entListaRender === 'function') entListaRender(); await esp(50);
+    /* os desligados ficam recolhidos: abre a seção */
+    const tog = document.querySelector('#empOcultos [data-togoff]'); if (tog && tog.getAttribute('aria-expanded') !== 'true') { tog.click(); await esp(50); }
+    const olhos = { emp: document.querySelectorAll('[data-ever]').length, terc: document.querySelectorAll('[data-tver]').length, adm: document.querySelectorAll('[data-fver]').length, ent: document.querySelectorAll('[data-enver]').length };
+    const ver = () => ({ aberto: document.getElementById('verModal').classList.contains('open'), titulo: document.getElementById('verTitulo').textContent, txt: document.getElementById('verCorpo').textContent.replace(/\s+/g, ' '),
+      campos: document.querySelectorAll('#verCorpo input,#verCorpo textarea,#verCorpo select').length });
+    document.querySelector('[data-ever="v1"]').click(); await esp(30);
+    const emp = ver();
+    const editTxt = document.getElementById('verEditar').textContent;
+    document.getElementById('verEditar').click(); await esp(60);
+    const editou = document.getElementById('empModal').classList.contains('open') && document.getElementById('mNome').value === 'PESSOA FICTICIA UM';
+    closeAll();
+    document.querySelector('[data-ever="v2"]').click(); await esp(30); const desl = ver(); closeAll();
+    document.querySelector('[data-tver="t1"]').click(); await esp(30); const terc = ver(); closeAll();
+    document.querySelector('[data-fver="f1"]').click(); await esp(30); const adm = ver(); closeAll();
+    const en = document.querySelector('[data-enver="en1"]'); let ent = null; if (en) { en.click(); await esp(30); ent = ver(); closeAll(); }
+    const placeholders = [...document.querySelectorAll('input[placeholder]')].map(i => i.placeholder).filter(p => /KAUAN/i.test(p));
+    return { olhos, emp, editTxt, editou, desl, terc, adm, ent, placeholders };
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r).slice(0, 2500);
+  t.ok('olho em todos os funcionários (ativo, desligado, lixeira), no terceiro, na ficha e na entrevista', !r.erro && r.olhos.emp >= 3 && r.olhos.terc === 1 && r.olhos.adm === 1 && r.olhos.ent === 1, J);
+  t.ok('funcionário: tudo para ler, sem campo', r.emp && r.emp.aberto && r.emp.campos === 0 && /Pessoa Ficticia Um/i.test(r.emp.titulo)
+    && ['529.982.247-25', '(51) 90000-0000', 'Montador', '01/03/2025', '10/05/1990', 'R$ 3.000,00', 'R$ 2.500,00', 'Banco Exemplo', '20%', 'Observação fictícia', 'R$ 2.800,00 → R$ 3.000,00', 'Ver a ficha de admissão'].every(x => r.emp.txt.includes(x)), J);
+  t.ok('Editar de dentro do Ver abre o cadastro para mudar', /Editar/.test(r.editTxt) && r.editou, J);
+  t.ok('desligado também abre, com a data do desligamento', r.desl && r.desl.aberto && r.desl.txt.includes('30/06/2026'), J);
+  t.ok('terceiro: PIX, dados bancários e contratos por obra', r.terc && ['chave-ficticia', 'Banco 000 ag 0000', 'Obra Exemplo', 'PIX'].every(x => r.terc.txt.includes(x)) && r.terc.campos === 0, J);
+  t.ok('ficha de admissão aparece como no papel, sem campo para digitar', r.adm && r.adm.aberto && r.adm.campos === 0 && /FICHA DE ADMISSÃO/i.test(r.adm.txt) && r.adm.txt.includes('MAE FICTICIA'), JSON.stringify(r.adm).slice(0, 900));
+  t.ok('entrevista: anotação inteira', r.ent && r.ent.txt.includes('aparece inteira na tela de ver.'), J);
+  t.ok('nenhum nome de pessoa de verdade como exemplo nos campos', r.placeholders && !r.placeholders.length, J);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
 teste('recibos-simula-rescisao', async (b, t) => {
   // simulador de rescisão: a conta da contabilidade (salário 3.300,
   // contratação 15/12/2025, saída 30/09/2026, sem justa causa, aviso
