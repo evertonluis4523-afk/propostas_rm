@@ -2815,8 +2815,14 @@ body:not([data-theme="escuro"]){
 #modeloCorpo{display:flex;flex-direction:column;gap:10px}
 
 /* ---------- a folha: papel, em qualquer tema ---------- */
-.folha{background:#fff;color:#1d2127;border:1px solid var(--line);border-radius:4px;box-shadow:var(--shadow);padding:13mm 14mm;max-width:210mm;margin:0 auto;font-size:10px;line-height:1.55;min-height:120px}
+.folha{background:#fff;color:#1d2127;border:1px solid var(--line);border-radius:4px;box-shadow:var(--shadow);padding:13mm 14mm;max-width:210mm;margin:0 auto;font-size:calc(10px*var(--fe,1.15));line-height:1.55;min-height:120px}
 .folha.vazia{display:none}
+.cfg-bloco{padding-bottom:12px;border-bottom:1px solid var(--line);display:flex;flex-direction:column;gap:8px}
+.cfg-tit{font-size:12px;font-weight:800;letter-spacing:.12em;text-transform:uppercase;color:var(--ink)}
+.seg{display:flex;flex-wrap:wrap;gap:6px}
+.seg button{border:1px solid var(--line);background:var(--card);color:var(--ink);border-radius:9px;padding:8px 14px;font:inherit;font-weight:700;cursor:pointer}
+.seg button .ex{display:block;font-size:11px;font-weight:500;color:var(--muted)}
+.seg button.on{border-color:var(--red);background:var(--red-soft);color:var(--red-dark)}
 .imp-l{margin-top:8px;font-size:13px;color:var(--muted)}
 .imp-l b{color:var(--ink)}
 .imp-s{margin:6px 0 0;padding-left:18px;font-size:12px;color:var(--muted);max-height:220px;overflow:auto}
@@ -2828,46 +2834,46 @@ body:not([data-theme="escuro"]){
 .folha .tb2 .tb2-c{text-align:left!important}
 .folha .tb2-rz{font-weight:700;color:#141414}
 .folha .tb2-tipo{margin-top:5mm;font-size:8px;font-weight:700;letter-spacing:.18em;text-transform:uppercase;color:#D53309;-webkit-print-color-adjust:exact;print-color-adjust:exact}
-.folha .f-tit{margin:1mm 0 .5mm;font-size:15px;font-weight:800;letter-spacing:.05em;text-transform:uppercase;color:#141414;line-height:1.25}
-.folha .f-sub{color:#6E747C;font-size:9.5px;margin-bottom:3mm}
+.folha .f-tit{margin:1mm 0 .5mm;font-size:calc(15px*var(--fe,1.15));font-weight:800;letter-spacing:.05em;text-transform:uppercase;color:#141414;line-height:1.25}
+.folha .f-sub{color:#6E747C;font-size:calc(9.5px*var(--fe,1.15));margin-bottom:3mm}
 .folha .f-meta{display:grid;grid-template-columns:2fr 1.4fr 1fr 1fr;border-top:1px solid #eceef1;border-bottom:1px solid #eceef1;margin:2mm 0 5mm}
 .folha .f-meta>div{padding:2mm 3mm 2mm 0;min-width:0}
 .folha .f-meta>div+div{padding-left:3mm;border-left:1px solid #eceef1}
-.folha .k{font-size:7.5px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#6E747C}
-.folha .f-meta .v{font-size:10px;font-weight:600;color:#141414;overflow-wrap:anywhere}
+.folha .k{font-size:calc(7.5px*var(--fe,1.15));font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#6E747C}
+.folha .f-meta .v{font-size:calc(10px*var(--fe,1.15));font-weight:600;color:#141414;overflow-wrap:anywhere}
 .folha .f-p{margin:0 0 2.2mm;text-align:justify}
 .folha .f-p.ind{padding-left:4mm}
 .folha .f-p.antes{margin-top:5mm}
 .folha .f-p b{color:#141414}
-.folha .f-h2{display:flex;align-items:center;gap:6px;margin:5mm 0 2mm;font-size:9px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;color:#141414;break-after:avoid}
+.folha .f-h2{display:flex;align-items:center;gap:6px;margin:5mm 0 2mm;font-size:calc(9px*var(--fe,1.15));font-weight:800;letter-spacing:.1em;text-transform:uppercase;color:#141414;break-after:avoid}
 .folha .f-h2::before{content:'';width:3px;height:11px;background:#F24619;border-radius:1px;-webkit-print-color-adjust:exact;print-color-adjust:exact}
 .folha .f-h2 .n{color:#D53309}
-.folha .f-h3{margin:3.5mm 0 1.5mm;font-size:8px;font-weight:800;color:#4A515B;text-transform:uppercase;letter-spacing:.07em;break-after:avoid}
-.folha .f-cap{margin:2mm 0 1mm;font-size:8px;font-weight:700;color:#4A515B;break-after:avoid}
+.folha .f-h3{margin:3.5mm 0 1.5mm;font-size:calc(8px*var(--fe,1.15));font-weight:800;color:#4A515B;text-transform:uppercase;letter-spacing:.07em;break-after:avoid}
+.folha .f-cap{margin:2mm 0 1mm;font-size:calc(8px*var(--fe,1.15));font-weight:700;color:#4A515B;break-after:avoid}
 .folha .f-ul{margin:0 0 2.2mm;padding-left:5mm}
 .folha .f-ul li{margin-bottom:.8mm;text-align:justify}
-.folha .f-obs{border-left:3px solid #F24619;background:#fdf6f3;padding:2mm 3mm;font-size:9px;margin:1mm 0 3mm;-webkit-print-color-adjust:exact;print-color-adjust:exact}
-.folha table.ft{width:100%;border-collapse:collapse;margin:0 0 3mm;font-size:9.5px;table-layout:fixed;border:0}
-.folha table.ft th{background:#F2F4F7;color:#4A515B;font-size:7.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;text-align:left;padding:1.3mm 2mm;border:0;border-bottom:1px solid #d5d9de;-webkit-print-color-adjust:exact;print-color-adjust:exact}
-.folha table.ft td{padding:1.2mm 2mm;border:0;border-bottom:1px solid #eceef1;vertical-align:top;color:#1d2127;font-size:9.5px;background:none}
+.folha .f-obs{border-left:3px solid #F24619;background:#fdf6f3;padding:2mm 3mm;font-size:calc(9px*var(--fe,1.15));margin:1mm 0 3mm;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+.folha table.ft{width:100%;border-collapse:collapse;margin:0 0 3mm;font-size:calc(9.5px*var(--fe,1.15));table-layout:fixed;border:0}
+.folha table.ft th{background:#F2F4F7;color:#4A515B;font-size:calc(7.5px*var(--fe,1.15));font-weight:700;letter-spacing:.06em;text-transform:uppercase;text-align:left;padding:1.3mm 2mm;border:0;border-bottom:1px solid #d5d9de;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+.folha table.ft td{padding:1.2mm 2mm;border:0;border-bottom:1px solid #eceef1;vertical-align:top;color:#1d2127;font-size:calc(9.5px*var(--fe,1.15));background:none}
 .folha table.ft .q{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}
 .folha table.ft td.rot{color:#4A515B;font-weight:600}
 .folha table.ft .fr{color:#6E747C;font-style:italic}
-.folha table.ft .ext{display:block;font-size:8px;font-weight:500;color:#6E747C;font-style:normal}
+.folha table.ft .ext{display:block;font-size:calc(8px*var(--fe,1.15));font-weight:500;color:#6E747C;font-style:normal}
 .folha table.ft tr{break-inside:avoid}
 .folha table.ft thead{display:table-header-group}
-.folha table.tot tr.grand td{border-top:1.5px solid #141414;border-bottom:0;font-size:12px;font-weight:800;padding-top:2mm;color:#141414}
+.folha table.tot tr.grand td{border-top:1.5px solid #141414;border-bottom:0;font-size:calc(12px*var(--fe,1.15));font-weight:800;padding-top:2mm;color:#141414}
 .folha table.tot tr.subt td{border-top:1px solid #c8ccd2;font-weight:700;color:#141414}
 .folha table.tot tr.depois-grand td,.folha table.tot tr.sep~tr.grand td{border-top:1.5px solid #141414}
-.folha table.tot tr.sep td{font-size:7.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#6E747C;background:#fafbfc;padding-top:2.5mm}
+.folha table.tot tr.sep td{font-size:calc(7.5px*var(--fe,1.15));font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#6E747C;background:#fafbfc;padding-top:2.5mm}
 .folha .f-partes{display:grid;grid-template-columns:1fr 1fr;gap:4mm;margin:1mm 0 4mm}
-.folha .f-parte{border:1px solid #eceef1;border-radius:3px;padding:3mm;font-size:9px;color:#3c424a;min-width:0;overflow-wrap:anywhere}
-.folha .f-parte .nm{font-weight:800;font-size:10.5px;color:#141414;margin:.6mm 0 1mm}
+.folha .f-parte{border:1px solid #eceef1;border-radius:3px;padding:3mm;font-size:calc(9px*var(--fe,1.15));color:#3c424a;min-width:0;overflow-wrap:anywhere}
+.folha .f-parte .nm{font-weight:800;font-size:calc(10.5px*var(--fe,1.15));color:#141414;margin:.6mm 0 1mm}
 .folha .f-local{margin:6mm 0 0;text-align:right}
 .folha .f-ass{display:grid;grid-template-columns:1fr 1fr;gap:12mm;margin-top:18mm;break-inside:avoid}
 .folha .f-ass.uma{grid-template-columns:minmax(0,80mm);justify-content:end}
-.folha .f-ass>div{border-top:1px solid #141414;padding-top:1.5mm;font-size:8.5px;text-align:center;color:#3c424a;display:flex;flex-direction:column}
-.folha .f-ass b{color:#141414;font-size:9px}
+.folha .f-ass>div{border-top:1px solid #141414;padding-top:1.5mm;font-size:calc(8.5px*var(--fe,1.15));text-align:center;color:#3c424a;display:flex;flex-direction:column}
+.folha .f-ass b{color:#141414;font-size:calc(9px*var(--fe,1.15))}
 
 @media (max-width:1100px){
   .ed-grid{grid-template-columns:1fr}
@@ -2947,7 +2953,7 @@ body:not([data-theme="escuro"]){
   </div>
   <div class="topbar-nav">
     <button class="tb-btn" id="btnNova" type="button">＋ Nova proposta</button>
-    <button class="tb-btn" id="btnModelo" type="button">Textos padrão</button>
+    <button class="tb-btn" id="btnModelo" type="button">Configurações</button>
   </div>
   <div class="topbar-right">
     <button class="btn btn-ghost btn-word" id="btnWord" type="button" disabled>Baixar Word</button>
@@ -3006,9 +3012,17 @@ body:not([data-theme="escuro"]){
 <div class="modelo-tela no-print" id="modeloTela">
   <div class="mt-box">
     <div class="mt-cab">
-      <h2>Textos padrão</h2>
-      <p>Valem para as próximas propostas e contratos. Os que já existem guardam o texto com que nasceram. Uma linha é um parágrafo; linha que começa com "- " vira item de lista.</p>
+      <h2>Configurações</h2>
     </div>
+    <!-- O tamanho da letra vale para a tela, o PDF e o Word, e para todos os
+         documentos: a arquiteta achou a letra pequena no papel. -->
+    <div class="cfg-bloco">
+      <div class="cfg-tit">Tamanho da letra no papel</div>
+      <div class="seg" id="cfgLetra" role="radiogroup" aria-label="Tamanho da letra"></div>
+      <p class="nota">Vale para a folha na tela, o PDF e o Word, em todas as propostas e contratos.</p>
+    </div>
+    <div class="cfg-tit">Textos padrão</div>
+    <p class="nota">Valem para as próximas propostas e contratos. Os que já existem guardam o texto com que nasceram. Uma linha é um parágrafo; linha que começa com "- " vira item de lista.</p>
     <div id="modeloCorpo"></div>
     <div class="mt-acoes">
       <button class="btn btn-ghost" id="modeloVolta" type="button">Voltar ao texto original</button>
@@ -3205,6 +3219,10 @@ const ROTULOS_TEXTO = {
 const SITUACOES = { incluso: 'Incluso', aparte: 'Incluso, valor à parte', nao: 'Não incluso' };
 const UNIDADES = ['un', 'm', 'm²', 'm³', 'kg', 'cj', 'vb'];
 const MET_CAMPOS = ['Modulação entre tesouras', 'Vigas de cobertura', 'Cobertura (terças)', 'Telha de cobertura', 'Fechamento'];
+/* Tamanho da letra no papel. "Normal" é 15% maior que a primeira versão,
+   que a arquiteta achou pequena; "Pequena" é a de antes. */
+const LETRAS = { pequena: { k: 1, rot: 'Pequena', ex: 'a primeira versão' }, normal: { k: 1.15, rot: 'Normal', ex: 'recomendada' },
+  grande: { k: 1.3, rot: 'Grande', ex: '+30%' }, maior: { k: 1.45, rot: 'Muito grande', ex: '+45%' } };
 const STATUS = { negociacao: 'Em negociação', aprovada: 'Aprovada', assinado: 'Contrato assinado', perdida: 'Não fechou' };
 
 /* ═══════════════════════════════════════════════════════════
@@ -3635,9 +3653,11 @@ function zipar(arqs) {
 }
 const xe = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const W_LARG = 9752; /* A4 menos as margens, em twips */
+let W_K = 1;   /* a escala da letra, durante a montagem do Word */
+const wSz = n => Math.round(n * W_K);
 function wRun(t, o) {
   o = o || {};
-  const pr = (o.b ? '<w:b/>' : '') + (o.i ? '<w:i/>' : '') + (o.caps ? '<w:caps/>' : '') + (o.cor ? '<w:color w:val="' + o.cor + '"/>' : '') + (o.sz ? '<w:sz w:val="' + o.sz + '"/><w:szCs w:val="' + o.sz + '"/>' : '') + (o.esp ? '<w:spacing w:val="' + o.esp + '"/>' : '');
+  const pr = (o.b ? '<w:b/>' : '') + (o.i ? '<w:i/>' : '') + (o.caps ? '<w:caps/>' : '') + (o.cor ? '<w:color w:val="' + o.cor + '"/>' : '') + (o.sz ? '<w:sz w:val="' + wSz(o.sz) + '"/><w:szCs w:val="' + wSz(o.sz) + '"/>' : '') + (o.esp ? '<w:spacing w:val="' + o.esp + '"/>' : '');
   return '<w:r>' + (pr ? '<w:rPr>' + pr + '</w:rPr>' : '') + '<w:t xml:space="preserve">' + xe(t) + '</w:t></w:r>';
 }
 function wPar(conteudo, o) {
@@ -3708,6 +3728,7 @@ async function logoPNG() {
   } catch (e) { return null; }
 }
 async function docxBytes(bl) {
+  W_K = 1;   /* timbrado e rodapé no tamanho do padrão; a escala é do corpo */
   const png = await logoPNG();
   const NS = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"';
   const XML = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>';
@@ -3720,9 +3741,10 @@ async function docxBytes(bl) {
   const footer = XML + '<w:ftr ' + NS + '>' + wPar(wRun('51 99789-7879 · @rm.estruturas     ·     www.rmestruturas.com.br     ·     página ', { sz: 14, cor: '6E747C' })
     + '<w:r><w:rPr><w:color w:val="6E747C"/><w:sz w:val="14"/></w:rPr><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:rPr><w:color w:val="6E747C"/><w:sz w:val="14"/></w:rPr><w:instrText xml:space="preserve"> PAGE </w:instrText></w:r><w:r><w:rPr><w:color w:val="6E747C"/><w:sz w:val="14"/></w:rPr><w:fldChar w:fldCharType="end"/></w:r>',
     { jc: 'center', depois: 0, borda: '<w:top w:val="single" w:sz="4" w:color="E6E6E1" w:space="4"/>' }) + '</w:ftr>';
+  W_K = escalaLetra();
   const doc = XML + '<w:document ' + NS + '><w:body>' + wCorpo(bl)
     + '<w:sectPr><w:headerReference w:type="default" r:id="rIdH"/><w:footerReference w:type="default" r:id="rIdF"/><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1985" w:right="1077" w:bottom="1247" w:left="1077" w:header="567" w:footer="454" w:gutter="0"/></w:sectPr></w:body></w:document>';
-  const styles = XML + '<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:eastAsia="Arial" w:cs="Arial"/><w:color w:val="1D2127"/><w:sz w:val="19"/><w:szCs w:val="19"/><w:lang w:val="pt-BR"/></w:rPr></w:rPrDefault><w:pPrDefault><w:pPr><w:spacing w:after="100" w:line="264" w:lineRule="auto"/></w:pPr></w:pPrDefault></w:docDefaults><w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/></w:style></w:styles>';
+  const styles = XML + '<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:eastAsia="Arial" w:cs="Arial"/><w:color w:val="1D2127"/><w:sz w:val="' + wSz(19) + '"/><w:szCs w:val="' + wSz(19) + '"/><w:lang w:val="pt-BR"/></w:rPr></w:rPrDefault><w:pPrDefault><w:pPr><w:spacing w:after="100" w:line="264" w:lineRule="auto"/></w:pPr></w:pPrDefault></w:docDefaults><w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/></w:style></w:styles>';
   const arqs = [
     { nome: '[Content_Types].xml', dados: XML + '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Default Extension="png" ContentType="image/png"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/><Override PartName="/word/header1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml"/><Override PartName="/word/footer1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml"/></Types>' },
     { nome: '_rels/.rels', dados: XML + '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>' },
@@ -3833,6 +3855,7 @@ function renderFolha() {
   $('avisos').innerHTML = av.map(a => '<div>⚠ ' + esc(a) + '</div>').join('');
   $('avisos').style.display = av.length ? '' : 'none';
   $('folhaPapel').classList.toggle('vazia', !d);
+  $('folhaPapel').style.setProperty('--fe', String(escalaLetra()));
   if (!d) { f.innerHTML = ''; return; }
   f.innerHTML = blocosHTML(aba === 'contrato' && d.contrato ? blocosContrato(d) : blocosProposta(d));
 }
@@ -3962,20 +3985,33 @@ $('btnWord').addEventListener('click', async () => {
 });
 
 /* ---------- textos padrão ---------- */
+function renderLetra(escolha) {
+  $('cfgLetra').innerHTML = Object.keys(LETRAS).map(k => '<button type="button" role="radio" aria-checked="' + (k === escolha) + '" data-letra="' + k + '" class="' + (k === escolha ? 'on' : '') + '">' + LETRAS[k].rot + '<span class="ex">' + LETRAS[k].ex + '</span></button>').join('');
+}
+$('cfgLetra').addEventListener('click', e => {
+  const b = e.target.closest('[data-letra]'); if (!b) return;
+  /* já muda a folha atrás, para ver o efeito antes de salvar */
+  renderLetra(b.dataset.letra); $('cfgLetra').dataset.escolha = b.dataset.letra;
+  $('folhaPapel').style.setProperty('--fe', String(LETRAS[b.dataset.letra].k));
+});
 $('btnModelo').addEventListener('click', () => {
   const m = modeloAtual();
+  $('cfgLetra').dataset.escolha = config.letra || 'normal'; renderLetra($('cfgLetra').dataset.escolha);
   $('modeloCorpo').innerHTML = Object.keys(ROTULOS_TEXTO).map(k => { const [g, c] = k.split('.'); return campo(ROTULOS_TEXTO[k], '<textarea data-m="' + k + '" rows="' + Math.min(14, Math.max(2, Math.ceil(String(m[g][c]).length / 100))) + '">' + esc(m[g][c]) + '</textarea>'); }).join('');
   $('modeloTela').classList.add('on');
 });
-$('modeloFechar').addEventListener('click', () => $('modeloTela').classList.remove('on'));
+$('modeloFechar').addEventListener('click', () => { $('modeloTela').classList.remove('on'); renderFolha(); });
 $('modeloSalvar').addEventListener('click', () => {
+  const letra = $('cfgLetra').dataset.escolha || 'normal';
+  if (letra !== (config.letra || 'normal')) { config.letra = letra; salvarConfig(); }
   const n = { proposta: {}, contrato: {} };
   document.querySelectorAll('#modeloCorpo [data-m]').forEach(t => { const [g, c] = t.dataset.m.split('.'); if (t.value !== MODELO_PADRAO[g][c]) n[g][c] = t.value; });
   modeloNuvem = n;
   try { localStorage.setItem(LS_KEY + '_modelo', JSON.stringify(n)); } catch (e) { }
   if (fbDB && fbAuthReady) fbDB.ref(FB_NO + '/modelo').set(n).catch(e => { if (window.rmNuvemErro) rmNuvemErro('salvar os textos padrão', e); });
   $('modeloTela').classList.remove('on');
-  avisoTopo('Textos padrão salvos. Valem para as próximas propostas e contratos.');
+  renderFolha();
+  avisoTopo('Configurações salvas.');
 });
 $('modeloVolta').addEventListener('click', () => {
   document.querySelectorAll('#modeloCorpo [data-m]').forEach(t => { const [g, c] = t.dataset.m.split('.'); t.value = MODELO_PADRAO[g][c]; });
@@ -4012,8 +4048,9 @@ let tCfg = null;
 function salvarConfig() {
   guardarLocal();
   clearTimeout(tCfg);
-  tCfg = setTimeout(() => { if (fbDB && fbAuthReady) fbDB.ref(FB_NO + '/config').set({ rep: config.rep || '', repDoc: config.repDoc || '' }).catch(e => { if (window.rmNuvemErro) rmNuvemErro('salvar o representante da contratada', e); }); }, 700);
+  tCfg = setTimeout(() => { if (fbDB && fbAuthReady) fbDB.ref(FB_NO + '/config').set({ rep: config.rep || '', repDoc: config.repDoc || '', letra: config.letra || 'normal' }).catch(e => { if (window.rmNuvemErro) rmNuvemErro('salvar as configurações', e); }); }, 700);
 }
+function escalaLetra() { return (LETRAS[config.letra] || LETRAS.normal).k; }
 function editandoAqui() { const a = document.activeElement; return a && $('ficha').contains(a) && /INPUT|TEXTAREA|SELECT/.test(a.tagName); }
 let remotoEsperando = null;
 function aplicarRemoto(v) {
@@ -4945,7 +4982,7 @@ if ('serviceWorker' in navigator) {
 })();
 </script>
 <script>/* versão publicada (PADRAO_RM.md §3): sobe a cada publicação, junto com o CACHE do sw.js */
-const APP_VER='v3';
+const APP_VER='v4';
 </script>
 <script id="rmVersaoBloco">
 /* ===== SELO DE VERSÃO — igual em todos os sistemas (PADRAO_RM.md §3) =====
