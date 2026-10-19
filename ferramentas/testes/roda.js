@@ -7423,28 +7423,22 @@ teste('contas-anexos-na-nuvem', async (b, t) => {
 });
 
 teste('contas-link-curto', async (b, t) => {
-  // o link do acompanhamento levava o nome da conta do GitHub no endereço:
-  // agora sai pelo Cloudflare, sem ele. Com um link curto salvo nas
-  // configurações, o Copiar e o WhatsApp mandam o curto.
+  // o link do acompanhamento levava o nome da conta do GitHub no endereço.
+  // Agora sai pelo Cloudflare, sem ele -- e a opção de link curto, que só
+  // existia para esconder o nome, saiu da tela.
   if (!fs.existsSync(path.join(RAIZ, 'rm_contas'))) return;
   const { ctx, pg, erros } = await abre(b, { 'sis.local': 'rm_contas' });
   await semLogin(pg);
   const r = await pg.evaluate(async () => {
-    const grav = []; fb = { db: { ref: (p) => ({ update: async (u) => { grav.push([p, u.linkCurto]); } }) } };
     let aberto = ''; window.open = (u) => { aberto = decodeURIComponent(u); return null; };
-    acompAbrirJanela(); const antes = acompUrlEnvio();
-    document.getElementById('acompCurto').value = 'https://evertonluis4523-afk.github.io/rm_contas/aberto.html'; acompSalvaCurto();
-    document.getElementById('acompCurto').value = 'https://rm-estruturas.pages.dev/rm_contas/aberto.html'; acompSalvaCurto();
-    const recusou = acompUrlEnvio() === antes;
-    document.getElementById('acompCurto').value = 'https://tinyurl.com/rm-teste'; acompSalvaCurto();
-    acompLink('whats');
-    return { antes, recusou, depois: acompUrlEnvio(), tela: document.getElementById('acompUrl').textContent, aberto, grav };
+    let copiado = ''; try { Object.defineProperty(navigator, 'clipboard', { value: { writeText: async (u) => { copiado = u; } }, configurable: true }); } catch (e) {}
+    acompAbrirJanela(); acompLink('whats'); acompLink('copiar'); await new Promise(r => setTimeout(r, 50));
+    return { tela: document.getElementById('acompUrl').textContent, aberto, copiado, curto: !!document.getElementById('acompCurto') || /tinyurl|link curto/i.test(document.getElementById('acompOverlay').textContent) };
   }).catch(e => ({ erro: e.message }));
   const J = JSON.stringify(r) + ' ' + erros.join(' | ');
-  t.ok('sem link curto, envia o endereço do Cloudflare, sem o nome da conta do GitHub', !r.erro && r.antes === 'https://rm-estruturas.pages.dev/rm_contas/aberto.html' && !/evertonluis/.test(r.antes), J);
-  t.ok('o próprio endereço do site (GitHub ou Cloudflare) não vale como curto', !r.erro && r.recusou, J);
-  t.ok('com o link curto salvo (nas configurações da nuvem), a janela e o WhatsApp usam ele', !r.erro && r.depois === 'https://tinyurl.com/rm-teste' && r.tela === r.depois
-    && /tinyurl\.com\/rm-teste/.test(r.aberto) && !/github\.io/.test(r.aberto) && r.grav.some(g => g[0] === 'contas_pagar' && g[1] === 'https://tinyurl.com/rm-teste') && !erros.length, J);
+  const URL = 'https://rm-estruturas.pages.dev/rm_contas/aberto.html';
+  t.ok('a janela, o WhatsApp e o Copiar mandam o endereço do Cloudflare, sem o nome da conta do GitHub', !r.erro && r.tela === URL && r.aberto.includes(URL) && r.copiado === URL && !/evertonluis|github/.test(r.aberto), J);
+  t.ok('sem a opção de link curto na tela', !r.erro && !r.curto && !erros.length, J);
   await ctx.close();
 });
 
