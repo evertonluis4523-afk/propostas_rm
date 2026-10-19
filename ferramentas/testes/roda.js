@@ -4719,7 +4719,8 @@ teste('recibos-ver-cadastros', async (b, t) => {
     const tog = document.querySelector('#empOcultos [data-togoff]'); if (tog && tog.getAttribute('aria-expanded') !== 'true') { tog.click(); await esp(50); }
     const olhos = { emp: document.querySelectorAll('[data-ever]').length, terc: document.querySelectorAll('[data-tver]').length, adm: document.querySelectorAll('[data-fver]').length, ent: document.querySelectorAll('[data-enver]').length };
     const ver = () => ({ aberto: document.getElementById('verModal').classList.contains('open'), titulo: document.getElementById('verTitulo').textContent, txt: document.getElementById('verCorpo').textContent.replace(/\s+/g, ' '),
-      campos: document.querySelectorAll('#verCorpo input,#verCorpo textarea,#verCorpo select').length });
+      campos: document.querySelectorAll('#verCorpo input,#verCorpo textarea,#verCorpo select').length,
+      lado: (() => { const m = document.querySelector('#verModal .mbody'); return m ? m.scrollWidth - m.clientWidth : -1; })() });
     document.querySelector('[data-ever="v1"]').click(); await esp(30);
     const emp = ver();
     const editTxt = document.getElementById('verEditar').textContent;
@@ -4741,6 +4742,8 @@ teste('recibos-ver-cadastros', async (b, t) => {
   t.ok('desligado também abre, com a data do desligamento', r.desl && r.desl.aberto && r.desl.txt.includes('30/06/2026'), J);
   t.ok('terceiro: PIX, dados bancários e contratos por obra', r.terc && ['chave-ficticia', 'Banco 000 ag 0000', 'Obra Exemplo', 'PIX'].every(x => r.terc.txt.includes(x)) && r.terc.campos === 0, J);
   t.ok('ficha de admissão aparece como no papel, sem campo para digitar', r.adm && r.adm.aberto && r.adm.campos === 0 && /FICHA DE ADMISSÃO/i.test(r.adm.txt) && r.adm.txt.includes('MAE FICTICIA'), JSON.stringify(r.adm).slice(0, 900));
+  // a ficha é uma folha A4, mais larga que a janela: encolhe para caber, sem rolagem para o lado
+  t.ok('ficha cabe na largura da janela de ver', r.adm && r.adm.lado <= 1, JSON.stringify(r.adm && r.adm.lado));
   t.ok('entrevista: anotação inteira', r.ent && r.ent.txt.includes('aparece inteira na tela de ver.'), J);
   t.ok('nenhum nome de pessoa de verdade como exemplo nos campos', r.placeholders && !r.placeholders.length, J);
   t.ok('sem erro na página', !erros.length, erros.join(' | '));
@@ -11084,6 +11087,97 @@ teste('central-troca-de-conta-fecha-abas', async (b, t) => {
   await ctx.close();
 });
 
+teste('site-unico-montagem', async (b, t) => {
+  // a fila do GitHub Pages parou por mais de uma hora (19/10/2026) e
+  // ninguém recebia a versão nova. O site único (rm-sistemas, no Cloudflare)
+  // é montado por monta_site.py: todos os sistemas, cada um na sua pasta,
+  // sem as pastas de trabalho, e a raiz abrindo a Central.
+  const ferr = path.join(RAIZ, 'central_rm', 'ferramentas', 'monta_site.py');
+  if (!fs.existsSync(ferr)) return;
+  const dest = fs.mkdtempSync(path.join(require('os').tmpdir(), 'rm-site-'));
+  let saida = '';
+  try { saida = cp.execFileSync('python3', [ferr, RAIZ, dest], { encoding: 'utf8' }); } catch (e) { saida = 'ERRO ' + e.message; }
+  const sis = repos().filter(r => r !== 'rm-sistemas' && r !== 'minhas-contas');
+  const faltam = sis.filter(r => !fs.existsSync(path.join(dest, r, 'index.html')));
+  const sujos = [];
+  sis.forEach(r => ['ferramentas', 'electron', 'build', 'scripts', 'PADRAO_RM.md', 'CLAUDE.md', 'package.json'].forEach(x => { if (fs.existsSync(path.join(dest, r, x))) sujos.push(r + '/' + x); }));
+  const vers = JSON.parse(fs.readFileSync(path.join(dest, 'versoes.json'), 'utf8'));
+  const versoesOk = sis.every(r => { const h = fs.readFileSync(path.join(RAIZ, r, 'index.html'), 'utf8'); const m = /const APP_VER='(v\d+)'/.exec(h); return !m || (vers[r] && vers[r].versao === m[1]); });
+  const raizIdx = fs.readFileSync(path.join(dest, 'index.html'), 'utf8');
+  const wr = fs.existsSync(path.join(dest, 'wrangler.jsonc')) ? fs.readFileSync(path.join(dest, 'wrangler.jsonc'), 'utf8') : '';
+  const ign = fs.existsSync(path.join(dest, '.assetsignore')) ? fs.readFileSync(path.join(dest, '.assetsignore'), 'utf8') : '';
+  const migra = fs.existsSync(path.join(dest, 'central_rm', 'migra.html'));
+  t.ok('todos os sistemas no site, cada um na sua pasta', !faltam.length && /sistema\(s\) montado/.test(saida), faltam.join(', ') + ' ' + saida.slice(0, 200));
+  t.ok('sem ferramentas, testes, programa e documentação', !sujos.length, sujos.join(', '));
+  t.ok('versoes.json com a versão publicada de cada um', versoesOk, JSON.stringify(vers).slice(0, 300));
+  t.ok('a raiz abre a Central; serve pelo Pages e pelo Workers', /url=central_rm\//.test(raizIdx) && /"directory": "\.\/"/.test(wr) && /\.git/.test(ign), wr + ign);
+  t.ok('a página que leva as preferências do endereço antigo vai junto', migra);
+  fs.rmSync(dest, { recursive: true, force: true });
+});
+
+teste('programa-duas-fontes', async (b, t) => {
+  // o programa baixa do Cloudflare e cai no GitHub se o Cloudflare falhar ou
+  // estiver atrás da versão que o computador já tem
+  const arq = path.join(RAIZ, 'central_rm', 'electron', 'fontes.js');
+  if (!fs.existsSync(arq)) return;
+  delete require.cache[require.resolve(arq)];
+  const F = require(arq);
+  const pag = v => '<html>' + 'x'.repeat(3000) + "<script>const APP_VER='v" + v + "';</script>";
+  const falso = mapa => { const pedidos = []; return { pedidos, fetch: async (u) => { pedidos.push(u.split('?')[0]); const r = mapa[u.split('?')[0]];
+    if (r instanceof Error) throw r; if (!r) return { ok: false, status: 404, text: async () => '' }; return { ok: true, status: 200, headers: { get: () => null }, text: async () => r }; } }; };
+  const P = F.PRINCIPAL + '/recibos_rm/index.html', R = F.RESERVA + '/recibos_rm/index.html';
+  const a = falso({ [P]: pag(260), [R]: pag(260) }); const ra = await F.buscar('/recibos_rm/index.html', { fetch: a.fetch, versaoLocal: 259, min: 2000 });
+  const b2 = falso({ [P]: new Error('rede'), [R]: pag(260) }); const rb = await F.buscar('/recibos_rm/index.html', { fetch: b2.fetch, versaoLocal: 259, min: 2000 });
+  const c = falso({ [P]: pag(255), [R]: pag(261) }); const rc = await F.buscar('/recibos_rm/index.html', { fetch: c.fetch, versaoLocal: 259, min: 2000 });
+  const d = falso({ [P]: 'curto', [R]: pag(260) }); const rd = await F.buscar('/recibos_rm/index.html', { fetch: d.fetch, versaoLocal: 0, min: 2000 });
+  let semNenhuma = ''; try { await F.buscar('/recibos_rm/index.html', { fetch: falso({}).fetch, min: 2000 }); } catch (e) { semNenhuma = e.message; }
+  t.ok('normal: só o Cloudflare é lido', ra.base === F.PRINCIPAL && a.pedidos.length === 1, JSON.stringify(a.pedidos));
+  t.ok('Cloudflare fora do ar: vem do GitHub', rb.base === F.RESERVA && rb.v === 260);
+  t.ok('Cloudflare atrasado em relação ao computador: fica a mais nova (GitHub)', rc.base === F.RESERVA && rc.v === 261 && c.pedidos.length === 2);
+  t.ok('página incompleta não serve', rd.base === F.RESERVA);
+  t.ok('sem nenhuma fonte: erro, e o programa segue com o que tem', /HTTP 404/.test(semNenhuma), semNenhuma);
+  t.ok('só baixa do site da RM', F.relativo('https://rm-estruturas.pages.dev/recibos_rm/') === '/recibos_rm' && F.relativo('https://evertonluis4523-afk.github.io/rm_contas') === '/rm_contas' && F.relativo('https://outro.site/recibos_rm/') === null);
+  const main = fs.readFileSync(path.join(RAIZ, 'central_rm', 'electron', 'main.js'), 'utf8');
+  t.ok('Central e sistemas no programa usam as duas fontes', (main.match(/fontes\.buscar\(/g) || []).length === 2 && /fontes\.relativo\(urlSistema\)/.test(main));
+});
+
+teste('central-site-de-origem', async (b, t) => {
+  // a Central abre os sistemas pelo endereço em que ela própria foi aberta
+  // (Cloudflare -> Cloudflare, GitHub -> GitHub), e no endereço novo traz
+  // uma vez as preferências do antigo (tema, fundo, organização da tela)
+  if (!fs.existsSync(path.join(RAIZ, 'central_rm', 'migra.html'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'central_rm' });
+  const r = await pg.evaluate(() => ({ contas: (BASE_SYSTEMS.find(s => s.id === 'contas') || {}).url, epi: (document.getElementById('tl-epi-url') || {}).textContent }));
+  await ctx.close();
+  // chegada da passagem: grava só preferência, limpa o endereço e não repete
+  const dados = Buffer.from(JSON.stringify({ rm_tema: 'escuro', rm_fundo: 'trelica', 'rm_density:pessoa@exemplo.com': 'compacta', recibos_rm_dados: 'NAO', rm_senha: 'NAO' })).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  const c2 = await abre(b, { 'sis.local': 'central_rm' }, 'index.html#rm-migra=' + dados);
+  const chegou = await c2.pg.evaluate(() => ({ tema: localStorage.getItem('rm_tema'), fundo: localStorage.getItem('rm_fundo'), dens: localStorage.getItem('rm_density:pessoa@exemplo.com'),
+    dado: localStorage.getItem('recibos_rm_dados'), senha: localStorage.getItem('rm_senha'), feito: localStorage.getItem('rm_migrado_reserva'), hash: location.hash }));
+  await c2.ctx.close();
+  // a página do endereço antigo: junta só preferência e só volta para o site da RM
+  const c3 = await abre(b, { 'sis.local': 'central_rm' }, 'migra.html#volta=' + encodeURIComponent('https://outro.site/x/'), { antes: () => { try { localStorage.setItem('rm_tema', 'claro'); localStorage.setItem('recibos_rm_dados', 'segredo'); } catch (e) {} } });
+  const recusou = await c3.pg.evaluate(() => ({ url: location.href, txt: document.body.textContent }));
+  await c3.ctx.close();
+  const c4ctx = await b.newContext(); const c4 = await c4ctx.newPage(); let foiPara = '';
+  /* o # não vai na requisição: a página de chegada é servida em branco e o
+     endereço completo é lido dela */
+  await c4.route('**/*', rq => { const u = rq.request().url(); if (u.startsWith('http://sis.local/')) return rq.fulfill({ status: 200, contentType: 'text/html', body: fs.readFileSync(path.join(RAIZ, 'central_rm', 'migra.html')) });
+    if (u.startsWith('https://rm-estruturas.pages.dev/')) return rq.fulfill({ status: 200, contentType: 'text/html', body: '<html><body>chegou</body></html>' }); return rq.abort(); });
+  await c4.addInitScript(() => { try { localStorage.setItem('rm_tema', 'claro'); localStorage.setItem('recibos_rm_dados', 'segredo'); } catch (e) {} });
+  await c4.goto('http://sis.local/migra.html#volta=' + encodeURIComponent('https://rm-estruturas.pages.dev/central_rm/')).catch(() => {});
+  await c4.waitForTimeout(800); foiPara = c4.url(); await c4ctx.close();
+  const levou = (/#rm-migra=([^&]*)/.exec(foiPara) || [])[1] || '';
+  const conteudo = levou ? JSON.parse(Buffer.from(levou.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8')) : {};
+  const J = JSON.stringify({ r, chegou, recusou, foiPara: foiPara.slice(0, 120), conteudo });
+  t.ok('sistemas e o link da Ficha de EPI no endereço em que a Central abriu', r.contas === 'http://sis.local/rm_contas/' && r.epi === 'http://sis.local/recibos_rm/epi.html', J);
+  t.ok('chegada: grava tema, fundo e preferência da conta; dado de sistema e senha não', chegou.tema === 'escuro' && chegou.fundo === 'trelica' && chegou.dens === 'compacta' && !chegou.dado && !chegou.senha, J);
+  t.ok('chegada: marca como feita e limpa o endereço', chegou.feito === '1' && !chegou.hash, J);
+  t.ok('a página do endereço antigo não manda nada para fora do site da RM', /inválido/.test(recusou.txt) && /sis\.local/.test(recusou.url), J);
+  t.ok('e para o site da RM leva só a preferência', /^https:\/\/rm-estruturas\.pages\.dev\/central_rm\/#rm-migra=/.test(foiPara) && conteudo.rm_tema === 'claro' && !conteudo.recibos_rm_dados, J);
+  t.ok('sem erro na página', !erros.length && !c2.erros.length, erros.concat(c2.erros).join(' | '));
+});
+
 teste('central-propostas-arquiteta', async (b, t) => {
   // a arquiteta entra na Central e vê só Propostas e Contratos; a regra do
   // banco abre o nó para ela e para o dono, e mais ninguém; a agenda dela
@@ -11105,7 +11199,7 @@ teste('central-propostas-arquiteta', async (b, t) => {
   }, arq).catch(e => ({ erro: e.message }));
   const J = JSON.stringify(r);
   t.ok('menu da arquiteta: só Propostas e Contratos, sem as abas de administração', !r.erro && r.menu.join() === 'propostas' && !r.admin, J);
-  t.ok('Propostas na Central (Comercial), com cópia local para o programa', r.url === 'https://evertonluis4523-afk.github.io/propostas_rm/' && r.local === 'systems/propostas_rm/index.html' && r.cat === 'COMERCIAL', J);
+  t.ok('Propostas na Central (Comercial), com cópia local para o programa', r.url === 'http://sis.local/propostas_rm/' && r.local === 'systems/propostas_rm/index.html' && r.cat === 'COMERCIAL', J);
   t.ok('o dono vê, a engenharia não', r.dono && !r.eng, J);
   t.ok('propostas_rm entra na cópia de segurança', r.backup === true, J);
   const central = fs.readFileSync(path.join(RAIZ, 'central_rm', 'index.html'), 'utf8');
