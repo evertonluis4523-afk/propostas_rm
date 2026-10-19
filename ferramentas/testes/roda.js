@@ -7375,6 +7375,146 @@ teste('contas-a-pagar-contas', async (b, t) => {
   await ctx.close();
 });
 
+teste('contas-credito-em-aberto', async (b, t) => {
+  // cheque maior entregue ao fornecedor: cada compra para ele é abatida do
+  // saldo; compra maior que o saldo divide (parte paga com o crédito, resto em
+  // aberto); dois créditos usam o mais antigo primeiro; reabrir uma compra
+  // devolve o valor; crédito com compras não se exclui.
+  if (!fs.existsSync(path.join(RAIZ, 'rm_contas'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'rm_contas' }, 'index.html', { relogio: '2026-10-17T15:00:00Z', fuso: 'America/Sao_Paulo' });
+  await semLogin(pg);
+  const r = await pg.evaluate(async () => {
+    if (typeof credSalva !== 'function') return { semRecurso: true };
+    const grav = []; fb = { db: { ref: (p) => ({ update: async (u) => { grav.push([p, JSON.parse(JSON.stringify(u))]); } }) } };
+    window.confirm = () => true;
+    S.contas = {}; S.creditos = {}; bootUI();
+    const v = (id, x) => { const e = document.getElementById(id); e.value = x; e.dispatchEvent(new Event('input', { bubbles: true })); };
+    const o = {};
+    // 1. registra o crédito
+    setView('cred');
+    v('cr_forn', 'Fornecedor Teste'); v('cr_valor', '5.000,00'); v('cr_data', '2026-10-01'); v('cr_doc', '000123');
+    credSalva();
+    const cr1 = Object.values(S.creditos)[0] || {};
+    o.cred = { n: Object.keys(S.creditos).length, valor: cr1.valor, forma: cr1.forma, nuvem: grav.some(g => g[0] === 'contas_pagar/creditos' && g[1][cr1.id] && g[1][cr1.id].valor === 5000) };
+    // 2. compra nova para ele (nome em outra caixa): aviso marcado
+    setView('lanc');
+    v('c_forn', 'FORNECEDOR TESTE'); v('c_valor', '1.200,00'); v('c_venc', '2026-10-30');
+    o.aviso = { visivel: !document.getElementById('credAviso').hidden, marcado: document.getElementById('c_abater').checked, parcTravada: document.getElementById('c_parc').disabled, txt: document.getElementById('credAvisoTxt').textContent };
+    await saveConta();
+    const c1 = Object.values(S.contas)[0] || {};
+    o.compra1 = { pago: c1.pago, forma: c1.forma, cred: c1.creditoId === cr1.id, data: c1.dataPagamento, saldo: credSaldoForn('Fornecedor Teste') };
+    // 3. compra maior que o saldo: divide
+    v('c_forn', 'Fornecedor Teste'); v('c_valor', '4.500,00'); v('c_venc', '2026-11-05'); v('c_doc', 'NF 77');
+    o.avisoParcial = document.getElementById('credAvisoTxt').textContent;
+    await saveConta();
+    const nf = Object.values(S.contas).filter(c => c.documento === 'NF 77').sort((a, c) => a.valor - c.valor);
+    o.divide = nf.map(c => [c.valor, c.pago, !!c.creditoId, c.venc]);
+    o.saldo2 = credSaldoForn('Fornecedor Teste');
+    v('c_forn', 'Fornecedor Teste'); o.avisoSemSaldo = document.getElementById('credAviso').hidden;
+    // 4. segundo crédito, abatido pela linha da compra em aberto
+    v('cr_forn', 'Fornecedor Teste'); v('cr_valor', '1000'); v('cr_data', '2026-10-15'); credSalva();
+    render();
+    const aberta = nf.find(c => !c.pago);
+    o.botao = !!document.querySelector(`#rows button.ia.cred[onclick*="${aberta.id}"]`);
+    credAbateLinha(aberta.id);
+    o.abateLinha = { pago: S.contas[aberta.id].pago, saldo: credSaldoForn('Fornecedor Teste') };
+    // 5. reabrir devolve ao crédito
+    togglePago(c1.id);
+    o.reabre = { pago: S.contas[c1.id].pago, cred: S.contas[c1.id].creditoId || null, saldo: credSaldoForn('Fornecedor Teste') };
+    // 6. crédito com compras não se exclui
+    credExclui(cr1.id); o.exclui = !!S.creditos[cr1.id];
+    // 7. aba Créditos e painel
+    setView('cred'); document.getElementById('cr_mostra').value = ''; renderCred();
+    o.aba = { linhas: document.querySelectorAll('#rowsCred tr:not(.cred-hist)').length, saldoCard: document.querySelector('#credCards .card .v').textContent.replace(/\s/g, ' ') };
+    credAlterna(cr1.id); o.hist = document.querySelectorAll('#rowsCred tr.cred-hist').length;
+    // 8. fornecedor sem crédito: conta comum, em aberto
+    setView('lanc'); v('c_forn', 'Outro Fornecedor'); v('c_valor', '300'); v('c_venc', '2026-10-25');
+    o.outroAviso = document.getElementById('credAviso').hidden;
+    await saveConta();
+    const outra = Object.values(S.contas).find(c => c.fornecedor === 'Outro Fornecedor') || {};
+    o.outra = [outra.pago, outra.forma !== 'Crédito'];
+    bootUI(); o.painel = document.querySelector('#cards .card .v').textContent.replace(/\s/g, ' ');
+    return o;
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  if (r.semRecurso) { t.ok('crédito em aberto no Contas a Pagar', false, 'sem credSalva'); await ctx.close(); return; }
+  t.ok('registra o crédito (forma Cheque) e grava na nuvem', !r.erro && r.cred.n === 1 && r.cred.valor === 5000 && r.cred.forma === 'Cheque' && r.cred.nuvem, J);
+  t.ok('compra para o fornecedor (outra caixa de letra): aviso com o saldo, já marcado, à vista', !r.erro && r.aviso.visivel && r.aviso.marcado && r.aviso.parcTravada && /5\.000,00/.test(r.aviso.txt), J);
+  t.ok('a compra entra paga com o crédito, e o saldo baixa', !r.erro && r.compra1.pago && r.compra1.forma === 'Crédito' && r.compra1.cred && r.compra1.data === '2026-10-17' && r.compra1.saldo === 3800, J);
+  t.ok('compra maior que o saldo: parte paga com o crédito, resto em aberto no mesmo vencimento', !r.erro && /fica em aberto/.test(r.avisoParcial)
+    && JSON.stringify(r.divide) === JSON.stringify([[700, false, false, '2026-11-05'], [3800, true, true, '2026-11-05']]) && r.saldo2 === 0 && r.avisoSemSaldo, J);
+  t.ok('segundo crédito: botão de abater na compra em aberto, e ela fica paga', !r.erro && r.botao && r.abateLinha.pago === true && r.abateLinha.saldo === 300, J);
+  t.ok('reabrir uma compra paga com crédito devolve o valor ao saldo', !r.erro && r.reabre.pago === false && r.reabre.cred === null && r.reabre.saldo === 1500, J);
+  t.ok('crédito que já pagou compras não se exclui', !r.erro && r.exclui === true, J);
+  t.ok('aba Créditos: os dois créditos, saldo no painel e as compras abatidas', !r.erro && r.aba.linhas === 2 && /1\.500,00/.test(r.aba.saldoCard) && r.hist === 1, J);
+  t.ok('fornecedor sem crédito: sem aviso, conta comum em aberto; painel soma só o que falta pagar', !r.erro && r.outroAviso && r.outra[0] === false && r.outra[1]
+    && r.painel === 'R$ 1.500,00' && !erros.length, J);
+  await ctx.close();
+});
+
+teste('contas-pagamento-parcial', async (b, t) => {
+  // pagar parte de uma conta: a parte paga fica com a data e a forma do
+  // pagamento, o resto continua em aberto no mesmo vencimento; pagar de novo
+  // parte do resto; valor maior que a conta é recusado; a parte pode sair do
+  // crédito do fornecedor.
+  if (!fs.existsSync(path.join(RAIZ, 'rm_contas'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'rm_contas' }, 'index.html', { relogio: '2026-10-17T15:00:00Z', fuso: 'America/Sao_Paulo' });
+  await semLogin(pg);
+  const r = await pg.evaluate(async () => {
+    if (typeof ppAbre !== 'function') return { semRecurso: true };
+    fb = { db: { ref: () => ({ update: async () => {} }) } };
+    S.creditos = {};
+    S.contas = { a: { id: 'a', fornecedor: 'Fornecedor A', valor: 1000, venc: '2026-10-30', forma: 'Boleto', documento: 'NF 10', pago: false },
+                 p: { id: 'p', fornecedor: 'Fornecedor A', valor: 50, venc: '2026-10-01', pago: true, dataPagamento: '2026-10-01' } };
+    bootUI();
+    const v = (id, x) => { const e = document.getElementById(id); e.value = x; e.dispatchEvent(new Event('input', { bubbles: true })); e.dispatchEvent(new Event('change', { bubbles: true })); };
+    const o = {};
+    o.botoes = { aberta: !!document.querySelector('#rows button.ia.parte[onclick*="\'a\'"]') };
+    document.getElementById('f_status').value = ''; render();
+    o.botoes.paga = !!document.querySelector('#rows button.ia.parte[onclick*="\'p\'"]');
+    // 1. paga 400 de 1000, por PIX, em 15/10
+    ppAbre('a'); v('pp_valor', '400'); v('pp_forma', 'PIX'); v('pp_data', '2026-10-15');
+    o.resumo = document.getElementById('ppResumo').textContent;
+    ppConfirma();
+    const resto1 = Object.values(S.contas).find(c => c.id !== 'a' && c.id !== 'p') || {};
+    o.p1 = { paga: [S.contas.a.valor, S.contas.a.pago, S.contas.a.forma, S.contas.a.dataPagamento], resto: [resto1.valor, resto1.pago, resto1.venc, resto1.forma, resto1.documento], obs: resto1.obs, fechou: !document.getElementById('ppOverlay').classList.contains('open') };
+    // 2. paga mais 250 do resto: o resto vira 350 e a observação não acumula
+    ppAbre(resto1.id); v('pp_valor', '250,00'); v('pp_forma', 'PIX'); ppConfirma();
+    const abertas = Object.values(S.contas).filter(c => !c.pago);
+    o.p2 = { abertas: abertas.map(c => c.valor), obs: (abertas[0] || {}).obs, totalNF: Math.round(Object.values(S.contas).filter(c => c.documento === 'NF 10').reduce((s, c) => s + c.valor, 0) * 100) / 100 };
+    // 3. valor maior que a conta: recusa e não muda nada
+    const antes = JSON.stringify(S.contas);
+    ppAbre(abertas[0].id); v('pp_valor', '999'); ppConfirma();
+    o.recusa = JSON.stringify(S.contas) === antes && document.getElementById('ppOverlay').classList.contains('open');
+    closeOverlay('ppOverlay');
+    // 4. parte paga com o crédito do fornecedor
+    S.creditos = { cr1: { id: 'cr1', fornecedor: 'Fornecedor B', valor: 1000, data: '2026-10-01', forma: 'Cheque' } };
+    S.contas.b = { id: 'b', fornecedor: 'Fornecedor B', valor: 500, venc: '2026-11-10', forma: 'Boleto', pago: false };
+    bootUI();
+    ppAbre('b'); o.formaCred = document.getElementById('pp_forma').value; v('pp_valor', '300'); ppConfirma();
+    const restoB = Object.values(S.contas).find(c => c.fornecedor === 'Fornecedor B' && !c.pago) || {};
+    o.p4 = { paga: [S.contas.b.valor, S.contas.b.pago, S.contas.b.forma, S.contas.b.creditoId], resto: [restoB.valor, restoB.venc], saldo: credSaldoForn('Fornecedor B') };
+    // 5. valor igual ao total: paga a conta inteira, sem dividir
+    const n = Object.keys(S.contas).length;
+    ppAbre(restoB.id); v('pp_forma', 'PIX'); v('pp_valor', '200'); ppConfirma();
+    o.p5 = { pago: S.contas[restoB.id].pago, n: Object.keys(S.contas).length === n };
+    return o;
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  if (r.semRecurso) { t.ok('pagamento parcial no Contas a Pagar', false, 'sem ppAbre'); await ctx.close(); return; }
+  t.ok('botão "Pagar parte" só nas contas em aberto', !r.erro && r.botoes.aberta && !r.botoes.paga, J);
+  t.ok('paga 400 de 1000: parte paga com data e forma do pagamento, 600 em aberto no mesmo vencimento', !r.erro && /600,00/.test(r.resumo)
+    && JSON.stringify(r.p1.paga) === JSON.stringify([400, true, 'PIX', '2026-10-15']) && JSON.stringify(r.p1.resto) === JSON.stringify([600, false, '2026-10-30', 'Boleto', 'NF 10'])
+    && /restante \(pago R\$\s400,00 em 15\/10\/2026\)/.test(r.p1.obs) && r.p1.fechou, J);
+  t.ok('pagar parte de novo: 350 em aberto, a soma da nota continua 1000, observação sem repetir', !r.erro && JSON.stringify(r.p2.abertas) === '[350]' && r.p2.totalNF === 1000
+    && (r.p2.obs.match(/restante/g) || []).length === 1, J);
+  t.ok('valor maior que a conta: recusa sem mexer em nada', !r.erro && r.recusa, J);
+  t.ok('com crédito do fornecedor: a parte sai do crédito e o resto fica em aberto', !r.erro && r.formaCred === '__cred'
+    && JSON.stringify(r.p4.paga) === JSON.stringify([300, true, 'Crédito', 'cr1']) && JSON.stringify(r.p4.resto) === JSON.stringify([200, '2026-11-10']) && r.p4.saldo === 700, J);
+  t.ok('valor igual ao total: paga a conta inteira, sem dividir', !r.erro && r.p5.pago === true && r.p5.n && !erros.length, J);
+  await ctx.close();
+});
+
 teste('contas-anexos-na-nuvem', async (b, t) => {
   // a nota anexada a uma conta ficava só no aparelho onde foi anexada (em
   // outro computador não abria e ficava fora da cópia). Agora sobe para a
