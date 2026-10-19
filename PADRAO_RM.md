@@ -315,6 +315,10 @@ Tudo que imprime segue a mesma papelaria:
     no programa instalado, o principal.
   - O programa baixa do principal e cai na reserva se ele falhar ou estiver
     com versão mais velha que a do computador (`electron/fontes.js`).
+  - A Central se atualiza antes do programa. Por isso ela manda ao programa o
+    endereço da **reserva** (o programa até 1.7.x só aceita esse e recusava o
+    outro, abrindo a cópia velha); o programa novo usa só o caminho e busca
+    no principal. Teste `programa-antigo-com-central-nova`.
   - No endereço novo, a Central traz uma vez as preferências do antigo
     (`central_rm/migra.html`): só aparência e organização da tela, nunca dado
     de sistema; a volta só vai para o site da RM.

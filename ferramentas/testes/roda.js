@@ -11328,6 +11328,34 @@ teste('central-site-de-origem', async (b, t) => {
   t.ok('sem erro na página', !erros.length && !c2.erros.length, erros.concat(c2.erros).join(' | '));
 });
 
+teste('programa-antigo-com-central-nova', async (b, t) => {
+  // a Central se atualiza sozinha antes do programa. O programa até 1.7.x só
+  // baixava sistemas de endereço do GitHub: com a Central mandando o do
+  // Cloudflare ele recusava todos, marcava fora do ar e abria a cópia velha
+  // do computador (o Contas ficou parado na v59). A Central manda o endereço
+  // do GitHub, que os dois programas aceitam; o novo usa só o caminho.
+  if (!fs.existsSync(path.join(RAIZ, 'central_rm', 'electron', 'fontes.js'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'central_rm' });
+  const r = await pg.evaluate(async () => {
+    const GH = 'https://evertonluis4523-afk.github.io';
+    let alvos = null;
+    window.rmDesktop = Object.assign(window.rmDesktop || {}, {
+      sistemasBaixados: async () => ({}),
+      /* o que o programa 1.7.x fazia: só aceita endereço do GitHub */
+      atualizarSistemas: async (lista) => { alvos = lista; return { atualizados: [], falhas: lista.filter(x => !String(x.url).startsWith(GH + '/')).map(x => x.pasta), mapa: {} }; } });
+    await atualizarSistemasEmDisco();
+    return { alvos, foraDoAr: Object.keys(FORA_DO_AR || {}) };
+  }).catch(e => ({ erro: e.message }));
+  await ctx.close();
+  const fontes = require(path.join(RAIZ, 'central_rm', 'electron', 'fontes.js'));
+  const J = JSON.stringify(r).slice(0, 1500) + ' ' + erros.join(' | ');
+  const al = (r && r.alvos) || [];
+  t.ok('a Central manda os sistemas para o programa baixar', !r.erro && al.length >= 10, J);
+  t.ok('pelo endereço do GitHub: o programa antigo aceita e nenhum sistema fica fora do ar', !r.erro && al.every(x => /^https:\/\/evertonluis4523-afk\.github\.io\/[\w-]+\/?$/.test(x.url)) && r.foraDoAr.length === 0, J);
+  t.ok('o programa novo tira só o caminho e busca no Cloudflare primeiro', al.length && al.every(x => /^\/[\w-]+$/.test(fontes.relativo(x.url) || '')) && fontes.SITES[0] === 'https://rm-estruturas.pages.dev', J);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+});
+
 teste('central-propostas-arquiteta', async (b, t) => {
   // a arquiteta entra na Central e vê só Propostas e Contratos; a regra do
   // banco abre o nó para ela e para o dono, e mais ninguém; a agenda dela
