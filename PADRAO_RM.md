@@ -304,6 +304,21 @@ Tudo que imprime segue a mesma papelaria:
 - A cada publicação: sobe `APP_VER` e o `CACHE`, confere com o verificador
   (0 erro) e com os testes (0 falha), commit, PR e merge no `main` (o GitHub
   Pages publica do `main`).
+- **Dois endereços, o mesmo conteúdo.** Principal: Cloudflare Pages,
+  `https://rm-estruturas.pages.dev` -- o repositório `rm-sistemas`, montado
+  por `ferramentas/monta_site.py` (todos os sistemas, cada um na sua pasta,
+  sem ferramentas/testes/programa/documentação) e enviado logo depois do
+  merge, em toda publicação. Reserva: o GitHub Pages de cada repositório.
+  Motivo: em 19/10/2026 a fila do GitHub Pages parou por mais de uma hora e
+  ninguém recebia a versão nova. Não se edita o `rm-sistemas` à mão.
+  - A Central abre os sistemas pelo endereço em que ela foi aberta (`SITE`);
+    no programa instalado, o principal.
+  - O programa baixa do principal e cai na reserva se ele falhar ou estiver
+    com versão mais velha que a do computador (`electron/fontes.js`).
+  - No endereço novo, a Central traz uma vez as preferências do antigo
+    (`central_rm/migra.html`): só aparência e organização da tela, nunca dado
+    de sistema; a volta só vai para o site da RM.
+  - Testes `site-unico-montagem`, `programa-duas-fontes`, `central-site-de-origem`.
 - Os blocos comuns ficam **copiados dentro de cada index.html** (não num
   arquivo carregado de fora): a cópia offline do programa instalado baixa só o
   index.html, e um arquivo compartilhado com defeito derrubaria todos os
