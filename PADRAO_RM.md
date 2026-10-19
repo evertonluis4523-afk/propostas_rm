@@ -362,6 +362,12 @@ Tudo que imprime segue a mesma papelaria:
   papel de parede da RM em vetor) com o bloco tirado do `index.html`. A
   mesma tela com `?papel` (endereço curto `central_rm/papel-de-parede.html`)
   é o papel de parede com movimento, pelo Lively Wallpaper.
+- Conta que usa só o próprio sistema (a arquiteta, no Propostas e Contratos)
+  entra em `CENTRAL_ENXUTA`: a Central dela não tem o painel da empresa
+  (números, gráficos, avisos), o Acompanhamento nem o sino -- só a saudação,
+  a agenda e o sistema dela. E ao sair uma conta, o resumo do painel sai
+  junto: a próxima pessoa no mesmo programa não vê nada da anterior. Teste
+  `central-enxuta-arquiteta`.
 - Trocar de sistema aberto: Ctrl+Tab / Ctrl+Shift+Tab, Alt+→ / Alt+← e
   Ctrl+1…9. Com o cursor dentro do sistema, o bloco comum
   `comum/atalhos-central.html` devolve a tecla à Central (`{rm:'atalho'}`).
