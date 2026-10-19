@@ -366,8 +366,12 @@ Tudo que imprime segue a mesma papelaria:
   entra em `CENTRAL_ENXUTA`: a Central dela não tem o painel da empresa
   (números, gráficos, avisos), o Acompanhamento nem o sino -- só a saudação,
   a agenda e o sistema dela. E ao sair uma conta, o resumo do painel sai
-  junto: a próxima pessoa no mesmo programa não vê nada da anterior. Teste
-  `central-enxuta-arquiteta`.
+  junto, e as abas de sistema abertas também fecham: a próxima pessoa no
+  mesmo programa não vê nada da anterior. Testes `central-enxuta-arquiteta`
+  e `central-troca-de-conta-fecha-abas`.
+- A cópia automática (backup) só roda com a conta que lê o banco inteiro
+  (a do dono). Com outra conta no programa ela espera, sem marcar falha e
+  sem gravar cópia pela metade. Teste `backup-pagina-ao-fechar-e-atrasado`.
 - Trocar de sistema aberto: Ctrl+Tab / Ctrl+Shift+Tab, Alt+→ / Alt+← e
   Ctrl+1…9. Com o cursor dentro do sistema, o bloco comum
   `comum/atalhos-central.html` devolve a tecla à Central (`{rm:'atalho'}`).

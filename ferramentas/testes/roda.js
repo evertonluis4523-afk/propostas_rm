@@ -4055,13 +4055,20 @@ teste('backup-pagina-ao-fechar-e-atrasado', async (b, t) => {
     window.rmDesktop = { versaoCentral: async () => ({}), sistemasBaixados: async () => ({}),
       backupEstado: async () => ({ ultimoEm: window.__bk.ultimo, arquivos: [], bytes: 0, pasta: 'P' }),
       backupGravar: async (d) => { window.__bk.gravou.push(JSON.parse(d.dados).nos); window.__bk.ultimo = new Date().toISOString(); return { ok: true }; },
-      backupFalhou: async () => {}, aoFecharPrograma: (cb) => { window.__bk.aoFechar = cb; } };
+      backupFalhou: async () => { window.__bk.falhou = (window.__bk.falhou || 0) + 1; }, aoFecharPrograma: (cb) => { window.__bk.aoFechar = cb; } };
   });
   await pg.goto('file://' + path.join(RAIZ, 'central_rm', 'index.html')).catch(() => {});
   await pg.waitForTimeout(2500);
   const r = await pg.evaluate(async () => {
     const esp = ms => new Promise(x => setTimeout(x, ms));
     if (!window.__bk.aoFechar) return { erro: 'a página não se inscreveu para o fechamento' };
+    /* com outra conta no programa (a arquiteta) a cópia não roda: ela não lê
+       nada, e antes marcava "backup falhando" */
+    CURRENT_EMAIL = 'arquitetarm@rmestruturas.com.br';
+    firebase.database = () => ({ ref: (n) => ({ once: async () => { throw new Error('PERMISSION_DENIED'); } }) });
+    await window.__bk.aoFechar(); await backupRotina(false);
+    const outraConta = { gravou: window.__bk.gravou.length, falhou: window.__bk.falhou || 0 };
+    CURRENT_EMAIL = 'evertonluis4523@gmail.com';
     firebase.database = () => ({ ref: (n) => ({ once: async () => ({ val: () => ({ teste: n }) }) }) });
     await window.__bk.aoFechar();
     const fechar = window.__bk.gravou.slice(), aviso = !!document.getElementById('aviso-copia-saida');
@@ -4071,7 +4078,7 @@ teste('backup-pagina-ao-fechar-e-atrasado', async (b, t) => {
     await backupRotina(false); window.__bk.gravou = [];   // liga o relógio e os ouvintes
     window.__bk.ultimo = new Date(Date.now() - 3 * 3600e3).toISOString();
     window.dispatchEvent(new Event('online')); await esp(600);
-    return { fechar, aviso, recente, online: window.__bk.gravou.length };
+    return { fechar, aviso, recente, online: window.__bk.gravou.length, outraConta };
   }).catch(e => ({ erro: e.message }));
   const J = JSON.stringify(r).slice(0, 900) + ' ' + erros.join(' | ');
   const nos = (r.fechar && r.fechar[0]) || [];
@@ -4079,6 +4086,7 @@ teste('backup-pagina-ao-fechar-e-atrasado', async (b, t) => {
   t.ok('a cópia leva os dados dos sistemas (e não o que é pessoal de cada um)', ['recibos', 'contas_pagar', 'cheques', 'maquinas_rm'].every(n => nos.includes(n)) && !nos.includes('users'), J);
   t.ok('cópia com menos de 5 minutos dispensa a do fechamento', !r.erro && r.recente === 1, J);
   t.ok('ao voltar a internet a cópia atrasada roda sozinha', !r.erro && r.online === 1, J);
+  t.ok('com outra conta no programa a cópia espera, sem marcar falha', !r.erro && r.outraConta && r.outraConta.gravou === 0 && r.outraConta.falhou === 0, J);
   await ctx.close();
 });
 
@@ -10214,6 +10222,8 @@ teste('central-backup-geral', async (b, t) => {
     // todo nó do backup tem um sistema com nome
     const nomeados = [].concat.apply([], BACKUP_SISTEMAS.map(s => s.nos));
     const semNome = (window.__bkNos || ['sem lista']).filter(n => nomeados.indexOf(n) < 0);
+    // a restauração é do administrador (e a cópia de segurança antes dela, também)
+    CURRENT_EMAIL = 'evertonluis4523@gmail.com';
     // 1) backup geral: UM arquivo, dados e anexos juntos
     const baixados = [], clk = HTMLAnchorElement.prototype.click;
     HTMLAnchorElement.prototype.click = function () { baixados.push({ nome: this.download, href: this.href }); };
@@ -10799,6 +10809,33 @@ teste('central-enxuta-arquiteta', async (b, t) => {
   t.ok('ao trocar de conta o resumo do painel sai junto (nada do dono para a próxima)', r.ela && r.ela.dados && !r.ela.graf.includes('GRAFICO-DO-DONO') && !r.ela.stats63, J);
   t.ok('Central da arquiteta: sem painel da empresa, Acompanhamento e notificações', r.ela && !r.ela.acomp && !r.ela.notif && !r.ela.tel && !r.ela.stats && !r.ela.graf_v && !r.ela.abriu, J);
   t.ok('só o sistema dela no menu; o dono não fica enxuto', r.ela && r.ela.menu.join() === 'propostas' && r.ela.enxuta && !r.ela.donoEnxuto, J);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
+teste('central-troca-de-conta-fecha-abas', async (b, t) => {
+  // a arquiteta saiu com o Propostas aberto; o dono entrou no mesmo programa
+  // e o Painel Geral apareceu atravessado pelo sistema dela, as duas telas
+  // misturadas. Ao sair, as abas da conta fecham junto.
+  if (!fs.existsSync(path.join(RAIZ, 'central_rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'central_rm' });
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    document.querySelectorAll('#lock-screen').forEach(e => e.classList.add('hidden'));
+    CURRENT_EMAIL = 'evertonluis4523@gmail.com';
+    openModule('propostas'); openModule('premold'); await esp(100);
+    const antes = { camadas: document.querySelectorAll('#content .iframe-layer').length, abas: document.querySelectorAll('#tabs-bar .tab, #tabs-bar [data-tab]').length || (document.getElementById('tabs-bar').textContent.includes('Propostas') ? 2 : 0) };
+    if (typeof fecharTodasAbas !== 'function') return { antes, erro: 'sem fecharTodasAbas' };
+    fecharTodasAbas(); await esp(50);
+    return { antes, camadas: document.querySelectorAll('#content .iframe-layer').length, barra: document.getElementById('tabs-bar').textContent.trim(), classe: document.getElementById('tabs-bar').classList.contains('has-tabs') };
+  }).catch(e => ({ erro: e.message }));
+  /* e quem chama é a saída da conta (o ramo "sem usuário" do login) */
+  const h = fs.readFileSync(path.join(RAIZ, 'central_rm', 'index.html'), 'utf8');
+  const i = h.indexOf("document.body.classList.remove('central-enxuta');"), ramo = i > 0 ? h.slice(i, i + 3000) : '';
+  const J = JSON.stringify(r);
+  t.ok('com dois sistemas abertos, as duas camadas existem', !r.erro && r.antes.camadas === 2, J);
+  t.ok('ao sair da conta: nenhuma camada de sistema, barra de abas vazia', r.camadas === 0 && r.barra === '' && !r.classe, J);
+  t.ok('a saída da conta fecha as abas', /fecharTodasAbas\(\)/.test(ramo));
   t.ok('sem erro na página', !erros.length, erros.join(' | '));
   await ctx.close();
 });
