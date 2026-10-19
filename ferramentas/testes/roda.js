@@ -4632,13 +4632,17 @@ teste('obras-pdf-celular', async (b, t) => {
     env.click(); await esp(300);
     const d = window.__enviados[0]; if (!d) return { erro: 'não abriu o compartilhar', imprimiu: window.__imprimiu };
     const f = d.files[0], txt = await f.text();
-    return { nome: f.name, tipo: f.type, pdf: txt.startsWith('%PDF'), paginas: (txt.match(/\/Type \/Page\b(?!s)/g) || []).length, kb: Math.round(f.size / 1024), imprimiu: window.__imprimiu };
+    return { nome: f.name, tipo: f.type, pdf: txt.startsWith('%PDF'), paginas: (txt.match(/\/Type \/Page\b(?!s)/g) || []).length, kb: Math.round(f.size / 1024), imprimiu: window.__imprimiu,
+      larg: Math.max(0, ...(txt.match(/\/Width (\d+)/g) || []).map(x => +x.split(' ')[1])), jpeg: /DCTDecode/.test(txt) };
   }).catch(e => ({ erro: e.message }));
   const hoje = new Date(), d = String(hoje.getDate()).padStart(2, '0') + '-' + String(hoje.getMonth() + 1).padStart(2, '0') + '-' + hoje.getFullYear();
   const J = JSON.stringify(r) + ' ' + erros.join(' | ');
   t.ok('celular: ⤴ gera o arquivo PDF e abre o compartilhar', !r.erro && r.pdf && r.tipo === 'application/pdf' && !r.imprimiu, J);
   t.ok('celular: nome "Relatorio de Obra Galpao Teste ' + d + '.pdf"', r.nome === 'Relatorio de Obra Galpao Teste ' + d + '.pdf', J);
   t.ok('celular: obra longa sai em mais de uma folha, arquivo leve', r.paginas >= 2 && r.kb < 2500, J);
+  // a página vira imagem no celular: a 2x em JPEG a letra saía borrada; a 3x
+  // (~290 pontos por polegada nos 186 mm úteis) e em PNG fica no ponto do papel
+  t.ok('celular: imagem da folha a ~290 ppp, sem JPEG', r.larg >= 2100 && !r.jpeg, J);
   await ctx.close();
 });
 
@@ -10860,6 +10864,69 @@ teste('propostas-tamanho-da-letra', async (b, t) => {
   t.ok('Configurações: Pequena, Normal (marcada), Grande, Muito grande', r.opcoes && r.opcoes.join() === 'pequena,normal*,grande,maior', J);
   t.ok('escolher já mostra na folha; salvar grava para todos', Math.abs(r.previa - 13) < 0.05 && Math.abs(r.grande.p - 13) < 0.05 && r.grande.cfg === 'grande' && r.grande.guardado === 'grande', J);
   t.ok('o Word acompanha (19 → 22 → 25 meios-pontos); o timbrado não muda', r.docNormal === '22' && r.docGrande === '25' && r.cabGrande && r.normal.tb2 === 9 && r.grande.tb2 === 9, J);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
+teste('pdf-sem-fundo-em-movimento', async (b, t) => {
+  // com as "cotas passando no fundo" ligadas, o PDF do contrato saiu com os
+  // números das cotas nas partes brancas: o bloco de impressão transformava o
+  // fundo (canvas) em imagem sem o id, e a regra que o tira do papel não
+  // pegava. O fundo fica fora; um desenho de verdade continua indo.
+  if (!fs.existsSync(path.join(RAIZ, 'propostas_rm'))) return;
+  const antes = () => { try { localStorage.setItem('rm_mov', 'cotas'); } catch (e) {} window.__docs = [];
+    window.rmDesktop = { salvarPDF() {}, abrirPDF(h, n) { window.__docs.push(h); return Promise.resolve({ ok: true }); } }; };
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'propostas_rm' }, 'index.html', { antes });
+  await semLogin(pg);
+  const r = await pg.evaluate(async (FICT) => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    await iniciarApp(); const d = eval(FICT); docs[d.id] = d; abrir(d.id); await esp(400);
+    const fundo = !!document.getElementById('rmMovimento');
+    /* um desenho de verdade na página (gráfico, croqui): esse tem de ir */
+    const c = document.createElement('canvas'); c.id = 'desenhoTeste'; c.width = 40; c.height = 20; c.getContext('2d').fillRect(0, 0, 40, 20); document.getElementById('folha').appendChild(c);
+    window.print(); await esp(400);
+    const h = window.__docs[0] || '';
+    return { fundo, saiu: !!h, imgs: (h.match(/<img[^>]+src="data:image\/png[^>]*>/g) || []).map(x => (/id="([^"]*)"/.exec(x) || [])[1] || '(sem id)'), canvas: /<canvas/i.test(h) };
+  }, PROP_FICT).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r);
+  t.ok('com o fundo em movimento ligado, o PDF sai pelo programa', !r.erro && r.fundo && r.saiu, J);
+  t.ok('o fundo não entra no PDF; o desenho da página entra, com o id', r.imgs && !r.imgs.includes('rmMovimento') && !r.imgs.includes('(sem id)') && r.imgs.includes('desenhoTeste') && !r.canvas, J);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
+teste('pdf-desenho-em-alta', async (b, t) => {
+  // o que é desenhado em canvas (as vistas 3D do Corte) ia para o PDF na
+  // resolução da tela (~96 ppp) e saía borrado ao lado do texto nítido. Na
+  // hora de imprimir o bloco pede o desenho em alta (escala 3) a quem escuta
+  // 'rm:alta-resolucao'; quem não escuta (assinatura) fica como está.
+  if (!fs.existsSync(path.join(RAIZ, 'propostas_rm'))) return;
+  const antes = () => { window.__docs = []; window.rmDesktop = { salvarPDF() {}, abrirPDF(h, n) { window.__docs.push(h); return Promise.resolve({ ok: true }); } }; };
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'propostas_rm' }, 'index.html', { antes });
+  await semLogin(pg);
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    const dprAntes = window.devicePixelRatio;
+    const desenho = document.createElement('canvas'); desenho.id = 'vista3d'; desenho.style.cssText = 'width:300px;height:150px;display:block';
+    const assina = document.createElement('canvas'); assina.id = 'assinatura'; assina.width = 300; assina.height = 100; assina.style.cssText = 'width:300px;height:100px;display:block';
+    document.body.append(desenho, assina);
+    const pinta = () => { desenho.width = Math.round(desenho.clientWidth * devicePixelRatio); desenho.height = Math.round(desenho.clientHeight * devicePixelRatio);
+      const c = desenho.getContext('2d'); c.fillStyle = '#123'; c.fillRect(0, 0, desenho.width, desenho.height); };
+    pinta(); window.addEventListener('rm:alta-resolucao', pinta);
+    assina.getContext('2d').fillRect(10, 10, 50, 5);
+    const largTela = desenho.width;
+    window.print(); await esp(500);
+    const h = window.__docs[0] || '';
+    const tam = id => { const m = new RegExp('<img[^>]*id="' + id + '"[^>]*>').exec(h); if (!m) return null; const src = /src="([^"]+)"/.exec(m[0])[1];
+      return new Promise(res => { const im = new Image(); im.onload = () => res(im.naturalWidth); im.onerror = () => res(-1); im.src = src; }); };
+    return { largTela, noPdf: await tam('vista3d'), assinaPdf: await tam('assinatura'), assinaDepois: assina.width, desenhoDepois: desenho.width, dprAntes, dprDepois: window.devicePixelRatio, alta: window.rmImprimindoAlta };
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r);
+  t.ok('o desenho vai para o PDF em 3x a largura da tela', !r.erro && r.noPdf === r.largTela * 3, J);
+  t.ok('a assinatura (sem ouvinte) vai como está, sem ser redimensionada', r.assinaPdf === 300 && r.assinaDepois === 300, J);
+  t.ok('depois volta ao normal: densidade da tela e desenho de volta', r.dprDepois === r.dprAntes && r.desenhoDepois === r.largTela && !r.alta, J);
+  const lei = fs.existsSync(path.join(RAIZ, 'leitor_dwg')) ? fs.readFileSync(path.join(RAIZ, 'leitor_dwg', 'index.html'), 'utf8') : '';
+  t.ok('Corte: as vistas 3D escutam o pedido e a cobertura não trava em 2x', !lei || (/addEventListener\('rm:alta-resolucao'/.test(lei) && (lei.match(/window\.rmImprimindoAlta\|\|Math\.min\(2,window\.devicePixelRatio/g) || []).length === 3), '');
   t.ok('sem erro na página', !erros.length, erros.join(' | '));
   await ctx.close();
 });

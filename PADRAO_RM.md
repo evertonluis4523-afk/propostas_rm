@@ -355,7 +355,18 @@ Tudo que imprime segue a mesma papelaria:
   escolha vale para o conjunto pelas chaves `rm_mov`/`rm_toque` e pela
   mensagem `{rm:'movimento'}`. Para com a janela escondida ou com um sistema
   aberto por cima da Central, some com "reduzir movimento", fica fora do
-  celular e da impressão.
+  celular e da impressão -- inclusive do PDF do programa: o bloco de
+  impressão tira do clone todo canvas de enfeite (`aria-hidden`) e leva o
+  `id` dos demais para a imagem (teste `pdf-sem-fundo-em-movimento`).
+- **Desenho em canvas no papel sai em alta:** texto, tabela e logo já vão em
+  vetor; o que é desenhado em canvas (vistas 3D do Corte) ia na resolução da
+  tela (~96 ppp). Na hora de imprimir, o bloco de impressão dispara
+  `rm:alta-resolucao` (escala 3, `window.rmImprimindoAlta`) e quem desenha em
+  canvas se redesenha nele -- ~290 ppp no papel. É um aviso próprio, não um
+  `resize`: redimensionar um quadro de assinatura apagaria o traço. Sistema
+  novo com desenho em canvas escuta esse aviso. Teste `pdf-desenho-em-alta`.
+  No celular, onde o PDF do Obras é uma imagem da página, ela sai a 3x e em
+  PNG (teste `obras-pdf-celular`).
   O programa (1.7.0 em diante) usa o mesmo bloco como proteção de tela do
   Windows: o instalador deixa o `RM Central.scr` (ligação para o programa,
   `build/installer.nsh`) e `electron/protetor.js` abre a `protetor.html` (o

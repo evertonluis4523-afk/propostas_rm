@@ -4982,7 +4982,7 @@ if ('serviceWorker' in navigator) {
 })();
 </script>
 <script>/* versão publicada (PADRAO_RM.md §3): sobe a cada publicação, junto com o CACHE do sw.js */
-const APP_VER='v4';
+const APP_VER='v5';
 </script>
 <script id="rmVersaoBloco">
 /* ===== SELO DE VERSÃO — igual em todos os sistemas (PADRAO_RM.md §3) =====
@@ -5079,12 +5079,17 @@ const APP_VER='v4';
         }
       } else c.textContent = o.value == null ? '' : o.value;
     }
-    /* canvas nao vai no clone (so' o elemento vazio): vira imagem no tamanho real dele */
+    /* canvas nao vai no clone (so' o elemento vazio): vira imagem no tamanho real dele.
+       O FUNDO EM MOVIMENTO NAO: virava imagem sem o id, a regra que o tira
+       do papel (#rmMovimento) nao pegava mais, e as cotas do fundo saiam no
+       PDF por cima do contrato. Enfeite (aria-hidden) sai do clone; o id
+       vai junto para a imagem, para o CSS de impressao continuar valendo. */
     var cv = document.querySelectorAll('canvas'), cc = clone.querySelectorAll('canvas');
     for (var k = 0; k < cv.length && k < cc.length; k++) {
+      if (cv[k].id === 'rmMovimento' || cv[k].getAttribute('aria-hidden') === 'true') { if (cc[k].parentNode) cc[k].parentNode.removeChild(cc[k]); continue; }
       try { var im = document.createElement('img'); im.src = cv[k].toDataURL('image/png');
         im.setAttribute('style', cc[k].getAttribute('style') || ''); im.style.width = cv[k].getBoundingClientRect().width + 'px';
-        im.className = cc[k].className; cc[k].parentNode.replaceChild(im, cc[k]); } catch(e){}
+        im.className = cc[k].className; if (cc[k].id) im.id = cc[k].id; cc[k].parentNode.replaceChild(im, cc[k]); } catch(e){}
     }
     Array.prototype.forEach.call(clone.querySelectorAll('script'), function(s){ s.parentNode && s.parentNode.removeChild(s); });
     return '<!DOCTYPE html>' + clone.outerHTML;
@@ -5110,9 +5115,40 @@ const APP_VER='v4';
     setTimeout(function(){ if (!aceito) { window.removeEventListener('message', ouvir); ocupado = false; } }, 800);
     return true;
   };
+  /* DESENHO EM ALTA NA HORA DE IMPRIMIR. Texto, tabela e logo ja' saem em
+     vetor; o que e' desenhado em canvas (as vistas 3D do Corte) ia para o
+     papel na resolucao da tela, ~96 pontos por polegada, e saia borrado ao
+     lado do texto nitido. Antes de copiar a pagina, o sistema e' avisado
+     ('rm:alta-resolucao', escala 3) e quem desenha em canvas se redesenha
+     com devicePixelRatio 3 -- ~290 ppp no papel; depois volta ao normal.
+     So' um aviso proprio, e nao um "resize": redimensionar um quadro de
+     assinatura apagaria o traco. Sem canvas de conteudo na tela, nada muda. */
+  var ALTA = 3;
+  function emAlta(fazer){
+    var cvs = [].filter.call(document.querySelectorAll('canvas'), function(c){ return c.id !== 'rmMovimento' && c.getAttribute('aria-hidden') !== 'true' && c.clientWidth > 0; });
+    if (!cvs.length) { fazer(); return; }
+    var desc = Object.getOwnPropertyDescriptor(window, 'devicePixelRatio'), trocou = false;
+    if ((window.devicePixelRatio || 1) < ALTA) {
+      try { Object.defineProperty(window, 'devicePixelRatio', { configurable: true, get: function(){ return ALTA; } }); trocou = true; } catch(e){}
+    }
+    window.rmImprimindoAlta = ALTA;
+    try { window.dispatchEvent(new CustomEvent('rm:alta-resolucao', { detail: { escala: ALTA } })); } catch(e){}
+    requestAnimationFrame(function(){ requestAnimationFrame(function(){
+      try { fazer(); } finally {
+        window.rmImprimindoAlta = 0;
+        if (trocou) { try { if (desc) Object.defineProperty(window, 'devicePixelRatio', desc); else delete window.devicePixelRatio; } catch(e){} }
+        try { window.dispatchEvent(new CustomEvent('rm:alta-resolucao', { detail: { escala: 0 } })); } catch(e){}
+      }
+    }); });
+  }
+  window.rmEmAlta = emAlta;
   window.print = function(){
-    if (!ponte || ocupado) return printNativo();
+    if (ocupado) return printNativo();
+    if (!ponte) { emAlta(printNativo); return; }
     ocupado = true;
+    emAlta(function(){ imprimeNaPonte(); });
+  };
+  function imprimeNaPonte(){
     var html;
     try { window.dispatchEvent(new Event('beforeprint')); html = congelar(); }
     catch(e){ ocupado = false; return printNativo(); }
@@ -5133,7 +5169,7 @@ const APP_VER='v4';
     window.addEventListener('message', ouvir);
     try { window.parent.postMessage({ rm: 'pdf', html: html, nome: nome, abrir: true }, '*'); } catch(e){}
     setTimeout(function(){ if (!aceito) { window.removeEventListener('message', ouvir); ocupado = false; printNativo(); } }, 800);
-  };
+  }
 })();
 </script>
 <script>
