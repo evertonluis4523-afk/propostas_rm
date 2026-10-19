@@ -10774,6 +10774,42 @@ teste('propostas-importa-word', async (b, t) => {
   await ctx.close();
 });
 
+teste('propostas-tamanho-da-letra', async (b, t) => {
+  // a arquiteta achou a letra pequena no papel: a "Normal" ficou 15% maior e
+  // há o ajuste em Configurações, que vale para tela, PDF e Word. O timbrado
+  // continua no tamanho do padrão.
+  if (!fs.existsSync(path.join(RAIZ, 'propostas_rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'propostas_rm' });
+  await semLogin(pg);
+  const r = await pg.evaluate(async (FICT) => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    await iniciarApp();
+    const d = eval(FICT); docs[d.id] = d; abrir(d.id); await esp(50);
+    const px = sel => parseFloat(getComputedStyle(document.querySelector(sel)).fontSize);
+    const partes = u => { const out = {}; const dv = new DataView(u.buffer); let p = 0;
+      while (p + 30 < u.length && dv.getUint32(p, true) === 0x04034b50) { const n = dv.getUint16(p + 26, true), tam = dv.getUint32(p + 18, true);
+        out[new TextDecoder().decode(u.slice(p + 30, p + 30 + n))] = new TextDecoder().decode(u.slice(p + 30 + n, p + 30 + n + tam)); p += 30 + n + tam; } return out; };
+    const normal = { p: px('#folha .f-p'), tb2: px('#folhaPapel .tb2') };
+    const w1 = partes(await docxBytes(blocosProposta(d)));
+    document.getElementById('btnModelo').click(); await esp(50);
+    const opcoes = [...document.querySelectorAll('#cfgLetra [data-letra]')].map(x => x.dataset.letra + (x.classList.contains('on') ? '*' : ''));
+    document.querySelector('#cfgLetra [data-letra="grande"]').click(); await esp(30);
+    const previa = px('#folha .f-p');
+    document.getElementById('modeloSalvar').click(); await esp(50);
+    const grande = { p: px('#folha .f-p'), tb2: px('#folhaPapel .tb2'), cfg: config.letra, guardado: JSON.parse(localStorage.getItem('rm_propostas_v1')).config.letra };
+    const w2 = partes(await docxBytes(blocosProposta(d)));
+    const sz = x => (/<w:rPrDefault><w:rPr>.*?<w:sz w:val="(\d+)"/.exec(x) || [])[1];
+    return { normal, opcoes, previa, grande, docNormal: sz(w1['word/styles.xml']), docGrande: sz(w2['word/styles.xml']), cabGrande: /w:val="15"/.test(w2['word/header1.xml']) };
+  }, PROP_FICT).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r);
+  t.ok('letra Normal 15% maior que a primeira versão (10 px → 11,5 px)', !r.erro && Math.abs(r.normal.p - 11.5) < 0.05, J);
+  t.ok('Configurações: Pequena, Normal (marcada), Grande, Muito grande', r.opcoes && r.opcoes.join() === 'pequena,normal*,grande,maior', J);
+  t.ok('escolher já mostra na folha; salvar grava para todos', Math.abs(r.previa - 13) < 0.05 && Math.abs(r.grande.p - 13) < 0.05 && r.grande.cfg === 'grande' && r.grande.guardado === 'grande', J);
+  t.ok('o Word acompanha (19 → 22 → 25 meios-pontos); o timbrado não muda', r.docNormal === '22' && r.docGrande === '25' && r.cabGrande && r.normal.tb2 === 9 && r.grande.tb2 === 9, J);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
 teste('propostas-nuvem', async (b, t) => {
   // cada proposta no seu nó (quem grava o banco inteiro apaga o do outro);
   // gravação recusada avisa e a alteração fica guardada para subir depois;
