@@ -10759,6 +10759,50 @@ teste('lista-suspensa-padrao', async (b, t) => {
   await ctx.close();
 });
 
+teste('central-enxuta-arquiteta', async (b, t) => {
+  // a arquiteta entrou na Central do mesmo programa em que o dono estava e
+  // viu os cheques, o a receber e os gráficos dele (o resumo ficava em
+  // window ao trocar de conta). E a Central dela não precisa do painel da
+  // empresa, do Acompanhamento nem das notificações: só o sistema dela.
+  if (!fs.existsSync(path.join(RAIZ, 'central_rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'central_rm' });
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    const vis = id => { const e = document.getElementById(id); if (!e) return null; const cs = getComputedStyle(e); return cs.display !== 'none' && cs.visibility !== 'hidden'; };
+    document.querySelectorAll('#lock-screen').forEach(e => e.classList.add('hidden'));
+    /* o dono: resumo montado */
+    CURRENT_EMAIL = 'evertonluis4523@gmail.com';
+    window.RM_DADOS = { cheques: { vencidos: [{ valor: 63000 }], carteira: [], totalVencido: 63000 } };
+    window.RM_GRAFICOS = '<div class="rm-grid">GRAFICO-DO-DONO</div>';
+    window.RM_ORIENTACOES = [{ s: 'crit', t: 'ponto do dono' }];
+    document.dispatchEvent(new CustomEvent('rm:dados')); await esp(50);
+    const antes = { graf: (document.getElementById('dash-graf') || {}).innerHTML || '', stats: (document.getElementById('dash-stats') || {}).textContent || '' };
+    aplicarCentralEnxuta();
+    const dono = { acomp: vis('btn-acomp'), notif: vis('btn-notif'), tel: vis('dash-tel-block'), stats: vis('dash-stats') };
+    /* saiu o dono: o resumo sai junto */
+    if (typeof window.rmPainelLimpa !== 'function') return { antes, dono, erro: 'sem rmPainelLimpa' };
+    window.rmPainelLimpa();
+    /* entra a arquiteta */
+    CURRENT_EMAIL = 'arquitetarm@rmestruturas.com.br';
+    aplicarCentralEnxuta(); render(); await esp(50);
+    let abriu = false; const oa = document.getElementById('assist-overlay'); 
+    openAssistant(); await esp(50);
+    abriu = !!document.querySelector('.assist-overlay.open, #assist-overlay.open, .assistant.open');
+    const ela = { dados: window.RM_DADOS === undefined && window.RM_GRAFICOS === undefined && window.RM_ORIENTACOES === undefined,
+      graf: (document.getElementById('dash-graf') || {}).innerHTML || '', stats63: /63/.test((document.getElementById('dash-stats') || {}).textContent || ''),
+      acomp: vis('btn-acomp'), notif: vis('btn-notif'), tel: vis('dash-tel-block'), stats: vis('dash-stats'), graf_v: vis('dash-graf-block'), abriu,
+      menu: allSystems().map(s => s.id), enxuta: rmCentralEnxuta(), donoEnxuto: rmCentralEnxuta('evertonluis4523@gmail.com') };
+    return { antes, dono, ela };
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r).slice(0, 1500);
+  t.ok('o dono vê o painel, o Acompanhamento e o sino', !r.erro && r.antes.graf.includes('GRAFICO-DO-DONO') && r.dono.acomp && r.dono.notif && r.dono.tel && r.dono.stats, J);
+  t.ok('ao trocar de conta o resumo do painel sai junto (nada do dono para a próxima)', r.ela && r.ela.dados && !r.ela.graf.includes('GRAFICO-DO-DONO') && !r.ela.stats63, J);
+  t.ok('Central da arquiteta: sem painel da empresa, Acompanhamento e notificações', r.ela && !r.ela.acomp && !r.ela.notif && !r.ela.tel && !r.ela.stats && !r.ela.graf_v && !r.ela.abriu, J);
+  t.ok('só o sistema dela no menu; o dono não fica enxuto', r.ela && r.ela.menu.join() === 'propostas' && r.ela.enxuta && !r.ela.donoEnxuto, J);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
 teste('central-propostas-arquiteta', async (b, t) => {
   // a arquiteta entra na Central e vê só Propostas e Contratos; a regra do
   // banco abre o nó para ela e para o dono, e mais ninguém; a agenda dela
