@@ -1,0 +1,11012 @@
+#!/usr/bin/env node
+/* ===========================================================================
+   TESTES DO PADRÃO RM -- rodam ANTES de publicar (ver PADRAO_RM.md).
+
+   Uso, na pasta que tem todos os repositórios:
+     node central_rm/ferramentas/testes/roda.js /pasta
+     node central_rm/ferramentas/testes/roda.js /pasta orcamento   (só os testes com "orcamento" no nome)
+
+   Precisa do Playwright com um Chromium (o caminho vem de CHROMIUM, ou o
+   padrão /opt/pw-browsers/chromium, ou o do próprio Playwright). O Firebase
+   é o pacote oficial, baixado uma vez para testes/.libs (npm pack) -- a rede
+   de verdade nunca é usada: toda requisição fora dos sistemas é bloqueada, e
+   o banco é simulado ou fica desligado.
+
+   Cada teste existe por causa de um defeito que já aconteceu:
+   - carga ............ sistema que abria com erro de script / selo sumido
+   - nuvem-rede ....... nome de campo proibido travava TODO o envio (14 orçamentos presos)
+   - orcamento-sync ... aparelho velho apagou vergalhões e malhas da nuvem
+   - gravar-antes ..... Máquinas/Cheques/Almoços gravavam antes de ler a nuvem
+   - login-conta ...... a foto não aparecia no login dentro da Central do PC
+   - leitor-offline ... o leitor não pode parar sem internet
+   - aparencia ........ cada sistema tinha seu botão, canto e cor (Tema RM)
+   - recibos-desligado  desligado ficava oculto para sempre, sem excluir de vez
+   - obras-notas-celular  notas do Controle de Obras cortadas no celular
+   - obras-danfe-entra-na-nota  DANFE baixado tinha de ser anexado à mão
+   - timbrado ......... endereço do orçamento numa linha só, colado na logo;
+                        relatórios do Recibos sem telefone nem tipo, advertência
+                        com "Estrela" no lugar da cidade
+   - almocos-pdf-glifo  "Falta×6" saía "Falta" no PDF (a fonte não tem o ×)
+   - orcamento-largura  largura útil só se editava telha por telha
+   - nome-pdf ......... PDF do orçamento e do Recibos saía com o nome do
+                        sistema (ou da barra, com "3 recibo(s)") + data de hoje
+   - obras-pdf ........ relatório de obra baixava página HTML (agora PDF, com nome)
+   - almocos-troca .... clicar para conferir uma marcação já a trocava
+   - almocos-equipe ... aba Equipe manual com gente que já saiu (vem do Recibos)
+   - almocos-fora-folha quem almoça sem estar na folha (sócio) ia para os
+                        afastados/ocultos; marcado em Config, fica na lista
+   - central-fundos ... fundo com botão nas Preferências que não pegava
+   - tema-escuro-nitido  o escuro com texto principal e de apoio quase iguais,
+                        sobre um fundo quase preto: difícil de enxergar
+   - fundo-movimento .. a obra se montando no fundo e o clique de CAD (desligados de fábrica)
+   - central-protetor-de-tela  o mesmo movimento como proteção de tela do Windows (.scr)
+   - recibos-card-aniv  card de aniversário do mês (nome, data, foto)
+   - recibos-card-aniv-varios  card com vários aniversariantes do mês (até 6)
+   - recibos-pf-papel  papéis da aba PF no timbrado padrão, numa folha
+   - contraste-toque .. texto abaixo de 4,5:1 e botão menor que 24 px
+   - nuvem-sem-atropelar Cheques e Estoque gravavam o banco inteiro (quem
+                        gravava por último apagava o outro); Almoços, o mês
+   - data-hoje-fuso ... depois das 21h (Brasília) o "hoje" virava amanhã, e
+                        o empréstimo de 01/10 dava parcelas no dia 30
+   - recibos-epi-assina-lote  assinatura deitada com várias pendentes: os
+                        botões (Confirmar, Fechar) continuam na tela
+   - encostado ........ % do orçamento na borda, relatório da contabilidade
+                        fora do alinhamento
+   - propostas-* ...... proposta e contrato em dois Words que se
+                        contradiziam (prazo, fechamento), extenso à mão
+   Sai com código 1 se algum falhar: não se publica assim.
+   =========================================================================== */
+'use strict';
+const fs = require('fs'), path = require('path'), cp = require('child_process');
+let chromium, devices;
+try { ({ chromium, devices } = require('playwright')); }
+catch (e) {
+  try { const g = cp.execSync('npm root -g').toString().trim(); ({ chromium, devices } = require(path.join(g, 'playwright'))); }
+  catch (e2) { console.error('Playwright não encontrado (npm i -g playwright).'); process.exit(2); }
+}
+const RAIZ = path.resolve(process.argv[2] || path.join(__dirname, '..', '..', '..'));
+const FILTRO = process.argv[3] || '';
+const DESCARTADOS = new Set(['controle_faltas', 'calculo_telha-t-rmica']);
+const LIBS = path.join(__dirname, '.libs');
+const FB = path.join(LIBS, 'firebase', 'package');
+
+function preparaFirebase() {
+  if (fs.existsSync(path.join(FB, 'firebase-app-compat.js'))) return;
+  fs.mkdirSync(path.join(LIBS, 'firebase'), { recursive: true });
+  console.log('Baixando o pacote do Firebase para os testes (uma vez)…');
+  const nome = cp.execSync('npm pack firebase@10.12.2 --silent', { cwd: LIBS }).toString().trim().split('\n').pop();
+  cp.execSync('tar -xzf ' + JSON.stringify(nome) + ' -C firebase', { cwd: LIBS });
+}
+/* As bibliotecas que o sistema busca no cdnjs so' quando precisa (o PDF no
+   celular). Nos testes vem do pacote, sem rede. */
+const CDN_LIBS = {
+  '/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js': ['jspdf@2.5.1', 'jspdf', 'dist/jspdf.umd.min.js'],
+  '/ajax/libs/html2canvas/1.4.1/html2canvas.min.js': ['html2canvas@1.4.1', 'html2canvas', 'dist/html2canvas.min.js'],
+  '/ajax/libs/exceljs/4.4.0/exceljs.min.js': ['exceljs@4.4.0', 'exceljs', 'dist/exceljs.min.js'],
+  '/ajax/libs/pdf.js/3.11.174/pdf.min.js': ['pdfjs-dist@3.11.174', 'pdfjs', 'build/pdf.min.js'],
+  '/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js': ['pdfjs-dist@3.11.174', 'pdfjs', 'build/pdf.worker.min.js'],
+  '/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js': ['pdf-lib@1.17.1', 'pdflib', 'dist/pdf-lib.min.js'] };
+function preparaCdn() {
+  for (const [pac, pasta, arq] of Object.values(CDN_LIBS)) {
+    if (fs.existsSync(path.join(LIBS, pasta, 'package', arq))) continue;
+    fs.mkdirSync(path.join(LIBS, pasta), { recursive: true });
+    console.log('Baixando ' + pac + ' para os testes (uma vez)…');
+    const nome = cp.execSync('npm pack ' + pac + ' --silent', { cwd: LIBS }).toString().trim().split('\n').pop();
+    cp.execSync('tar -xzf ' + JSON.stringify(nome) + ' -C ' + pasta, { cwd: LIBS });
+  }
+}
+/* O leitor de DWG (libredwg-web, no jsdelivr) e um DWG de amostra PÚBLICO
+   (os de teste do próprio LibreDWG -- nunca desenho de cliente). Baixados uma
+   vez para .libs; sem rede, os testes que precisam deles não rodam. */
+const DWG_BASE = '/npm/@mlightcad/libredwg-web@0.7.14';
+const DWG_LIB = path.join(LIBS, 'libredwg', 'package');
+const DWG_AMOSTRA = path.join(LIBS, 'amostras', 'example_2018.dwg');
+function preparaDwg() {
+  try {
+    if (!fs.existsSync(path.join(DWG_LIB, 'wasm', 'libredwg-web.wasm'))) {
+      fs.mkdirSync(path.join(LIBS, 'libredwg'), { recursive: true });
+      console.log('Baixando @mlightcad/libredwg-web@0.7.14 para os testes (uma vez)…');
+      const nome = cp.execSync('npm pack @mlightcad/libredwg-web@0.7.14 --silent', { cwd: LIBS }).toString().trim().split('\n').pop();
+      cp.execSync('tar -xzf ' + JSON.stringify(nome) + ' -C libredwg', { cwd: LIBS });
+    }
+    if (!fs.existsSync(DWG_AMOSTRA)) {
+      fs.mkdirSync(path.dirname(DWG_AMOSTRA), { recursive: true });
+      console.log('Baixando o DWG de amostra do LibreDWG (uma vez)…');
+      cp.execSync('curl -sSfL -o ' + JSON.stringify(DWG_AMOSTRA) + ' https://raw.githubusercontent.com/LibreDWG/libredwg/master/test/test-data/example_2018.dwg');
+    }
+  } catch (e) { console.log('sem o leitor de DWG para os testes: ' + e.message); }
+}
+const dwgPronto = () => fs.existsSync(path.join(DWG_LIB, 'wasm', 'libredwg-web.wasm')) && fs.existsSync(DWG_AMOSTRA);
+function repos() {
+  return fs.readdirSync(RAIZ).filter(d => !DESCARTADOS.has(d) && fs.existsSync(path.join(RAIZ, d, 'index.html'))).sort();
+}
+/* PADRAO_RM.md (Papel): o timbrado em DUAS COLUNAS -- razão social e CNPJ |
+   endereço e cidade --, sem o nome fantasia (a logo já diz) e sem o telefone
+   (vai no rodapé). Roda DENTRO da página, com o timbrado já desenhado (as
+   colunas se conferem pela posição); devolve a lista de problemas. */
+const CONFERE_TIMBRE = String.raw`(raiz) => {
+  const er = [], folhas = [...raiz.querySelectorAll('*')].filter(e => !e.children.length);
+  const acha = re => folhas.find(e => re.test(e.textContent.trim()));
+  const cnpj = acha(/^CNPJ 28\.654\.965\/0001-17$/), end = acha(/^Rod\.? RSC 453/),
+    cid = acha(/^Novo Paraíso · Estrela\/RS · 95883-000$/), rz = acha(/^Nunes e Kuhn Estruturas Metálicas Ltda$/);
+  if (!cnpj) { er.push('sem a linha "CNPJ 28.654..." sozinha'); return er; }
+  const bloco = cnpj.closest('.tb2');
+  if (!bloco) er.push('fora do modelo de duas colunas (.tb2)');
+  const txt = (bloco || cnpj.parentElement).textContent;
+  if (!rz) er.push('sem a razão social');
+  if (/RM Estruturas/i.test(txt)) er.push('nome fantasia no timbrado (a logo já diz)');
+  if (/99789/.test(txt)) er.push('telefone no timbrado (vai no rodapé)');
+  if (!end || !cid) er.push('sem endereço e cidade, cada um na sua linha');
+  else if (/Novo Paraíso/.test(end.textContent)) er.push('endereço e cidade na mesma linha');
+  else { const a = cnpj.getBoundingClientRect(), b = cid.getBoundingClientRect();
+    if (a.width && !(a.right <= b.left + 1 && Math.abs(a.top - b.top) < 14)) er.push('endereço não está na coluna ao lado do CNPJ');
+    const txt0 = e => { const g = document.createRange(); g.selectNodeContents(e); return g.getBoundingClientRect().left; };
+    if (rz && a.width && (Math.abs(txt0(rz) - txt0(cnpj)) > 1.5 || Math.abs(txt0(end) - txt0(cid)) > 1.5)) er.push('texto das colunas fora do alinhamento à esquerda'); }
+  let h = bloco || cnpj; while (h && !h.querySelector('img,svg')) h = h.parentElement;
+  const lg = h && h.querySelector('img,svg');
+  if (lg && bloco) { const folga = Math.round(bloco.getBoundingClientRect().left - lg.getBoundingClientRect().right);
+    if (lg.getBoundingClientRect().width && folga < 28) er.push('texto a ' + folga + ' px da logo'); }
+  return er;
+}`;
+// a imagem com o tipo certo, como o GitHub Pages serve: como text/html o
+// logo em arquivo (rm-logo.svg da Medição) não aparecia e nada se via dele
+const TIPOS = { js: 'text/javascript', json: 'application/json', css: 'text/css', svg: 'image/svg+xml', png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp', ico: 'image/x-icon' };
+const tipo = f => TIPOS[(f.match(/\.(\w+)$/) || [])[1]] || 'text/html';
+
+/* Abre um sistema num endereço de mentira (sis.local ou outro) com o
+   Firebase do pacote e nada de rede. hosts: { 'sis.local': 'recibos_rm', ... } */
+async function abre(browser, hosts, pagina, opt) {
+  opt = opt || {};
+  // opt.tela: um celular de tamanho dado (ex.: o Redmi 12C da empresa, 360 de largura)
+  const base = opt.tela ? { viewport: opt.tela, isMobile: true, hasTouch: true, deviceScaleFactor: 2 }
+    : opt.celular ? devices['iPhone 13'] : { viewport: opt.viewport || { width: 1400, height: 900 } };
+  // opt.fuso / opt.relogio: roda no horário de Brasília, num instante fixo
+  const ctx = await browser.newContext(opt.fuso ? Object.assign({}, base, { timezoneId: opt.fuso }) : base);
+  const pg = await ctx.newPage(); const erros = [];
+  if (opt.relogio) await pg.clock.setFixedTime(new Date(opt.relogio));
+  pg.on('pageerror', e => erros.push(String(e.message).slice(0, 160)));
+  pg.on('dialog', d => d.accept().catch(() => {}));
+  await pg.route('**/*', rq => {
+    const u = new URL(rq.request().url());
+    const mm = u.pathname.match(/firebasejs\/[^/]+\/(firebase-[a-z-]+\.js)$/);
+    if (mm) {
+      if (opt.semFirebase || !fs.existsSync(path.join(FB, mm[1]))) return rq.abort();
+      return rq.fulfill({ status: 200, contentType: 'text/javascript', body: fs.readFileSync(path.join(FB, mm[1])) });
+    }
+    // opt.dwg: o leitor de DWG vem do pacote local, no lugar do jsdelivr
+    if (opt.dwg && u.hostname === 'cdn.jsdelivr.net' && u.pathname.startsWith(DWG_BASE)) {
+      const r = u.pathname.slice(DWG_BASE.length), cors = { 'access-control-allow-origin': '*' };
+      if (r === '/wasm/libredwg-web.wasm') return rq.fulfill({ status: 200, contentType: 'application/wasm', headers: cors, body: fs.readFileSync(path.join(DWG_LIB, 'wasm', 'libredwg-web.wasm')) });
+      if (r === '/wasm/libredwg-web.js') return rq.fulfill({ status: 200, contentType: 'text/javascript', headers: cors, body: fs.readFileSync(path.join(DWG_LIB, 'wasm', 'libredwg-web.js'), 'utf8') });
+      if (r === '/+esm') return rq.fulfill({ status: 200, contentType: 'text/javascript', headers: cors,
+        body: fs.readFileSync(path.join(DWG_LIB, 'dist', 'libredwg-web.js'), 'utf8').replace(/"\.\.\/wasm\/libredwg-web\.js"/g, '"https://cdn.jsdelivr.net' + DWG_BASE + '/wasm/libredwg-web.js"') });
+      return rq.fulfill({ status: 404, body: '' });
+    }
+    const cdn = u.hostname === 'cdnjs.cloudflare.com' && CDN_LIBS[u.pathname];
+    if (cdn) return rq.fulfill({ status: 200, contentType: 'text/javascript', body: fs.readFileSync(path.join(LIBS, cdn[1], 'package', cdn[2])) });
+    const repo = hosts[u.hostname]; if (!repo) return rq.abort();
+    let f = path.join(RAIZ, repo, decodeURIComponent(u.pathname.replace(/^\//, '')) || 'index.html');
+    if (fs.existsSync(f) && fs.statSync(f).isDirectory()) f = path.join(f, 'index.html');   // como o GitHub Pages: pasta abre o index.html
+    if (!fs.existsSync(f) || !fs.statSync(f).isFile()) return rq.abort();
+    return rq.fulfill({ status: 200, contentType: tipo(f), body: fs.readFileSync(f) });
+  });
+  const host = Object.keys(hosts)[0];
+  if (opt.antes) await pg.addInitScript(opt.antes);   // roda antes do sistema (ex.: simular o app instalado)
+  try { await pg.goto('http://' + host + '/' + (pagina || 'index.html'), { waitUntil: 'domcontentloaded', timeout: 30000 }); } catch (e) {}
+  await pg.waitForTimeout(opt.espera || 2500);
+  return { ctx, pg, erros };
+}
+const semLogin = pg => pg.evaluate(() => { try { document.querySelectorAll('#loginScreen,#lock-screen').forEach(e => e.classList.add('hide')); } catch (e) {} });
+
+/* ---- Leitor DWG ----
+   Os desenhos reais dos testes ficam em fixtures/leitor (casoN.dxf): foram
+   tirados de DWGs de obras da RM, sem nome de cliente, só com as linhas e
+   os textos que o leitor usa. Os sintéticos são gerados aqui. */
+const FIX_LEITOR = path.join(__dirname, 'fixtures', 'leitor');
+async function leitorImporta(b, arquivo, opt) {
+  opt = opt || {};
+  const r = await abre(b, { 'sis.local': 'leitor_dwg' }, 'index.html', opt);
+  await semLogin(r.pg);
+  await r.pg.setInputFiles(opt.porta || '#file', arquivo);
+  // a porta só aparece na dúvida: com arquivo e desenho de acordo, a unidade
+  // entra sozinha (e o teste ainda pode pedir outra pelo seletor)
+  await r.pg.waitForFunction(() => { const g = document.getElementById('unitGate'), s = document.getElementById('unitStatus');
+    return (g && !g.classList.contains('hide')) || (s && /^Autom/.test(s.textContent)); }, null, { timeout: 15000 });
+  const u = String(opt.unidade || 10);
+  if (await r.pg.evaluate(() => !document.getElementById('unitGate').classList.contains('hide')))
+    await r.pg.click('[data-unit-choice="' + u + '"]');
+  else if (await r.pg.evaluate(() => document.getElementById('unit').value) !== u)
+    await r.pg.selectOption('#unit', u);
+  await r.pg.waitForTimeout(900);
+  return r;
+}
+/* DXF mínimo: linhas [x1,y1,x2,y2,cor,layer,ent] e textos [texto,x,y] */
+function dxfTeste(nome, linhas, textos, insunits, polis) {
+  const L = [], p = (c, v) => L.push(String(c), String(v));
+  p(0, 'SECTION'); p(2, 'HEADER'); p(9, '$INSUNITS'); p(70, insunits == null ? 5 : insunits); p(0, 'ENDSEC');
+  p(0, 'SECTION'); p(2, 'ENTITIES');
+  for (const [ax, ay, bx, by, cor, lay, ent] of linhas) {
+    if ((ent || 'LINE') === 'LINE') { p(0, 'LINE'); p(8, lay || '0'); p(62, cor); p(10, ax); p(20, ay); p(11, bx); p(21, by); }
+    else { p(0, 'LWPOLYLINE'); p(8, lay || '0'); p(62, cor); p(90, 2); p(70, 0); p(10, ax); p(20, ay); p(10, bx); p(20, by); }
+  }
+  // polilinha de vários vértices: [[[x,y],...], cor, fechada]
+  for (const [pts, cor, fechada] of polis || []) {
+    p(0, 'LWPOLYLINE'); p(8, '0'); p(62, cor); p(90, pts.length); p(70, fechada ? 1 : 0);
+    for (const [x, y] of pts) { p(10, x); p(20, y); }
+  }
+  for (const [s, x, y] of textos || []) { p(0, 'MTEXT'); p(8, 'TEXTO'); p(10, x); p(20, y); p(1, s); }
+  p(0, 'ENDSEC'); p(0, 'EOF');
+  const dir = path.join(require('os').tmpdir(), 'rm-testes-leitor'); fs.mkdirSync(dir, { recursive: true });
+  const f = path.join(dir, nome + '.dxf'); fs.writeFileSync(f, Buffer.from(L.join('\n') + '\n', 'latin1')); return f;
+}
+/* Treliça fictícia de banzos paralelos (12 m × 0,8 m, em cm), 7 montantes e
+   6 diagonais, num quadro com a ficha dentro. emPe: girada 90° (pilar). */
+function trelicaTeste(nome, opt) {
+  opt = opt || {};
+  const T = (x, y) => opt.emPe ? [-y, x] : [x, y], L = [];
+  const ln = (x1, y1, x2, y2, cor, lay, ent) => { const a = T(x1, y1), c = T(x2, y2); L.push([a[0], a[1], c[0], c[1], cor, lay || '0', ent]); };
+  ln(0, 0, 1200, 0, 2); ln(0, 80, 1200, 80, 2);
+  for (const x of [0, 200, 400, 600, 800, 1000, 1200]) ln(x, 0, x, 80, 1);
+  for (let x = 0; x < 1200; x += 200) {
+    // curta: a diagonal de 200 para 400 para 2 cm antes do nó de baixo
+    if (opt.curta && x === 200) { const L = Math.hypot(200, 80); ln(x, 80, x + 200 - 2 * 200 / L, 2 * 80 / L, 1); continue; }
+    ln(x, 80, x + 200, 0, 1);
+  }
+  if (opt.duplicada) ln(0, 80, 200, 0, 1);
+  if (opt.polAberta) ln(100, 0, 100, 80, 1, '0', 'LWPOLYLINE');   // peça desenhada como polilinha
+  if (opt.semCor) ln(300, 0, 300, 80, 7);                          // peça sem a cor de peça
+  if (opt.solta) ln(500, 40, 550, 60, 1);          // diagonal que não encosta em nada
+  if (opt.fora) ln(2000, 0, 2300, 0, 2);           // banzo fora de qualquer quadro
+  if (opt.suportes) {                              // suporte de terça: retângulo sobre o banzo
+    const ret = (x1, y1, x2, y2) => { ln(x1, y1, x2, y1, 1); ln(x2, y1, x2, y2, 1); ln(x2, y2, x1, y2, 1); ln(x1, y2, x1, y1, 1); };
+    for (const x of [200, 600, 1000]) ret(x - 3, 77, x + 3, 92);   // atravessa o banzo de cima
+    ret(2400, 0, 2421, 30);                        // um sozinho, longe de tudo
+    ret(3000, 0, 3210, 297);                       // retângulo grande solto (2,10 × 2,97 m, como no DWG real)
+  }
+  const q = opt.emPe ? [[-130, -50], [30, -50], [30, 1250], [-130, 1250]] : [[-50, -60], [1250, -60], [1250, 200], [-50, 200]];
+  for (let i = 0; i < 4; i++) L.push([q[i][0], q[i][1], q[(i + 1) % 4][0], q[(i + 1) % 4][1], 3, 'QUADRO']);
+  const tp = opt.emPe ? [-110, 600] : [100, 160];
+  const tx = [[(opt.nome || 'TRELIÇA 01') + '\\PU 40x100x40 #2,00\\P' + (opt.perfilInt || 'U 30x93x30 #2,00') + '\\PQTD: 2', tp[0], tp[1]]];
+  if (opt.semPerfil) tx.push(['TRELIÇA 02\\PQTD: 1', 3000, 500]);
+  // suporte de terça como no DWG real: polilinha fechada sobre o banzo de cima
+  const polis = opt.supPoly ? [400, 800].map(x => [[[x - 3, 77], [x + 3, 77], [x + 3, 92], [x - 3, 92]], 1, true]) : [];
+  return dxfTeste(nome, L, tx, opt.insunits, polis);
+}
+/* A mesma treliça de trelicaTeste, mas dentro de um BLOCO: desenhada em pé,
+   com o dobro do tamanho e ponto base (10,20); o INSERT gira 90°, escala 0,5
+   e põe em (5000,3000). Banzo em cor ByBlock (0) herda o amarelo do INSERT.
+   A ficha é outro bloco com atributos NOME / BANZO / INTERNO / QTD. */
+function trelicaBloco(nome) {
+  const L = [], p = (c, v) => L.push(String(c), String(v)), B = [10, 20];
+  const q = (x, y) => [B[0] + 2 * y, B[1] - 2 * x];
+  const ln = (x1, y1, x2, y2, cor, lay) => { const a = q(x1, y1), c = q(x2, y2);
+    p(0, 'LINE'); p(8, lay || '0'); p(62, cor); p(10, a[0]); p(20, a[1]); p(11, c[0]); p(21, c[1]); };
+  p(0, 'SECTION'); p(2, 'HEADER'); p(9, '$INSUNITS'); p(70, 5); p(0, 'ENDSEC');
+  p(0, 'SECTION'); p(2, 'BLOCKS');
+  p(0, 'BLOCK'); p(8, '0'); p(2, 'TRELICA_A'); p(70, 0); p(10, B[0]); p(20, B[1]); p(3, 'TRELICA_A');
+  ln(0, 0, 1200, 0, 0); ln(0, 80, 1200, 80, 0);
+  for (const x of [0, 200, 400, 600, 800, 1000, 1200]) ln(x, 0, x, 80, 1);
+  for (let x = 0; x < 1200; x += 200) ln(x, 80, x + 200, 0, 1);
+  const qd = [[-50, -60], [1250, -60], [1250, 200], [-50, 200]];
+  for (let i = 0; i < 4; i++) ln(qd[i][0], qd[i][1], qd[(i + 1) % 4][0], qd[(i + 1) % 4][1], 3, 'QUADRO');
+  p(0, 'ENDBLK');
+  p(0, 'BLOCK'); p(8, '0'); p(2, 'FICHA_RM'); p(70, 2); p(10, 0); p(20, 0); p(3, 'FICHA_RM');
+  for (const tag of ['NOME', 'BANZO', 'INTERNO', 'QTD']) { p(0, 'ATTDEF'); p(8, '0'); p(10, 0); p(20, 0); p(40, 10); p(1, ''); p(3, tag); p(2, tag); p(70, 0); }
+  p(0, 'ENDBLK');
+  p(0, 'ENDSEC');
+  p(0, 'SECTION'); p(2, 'ENTITIES');
+  p(0, 'INSERT'); p(8, 'ESTRUTURA'); p(62, 2); p(2, 'TRELICA_A'); p(10, 5000); p(20, 3000); p(41, 0.5); p(42, 0.5); p(50, 90);
+  p(0, 'INSERT'); p(8, 'TEXTO'); p(66, 1); p(2, 'FICHA_RM'); p(10, 5100); p(20, 3160);
+  [['NOME', 'TRELIÇA 01'], ['BANZO', 'U 40x100x40 #2,00'], ['INTERNO', 'U 30x93x30 #2,00'], ['QTD', '2']].forEach(([tag, v], i) => {
+    p(0, 'ATTRIB'); p(8, 'TEXTO'); p(10, 5100); p(20, 3160 - 12 * i); p(40, 10); p(1, v); p(2, tag); p(70, 0); });
+  p(0, 'SEQEND'); p(8, 'TEXTO');
+  p(0, 'ENDSEC'); p(0, 'EOF');
+  const dir = path.join(require('os').tmpdir(), 'rm-testes-leitor'); fs.mkdirSync(dir, { recursive: true });
+  const f = path.join(dir, nome + '.dxf'); fs.writeFileSync(f, Buffer.from(L.join('\n') + '\n', 'latin1')); return f;
+}
+/* Tesoura fictícia de duas águas (12 m, cumeeira 1,5 m), 4 unidades. */
+function tesouraTeste(nome) {
+  const L = [], ysup = x => 40 + (x <= 600 ? x : 1200 - x) * 110 / 600;
+  L.push([0, 0, 1200, 0, 2, '0'], [0, 40, 600, 150, 2, '0'], [600, 150, 1200, 40, 2, '0']);
+  for (const x of [0, 200, 400, 600, 800, 1000, 1200]) L.push([x, 0, x, ysup(x), 1, '0']);
+  for (const [a, c] of [[0, 200], [200, 400], [400, 600]]) L.push([a, ysup(a), c, 0, 1, '0']);
+  for (const [a, c] of [[600, 800], [800, 1000], [1000, 1200]]) L.push([a, 0, c, ysup(c), 1, '0']);
+  const q = [[-50, -60], [1250, -60], [1250, 300], [-50, 300]];
+  for (let i = 0; i < 4; i++) L.push([q[i][0], q[i][1], q[(i + 1) % 4][0], q[(i + 1) % 4][1], 3, 'QUADRO']);
+  return dxfTeste(nome, L, [['TESOURA 01\\PU 40x100x40 #2,00\\PU 30x93x30 #2,00\\PQTD: 4', 100, 250]]);
+}
+
+/* ------------------------------------------------------------------ */
+const TESTES = [];
+const teste = (nome, fn) => TESTES.push({ nome, fn });
+
+teste('carga', async (b, t) => {
+  for (const r of repos()) for (const cel of [false, true]) {
+    const { ctx, pg, erros } = await abre(b, { 'sis.local': r }, 'index.html', { celular: cel });
+    const selo = await pg.evaluate(() => { const v = document.querySelector('.rm-ver'); if (!v) return 'sem selo';
+      const q = v.getBoundingClientRect(); return q.width > 0 && q.height > 0 ? '' : 'selo escondido'; }).catch(e => 'avaliação: ' + e.message);
+    const ruins = erros.filter(e => !/Failed to fetch|NetworkError|net::|Load failed|ERR_/.test(e));
+    t.ok(r + (cel ? ' (celular)' : ''), !ruins.length && !selo, ruins.concat(selo ? [selo] : []).join(' | '));
+    await ctx.close();
+  }
+  if (fs.existsSync(path.join(RAIZ, 'calculadora-pu', 'medicao.html'))) {
+    const { ctx, erros } = await abre(b, { 'sis.local': 'calculadora-pu' }, 'medicao.html');
+    t.ok('calculadora-pu/medicao.html', !erros.length, erros.join(' | ')); await ctx.close();
+  }
+});
+
+teste('pu-3d-sem-espelho', async (b, t) => {
+  // "O 3D sai espelhado, não na posição que vejo no SketchUp": o viewer
+  // trocava Y com Z, e trocar dois eixos inverte a mão do sistema -- é um
+  // espelho. O SketchUp é Z para cima e o three.js é Y para cima; a troca
+  // certa é (x, z, -y)
+  if (!fs.existsSync(path.join(RAIZ, 'calculadora-pu', 'medicao.html'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'calculadora-pu' }, 'medicao.html');
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    for (let i = 0; i < 50 && !window.v3LoadJSON; i++) await esp(100);
+    if (!window.v3LoadJSON) return { erro: 'viewer não carregou' };
+    const lg = document.getElementById('loginScreen'); if (lg) lg.style.setProperty('display', 'none', 'important');
+    abrirViewer3D(); await esp(100);
+    // um L: 6 m no eixo vermelho (X) e 3 m no verde (Y), e um pilar de 4 m
+    window.v3LoadJSON({ obra: 'Exemplo', linhas: [
+      { id: 1, nome: 'Placa X', tipo: 'Placa', ml: 6, pt1: [0, 0, 0], pt2: [6, 0, 0] },
+      { id: 2, nome: 'Placa Y', tipo: 'Placa', ml: 3, pt1: [0, 0, 0], pt2: [0, 3, 0] },
+      { id: 3, nome: 'Pilar Z', tipo: 'Pilar', ml: 4, pt1: [0, 0, 0], pt2: [0, 0, 4] }] }, 'Exemplo_linhasPU.json');
+    await esp(100);
+    const h = window.__v3Teste; if (!h) return { erro: 'sem gancho de teste' };
+    const pos = h.linhas();
+    const fim = a => [a[3], a[4], a[5]];
+    const X = fim(pos[0]), Y = fim(pos[1]), Z = fim(pos[2]);
+    const cruz = [X[1] * Y[2] - X[2] * Y[1], X[2] * Y[0] - X[0] * Y[2], X[0] * Y[1] - X[1] * Y[0]];
+    const dot = (cruz[0] * Z[0] + cruz[1] * Z[1] + cruz[2] * Z[2]);
+    // a câmera inicial olha como a vista Iso do SketchUp: de +X, -Y, de cima
+    const cam = h.camera(), alvo = h.alvo();
+    // os botões redondos da calculadora e do ajuste de tela não podem cobrir
+    // os botões do painel do 3D (ficavam em cima de "Fechar viewer")
+    const cobertos = [...document.querySelectorAll('#v3d-foot button')].filter(bt => {
+      const q = bt.getBoundingClientRect(); const e = document.elementFromPoint(q.right - 8, q.top + q.height / 2);
+      return e && e !== bt && !bt.contains(e); }).map(bt => { const q = bt.getBoundingClientRect(), e = document.elementFromPoint(q.right - 8, q.top + q.height / 2); return bt.textContent.trim() + ' sob ' + (e.id || e.className || e.tagName); });
+    return { cobertos, X, Y, Z, mao: dot, camX: cam[0] - alvo[0], camZ: cam[2] - alvo[2], camY: cam[1] - alvo[1] };
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r);
+  t.ok('o 3D não sai espelhado (X × Y aponta para Z, como no SketchUp)', !r.erro && r.mao > 0, J);
+  t.ok('o pilar fica em pé (Z do SketchUp vira o "para cima" do 3D)', !r.erro && r.Z[1] > 3.9, J);
+  t.ok('nada flutua por cima dos botões do painel do 3D', !r.erro && r.cobertos && !r.cobertos.length, J);
+  t.ok('a câmera abre como a vista Iso do SketchUp', !r.erro && r.camX > 0 && r.camZ > 0 && r.camY > 0, J);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
+teste('pu-medicao-padrao', async (b, t) => {
+  // a Medição é a tela de trabalho da PU, mas os blocos comuns só eram
+  // aplicados no index.html: ela ficou com a fonte do sistema (não a
+  // Satoshi), sem o Tema RM e com impressão/tema antigos; e a barra do alto
+  // passava da tela em notebook (1280 e 1366 px)
+  if (!fs.existsSync(path.join(RAIZ, 'calculadora-pu', 'medicao.html'))) return;
+  const r = {};
+  for (const w of [1280, 1366]) {
+    const { ctx, pg, erros } = await abre(b, { 'sis.local': 'calculadora-pu' }, 'medicao.html', { viewport: { width: w, height: 800 } });
+    r[w] = await pg.evaluate(() => ({ sw: document.documentElement.scrollWidth, iw: innerWidth,
+      fonte: getComputedStyle(document.body).fontFamily, tema: document.documentElement.innerHTML.includes('TEMA RM · aparência única'),
+      tbFora: [...document.querySelectorAll('.topbar *')].filter(e => { const q = e.getBoundingClientRect(); return q.width > 0 && q.right > innerWidth + 1; }).length })).catch(e => ({ erro: e.message }));
+    r[w].erros = erros.slice(0, 3);
+    await ctx.close();
+  }
+  const J = JSON.stringify(r);
+  t.ok('medição usa a fonte Satoshi e o Tema RM', /^"?Satoshi/i.test(r[1366].fonte || '') && r[1366].tema, J);
+  t.ok('a barra do alto cabe na tela em 1280 e 1366 px', r[1280].sw <= r[1280].iw && r[1366].sw <= r[1366].iw && !r[1280].tbFora && !r[1366].tbFora, J);
+  t.ok('sem erro na página', !r[1280].erros.length && !r[1366].erros.length, J);
+});
+
+teste('pu-3d-engenharia', async (b, t) => {
+  // o 3D da PU ganhou o fundo de engenharia dos outros 3D (piso, eixos,
+  // escala, 3 estilos), peças que dá para ver (translúcidas/sólidas/ocultas)
+  // e as medidas de cada linha escritas no próprio 3D
+  if (!fs.existsSync(path.join(RAIZ, 'calculadora-pu', 'medicao.html'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'calculadora-pu' }, 'medicao.html');
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    for (let i = 0; i < 50 && !window.v3LoadJSON; i++) await esp(100);
+    if (!window.v3LoadJSON) return { erro: 'viewer não carregou' };
+    const lg = document.getElementById('loginScreen'); if (lg) lg.style.setProperty('display', 'none', 'important');
+    abrirViewer3D(); await esp(100);
+    window.v3LoadJSON({ obra: 'Exemplo', linhas: [
+      { id: 1, nome: 'PLACA 1/2', tipo: 'Placa', ml: 6, pt1: [2.5, 0, 0], pt2: [2.5, 0, 6] },
+      { id: 2, nome: 'PILAR P1', tipo: 'Pilar', ml: 6, pt1: [0, 0, 0], pt2: [0, 0, 6] },
+      { id: 3, nome: 'VIGA V1', tipo: 'Viga', ml: 5, pt1: [0, 0, 6], pt2: [5, 0, 6] }],
+      pecas: [{ nome: 'PLACA 1', tipo: 'Placa', min: [0, -0.15, 0], max: [2.5, 0, 6] }, { nome: 'PLACA 2', tipo: 'Placa', min: [2.5, -0.15, 0], max: [5, 0, 6] }] }, 'x_linhasPU.json');
+    await esp(400);
+    const h = window.__v3Teste; if (!h || !h.cena) return { erro: 'sem gancho cena' };
+    const c1 = h.cena();
+    const bf = document.querySelector('#v3bar [data-fundo3d]'); if (bf) bf.click(); await esp(300);
+    const c2 = h.cena();
+    const bp = document.getElementById('v3PecasBtn'), modos = [];
+    for (let i = 0; i < 3; i++) { bp.click(); await esp(60); modos.push(h.cena().pecas); }
+    const bm = document.getElementById('v3MedBtn'); if (bm) bm.click(); await esp(300);
+    const c3 = h.cena();
+    return { c1, c2, modos, c3, botaoFundo: !!bf, botaoMed: !!bm };
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  t.ok('fundo escuro com piso, eixos e escala', !r.erro && r.c1.fundo === 'escuro' && r.c1.grade > 0 && r.c1.eixos && r.c1.escala > 0 && r.botaoFundo, J);
+  t.ok('o botão Fundo troca para o claro', r.c2 && r.c2.fundo === 'claro', J);
+  t.ok('peças: translúcidas → sólidas → ocultas → translúcidas', r.c1 && r.c1.pecas === 'translucidas' && r.modos && r.modos.join() === 'solidas,ocultas,translucidas', J);
+  t.ok('medidas escritas no 3D, uma por linha visível', r.botaoMed && r.c3 && r.c3.medidas === 3, J);
+  t.ok('sem erro na página', !erros.length, J);
+  await ctx.close();
+});
+
+teste('pu-3d-conferencia', async (b, t) => {
+  // Conferência do 3D do PU: o custo do 3D usava R$ 2 fixo e 2 lados para
+  // tudo (pilar 4 lados, preço da obra ignorados); linha repetida no modelo
+  // entrava duas vezes no preço; "Usar no orçamento" apagava o que foi
+  // lançado à mão; e fechar o 3D perdia o arquivo e as marcações
+  if (!fs.existsSync(path.join(RAIZ, 'calculadora-pu', 'medicao.html'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'calculadora-pu' }, 'medicao.html');
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    for (let i = 0; i < 50 && !window.v3LoadJSON; i++) await esp(100);
+    const lg = document.getElementById('loginScreen'); if (lg) lg.style.setProperty('display', 'none', 'important');
+    window.confirm = () => true; window.alert = () => {};
+    loaded = true;
+    document.getElementById('custoExt').value = '3,00'; document.getElementById('custoInt').value = '5,00';
+    elementos = [{ nome: 'ARREMATE MANUAL', tipo: 'Outro', qtd: 1, ml: 2, app: 'ext1' },
+                 { nome: 'PLACA VELHA DO 3D', tipo: 'Placa', qtd: 1, ml: 9, app: 'ext_int', origem: '3d' }];
+    render();
+    abrirViewer3D(); await esp(80);
+    window.v3LoadJSON({ obra: 'Exemplo', linhas: [
+      { id: 1, nome: 'PLACA A', tipo: 'Placa', ml: 6, pt1: [0, 0, 0], pt2: [6, 0, 0], app: 'ext_int' },
+      { id: 2, nome: 'PLACA A', tipo: 'Placa', ml: 6, pt1: [0, 0.01, 0], pt2: [6, 0.01, 0], app: 'ext_int' },
+      { id: 3, nome: 'PILAR P1 · face xp', tipo: 'Pilar', ml: 4, pt1: [8, 0, 0], pt2: [8, 0, 3], app: 'ext_int' },
+      { id: 4, nome: 'VIGA V1', tipo: 'Viga', ml: 5, pt1: [0, 5, 3], pt2: [5, 5, 3], app: 'ext1' }] }, 'Exemplo_linhasPU.json');
+    await esp(120);
+    const txt = id => (document.getElementById(id) || {}).textContent || '';
+    const custo1 = txt('v3Custo');
+    const lista = (document.getElementById('v3d-list') || {}).textContent || '';
+    const btnRep = document.getElementById('v3DesmarcaRep');
+    if (btnRep) btnRep.click(); await esp(450);  // o salvamento espera 0,3 s de calma
+    const custo2 = txt('v3Custo'), cnt2 = txt('v3Cnt');
+    // o que ficou guardado na obra
+    const guard = JSON.parse(JSON.stringify(capturarSnapshot().linhas3d || null));
+    // aplicar mantendo os lançados à mão
+    window.v3ExportarSistema(); await esp(80);
+    const modal = document.getElementById('v3Aplicar');
+    const modalAberto = !!modal && getComputedStyle(modal).display !== 'none';
+    const bManter = document.querySelector('#v3Aplicar [data-v3ap="manter"]'); if (bManter) bManter.click(); await esp(80);
+    const els = elementos.map(e => e.nome + '|' + (e.origem || '') + '|' + e.qtd);
+    // reabrir a obra: o 3D volta como estava, sem carregar arquivo
+    const snap = JSON.parse(JSON.stringify(capturarSnapshot()));
+    fecharViewer3D(); window.v3LoadJSON({ linhas: [] }, 'x');
+    aplicarDados(snap); abrirViewer3D(); await esp(120);
+    const reaberto = [...document.querySelectorAll('#v3d-list .v3er')].map(r => r.querySelector('.v3ecb').checked);
+    return { custo1, custo2, cnt2, lista: lista.replace(/\s+/g, ' ').slice(0, 600), temBtn: !!btnRep, guard: guard && guard.linhas && guard.linhas.map(l => l.incluir),
+      modalAberto, els, reaberto };
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r);
+  // linhas: 6+6 (placas, ext+int 3+5=8/m) + 4 (pilar ext+int) + 5 (viga só ext, 3/m)
+  // = 12*8 + 4*8 + 5*3 = 96 + 32 + 15 = 143
+  t.ok('o custo do 3D usa o preço da obra e os lados de cada aplicação', !r.erro && /143,00/.test(r.custo1), J);
+  t.ok('a linha repetida aparece marcada na lista', !r.erro && /repetid/i.test(r.lista), J);
+  t.ok('a medida que não bate com o desenho aparece avisada', !r.erro && /medida/i.test(r.lista), J);
+  t.ok('"Desmarcar repetidas" tira a cópia do preço', !r.erro && r.temBtn && /95,00/.test(r.custo2) && /^3 \/ 4/.test(r.cnt2), J);
+  t.ok('as linhas e as marcações ficam guardadas na obra', !r.erro && JSON.stringify(r.guard) === '[true,false,true,true]', J);
+  t.ok('"Usar no orçamento" pergunta como aplicar', !r.erro && r.modalAberto, J);
+  t.ok('mantém o lançado à mão e troca só o que veio do 3D', !r.erro && r.els.includes('ARREMATE MANUAL||1') && !r.els.some(e => /PLACA VELHA/.test(e)) && r.els.some(e => /^PLACA A\|3d\|1$/.test(e)), J);
+  t.ok('reabrir a obra traz o 3D como estava', !r.erro && JSON.stringify(r.reaberto) === '[true,false,true,true]', J);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
+// SketchUp de mentira: só o que os scripts do plugin usam. Roda os scripts
+// de verdade (os mesmos que vão no .rbz) e devolve o que eles gravaram.
+const PU_RUBY_STUB = `
+require 'json'; require 'tmpdir'
+P = Struct.new(:x,:y,:z)
+module Geom
+  class Transformation
+    attr_reader :o
+    def initialize(o=[0,0,0]); @o=o; end
+    def *(v)
+      return Transformation.new([o[0]+v.o[0],o[1]+v.o[1],o[2]+v.o[2]]) if v.is_a?(Transformation)
+      P.new(v.x+o[0], v.y+o[1], v.z+o[2])
+    end
+  end
+  class BoundingBox
+    def initialize(mn,mx); @mn=mn; @mx=mx; end
+    def corner(i); P.new((i&1)==0 ? @mn[0] : @mx[0], (i&2)==0 ? @mn[1] : @mx[1], (i&4)==0 ? @mn[2] : @mx[2]); end
+  end
+end
+module Sketchup
+  class Definition; attr_reader :name,:bounds,:entities; def initialize(n,b,e=[]); @name=n;@bounds=b;@entities=e; end; end
+  class ComponentInstance; attr_reader :definition,:transformation; def initialize(d,t); @definition=d;@transformation=t; end; end
+  class Group; attr_reader :entities,:transformation; def initialize(e,t); @entities=e;@transformation=t; end; end
+  class Camera; def eye; P.new(0,-400,300); end; def target; P.new(0,0,0); end; def up; P.new(0,0,1); end; def fov; 35.0; end; def perspective?; true; end; end
+  class View; def camera; Camera.new; end; end
+  class Model; attr_accessor :entities,:path; def active_view; View.new; end; end
+  @m = Model.new
+  def self.active_model; @m; end
+end
+module UI
+  @msgs=[]
+  def self.messagebox(m, *a); @msgs << m; end
+  def self.msgs; @msgs; end
+  def self.savepanel(*a); ENV['RM_SALVAR']; end
+end
+def file_loaded?(f); false; end
+def file_loaded(f); end
+POL = 1/0.0254
+def comp(nome, mn, mx)
+  Sketchup::ComponentInstance.new(Sketchup::Definition.new(nome, Geom::BoundingBox.new(mn.map{|v| v*POL}, mx.map{|v| v*POL})), Geom::Transformation.new)
+end
+dir = Dir.mktmpdir
+m = Sketchup.active_model
+m.entities = [
+  comp('PLACA "A" 6m\\\\x', [0,0,0], [6,0.15,3]),
+  comp('PILAR P1', [6,-0.1,0], [6.3,0.25,4]),
+  comp('PLACA C', [6.3,0,0], [12,0.15,3]),
+  comp('PILAR P2', [20,0,0], [20.3,0.3,4])]
+m.path = File.join(dir, 'Obra Exemplo.skp')
+pasta = ARGV[0]
+out = {}
+begin
+  load File.join(pasta, 'RM_ExportarLinhasPU.rb')
+  txt = File.read(File.join(dir, 'Obra Exemplo_linhasPU.json'), encoding: 'UTF-8')
+  begin; out['linhas'] = JSON.parse(txt); rescue => e; out['linhasErro'] = e.message[0,200]; end
+rescue => e; out['linhasErro'] = e.class.to_s + ': ' + e.message[0,200]; end
+begin
+  load File.join(pasta, 'RM_ExportarPU.rb')
+  txt = File.read(File.join(dir, 'PU_Obra Exemplo.json'), encoding: 'UTF-8')
+  begin; out['pu'] = JSON.parse(txt); rescue => e; out['puErro'] = e.message[0,200]; end
+rescue => e; out['puErro'] = e.class.to_s + ': ' + e.message[0,200]; end
+# modelo ainda sem salvar: tem de perguntar onde gravar
+m.path = ''
+ENV['RM_SALVAR'] = File.join(dir, 'escolhido', 'Sem nome_linhasPU.json')
+Dir.mkdir(File.join(dir, 'escolhido'))
+begin
+  load File.join(pasta, 'RM_ExportarLinhasPU.rb')
+  out['semSalvar'] = File.exist?(ENV['RM_SALVAR'])
+rescue => e; out['semSalvar'] = e.class.to_s + ': ' + e.message[0,200]; end
+puts JSON.generate(out)
+`;
+teste('pu-plugin-sketchup', async (b, t) => {
+  // O plugin do SketchUp que gera os arquivos do PU. Ele montava o JSON
+  // colando texto: um nome com barra invertida quebrava o arquivo. Pilar sem
+  // placa encostada sumia do 3D (a medição contava ele pela altura). Modelo
+  // ainda não salvo gravava num lugar qualquer. E o 3D só recebia as linhas:
+  // agora vão também as peças e a câmera do SketchUp
+  const pasta = path.join(RAIZ, 'calculadora-pu', 'sketchup', 'RM_Estruturas');
+  if (!fs.existsSync(pasta)) return;
+  const temRuby = cp.spawnSync('ruby', ['-v'], { encoding: 'utf8' });
+  if (temRuby.status !== 0) { t.ok('ruby instalado para testar o plugin (pulado)', true); return; }
+  const stub = path.join(require('os').tmpdir(), 'rm_pu_stub_' + process.pid + '.rb');
+  fs.writeFileSync(stub, PU_RUBY_STUB);
+  const sai = cp.spawnSync('ruby', [stub, pasta], { encoding: 'utf8', timeout: 60000 });
+  fs.unlinkSync(stub);
+  let r = {}; try { r = JSON.parse((sai.stdout || '').trim().split('\n').pop()); } catch (e) { r = { erro: (sai.stderr || sai.stdout || e.message).slice(0, 400) }; }
+  const J = JSON.stringify(r).slice(0, 900);
+  const L = r.linhas || {}, ls = L.linhas || [];
+  t.ok('o arquivo de linhas é JSON válido mesmo com aspas e barra no nome', !r.erro && !r.linhasErro && ls.some(l => l.nome === 'PLACA "A" 6M\\X'), J);
+  t.ok('o arquivo da medição é JSON válido', !r.erro && !r.puErro && r.pu && Array.isArray(r.pu.elementos), J);
+  // Regra da RM: pilar sem placa encostada não leva PU -- fica fora do 3D e
+  // da Medição (a Medição contava ele pela altura inteira)
+  const p2 = ls.filter(l => /PILAR P2/.test(l.nome));
+  const p2Med = ((r.pu || {}).elementos || []).filter(e => /PILAR P2/.test(e.nome));
+  t.ok('pilar sem placa encostada não entra no 3D nem na Medição', !r.erro && ls.length > 0 && p2.length === 0 && r.pu && p2Med.length === 0, J);
+  // P1 tem placa nas duas faces: 3 m por face, "2 ext + 2 int". O arquivo
+  // gravava "ext + int" em tudo e o pilar saía com METADE dos metros
+  const p1 = ((r.pu || {}).elementos || []).find(e => e.nome === 'PILAR P1') || {};
+  t.ok('pilar com placa em 2 faces sai como 2 ext + 2 int (não pela metade)', p1.app === 'pilar22' && Math.abs(p1.ml - 3) < 0.01, J);
+  // A regra do 3D: uma linha por face com placa, e cada linha conta 2 vezes
+  // (ext + int). A Medição tem de dar o MESMO total de metros do pilar
+  const lados = { ext_int: 2, pilar22: 4, ext1: 1, int1: 1, ext2: 2, int2: 2 };
+  const m3d = ls.filter(l => /^PILAR P1 /.test(l.nome)).reduce((s, l) => s + l.ml * (lados[l.app] || 2), 0);
+  const mMed = (p1.qtd || 0) * (p1.ml || 0) * (lados[p1.app] || 0);
+  t.ok('pilar: 2 linhas no 3D (uma por face) x 2 lados = o mesmo total da Medição', ls.filter(l => /^PILAR P1 /.test(l.nome)).length === 2 && Math.abs(m3d - 12) < 0.01 && Math.abs(mMed - m3d) < 0.01, J);
+  t.ok('as peças vão junto, para o 3D mostrar o que foi lido', Array.isArray(L.pecas) && L.pecas.length === 4 && L.pecas.every(p => p.min && p.max && p.tipo), J);
+  t.ok('a câmera do SketchUp vai junto (em metros)', L.camera && Math.abs(L.camera.eye[1] + 10.16) < 0.01 && Math.abs(L.camera.eye[2] - 7.62) < 0.01, J);
+  t.ok('modelo sem salvar pergunta onde gravar', r.semSalvar === true, J);
+  // o .rbz que o viewer oferece para baixar tem de ser o mesmo dos fontes
+  const rbz = path.join(RAIZ, 'calculadora-pu', 'sketchup', 'RM_Estruturas_PU.rbz');
+  let igual = 'sem .rbz';
+  if (fs.existsSync(rbz)) {
+    const py = cp.spawnSync('python3', ['-c', `
+import zipfile,sys,os
+z=zipfile.ZipFile(sys.argv[1]); base=sys.argv[2]; dif=[]
+nomes=[n for n in z.namelist() if not n.endswith('/')]
+fontes=['RM_Estruturas.rb']+['RM_Estruturas/'+f for f in sorted(os.listdir(os.path.join(base,'RM_Estruturas'))) if f.endswith('.rb')]
+if sorted(nomes)!=sorted(fontes): dif.append('arquivos: '+','.join(sorted(nomes)))
+for n in fontes:
+  if n in nomes and z.read(n)!=open(os.path.join(base,n),'rb').read(): dif.append(n)
+print('ok' if not dif else ';'.join(dif))`, rbz, path.join(RAIZ, 'calculadora-pu', 'sketchup')], { encoding: 'utf8' });
+    igual = (py.stdout || py.stderr || '').trim();
+  }
+  t.ok('o .rbz para baixar é o mesmo dos fontes do plugin', igual === 'ok', igual);
+  const med = fs.readFileSync(path.join(RAIZ, 'calculadora-pu', 'medicao.html'), 'utf8');
+  t.ok('o viewer oferece o plugin para baixar', /href="sketchup\/RM_Estruturas_PU\.rbz"/.test(med));
+});
+
+teste('pu-medicao-tela', async (b, t) => {
+  // Tela da medição do PU: estava em 1040 px (o padrão é a faixa de 1600),
+  // com Tela cheia, Sair e botões redondos soltos por cima; a lista abria
+  // inteira (uma linha por instância do SketchUp, PILAR 25X35#2, #11...); e
+  // o pagamento pedia "Tipo" à mão e nunca dava "Pago" sem valor combinado
+  if (!fs.existsSync(path.join(RAIZ, 'calculadora-pu', 'medicao.html'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'calculadora-pu' }, 'medicao.html');
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    const lg = document.getElementById('loginScreen'); if (lg) lg.style.setProperty('display', 'none', 'important');
+    window.confirm = () => true; window.alert = () => {}; loaded = true;
+    document.getElementById('custoExt').value = '2,00'; document.getElementById('custoInt').value = '2,00';
+    elementos = [
+      { nome: 'PILAR 25X35#2', tipo: 'Pilar', qtd: 3, ml: 1.5, app: 'ext_int' },
+      { nome: 'PILAR 25X35#11', tipo: 'Pilar', qtd: 1, ml: 7.5, app: 'ext_int' },
+      { nome: 'PILAR 25X35#11', tipo: 'Pilar', qtd: 1, ml: 1.5, app: 'ext_int' },
+      { nome: 'PLACA 6M', tipo: 'Placa', qtd: 10, ml: 5.7, app: 'ext_int' }];
+    pagamentos = []; document.getElementById('valorCombinado').value = '';
+    render(); renderPagamentos(); await esp(50);
+    const vis = e => !!(e && e.offsetParent !== null && e.getBoundingClientRect().height > 0);
+    const linhas = () => [...document.querySelectorAll('#elBody tr')].filter(vis);
+    const wrap = getComputedStyle(document.querySelector('.wrap')).maxWidth;
+    const proibidos = ['fsBtn', 'rmCalcBtn', 'rmFitBtn'].filter(id => document.getElementById(id));
+    const sair = [...document.querySelectorAll('.topbar button, .topbar a')].filter(x => /\bSair\b|Tela cheia/i.test(x.textContent)).length;
+    const inicio = linhas().map(tr => tr.textContent.replace(/\s+/g, ' ').trim());
+    const hPilar = [...document.querySelectorAll('#elBody tr.grp-hdr')].find(tr => /Pilar/.test(tr.textContent)); if (hPilar) hPilar.click(); await esp(30);
+    const aberto = linhas().map(tr => tr.textContent.replace(/\s+/g, ' ').trim());
+    const peca = [...document.querySelectorAll('#elBody tr.pu-peca')].find(tr => vis(tr) && /PILAR 25X35/.test(tr.textContent));
+    const pecaNome = peca ? peca.querySelector('strong').textContent : '';
+    if (peca) peca.click(); await esp(30);
+    const itens = linhas().filter(tr => tr.classList.contains('grp-item')).length;
+    // pagamento: quitar o saldo de uma vez
+    const lado = document.getElementById('puLado'), main = document.getElementById('puMain');
+    const aoLado = lado && main && lado.getBoundingClientRect().left >= main.getBoundingClientRect().right - 1;
+    const abrir = document.getElementById('pagNovoBtn'); if (abrir) abrir.click(); await esp(20);
+    const quitar = document.getElementById('pagQuitar'); if (quitar) quitar.click();
+    const valorPreenchido = (document.getElementById('pagValor') || {}).value;
+    const salvar = document.getElementById('pagSalvar'); if (salvar) salvar.click(); await esp(30);
+    const badge = (document.getElementById('pagHeaderBadge') || {}).textContent || '';
+    return { wrap, proibidos, sair, inicio, aberto, pecaNome, itens, aoLado, valorPreenchido, tipo: (pagamentos[0] || {}).tipo, badge };
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r);
+  t.ok('largura no padrão (faixa de 1600 px)', !r.erro && r.wrap === '1600px', J);
+  t.ok('sem Tela cheia, Sair nem botões redondos soltos', !r.erro && !r.proibidos.length && !r.sair, J);
+  t.ok('a lista abre recolhida: só os tipos', !r.erro && r.inicio.length === 2 && r.inicio.every(x => /Pilar|Placa/.test(x)), J);
+  t.ok('abrir o tipo mostra a peça agrupada (sem o #N do SketchUp)', !r.erro && r.aberto.length === 3 && r.pecaNome === 'PILAR 25X35' && !r.aberto.some(x => /#\d/.test(x)), J);
+  t.ok('abrir a peça mostra as medidas dela', !r.erro && r.itens === 3, J);
+  t.ok('resumo e pagamento ficam ao lado da lista', !r.erro && r.aoLado, J);
+  t.ok('"Quitar saldo" preenche o que falta receber', !r.erro && /^\d/.test(r.valorPreenchido || '') && /282,00|282\.00|^282$/.test(r.valorPreenchido), J);
+  t.ok('o tipo do pagamento sai sozinho e a obra fica Paga', !r.erro && r.tipo === 'total' && /Pago/.test(r.badge), J);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
+teste('pu-3d-lado-interno', async (b, t) => {
+  // Há lugar em que o PU só vai do lado de dentro: cada linha e cada grupo
+  // escolhe "2 lados" (padrão) ou "Só int.", e isso vai para o custo, para a
+  // obra e para o orçamento
+  if (!fs.existsSync(path.join(RAIZ, 'calculadora-pu', 'medicao.html'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'calculadora-pu' }, 'medicao.html');
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    for (let i = 0; i < 50 && !window.v3LoadJSON; i++) await esp(100);
+    const lg = document.getElementById('loginScreen'); if (lg) lg.style.setProperty('display', 'none', 'important');
+    window.confirm = () => true; loaded = true;
+    document.getElementById('custoExt').value = '2,00'; document.getElementById('custoInt').value = '2,00';
+    elementos = []; render();
+    abrirViewer3D(); await esp(80);
+    window.v3LoadJSON({ obra: 'Exemplo', linhas: [
+      { id: 1, nome: 'PLACA A', tipo: 'Placa', ml: 5, pt1: [0, 0, 0], pt2: [5, 0, 0] },
+      { id: 2, nome: 'PLACA A', tipo: 'Placa', ml: 5, pt1: [5, 0, 0], pt2: [10, 0, 0] },
+      { id: 3, nome: 'PLACA B', tipo: 'Placa', ml: 5, pt1: [0, 4, 0], pt2: [5, 4, 0] }] }, 'x_linhasPU.json');
+    await esp(80);
+    const custo = () => document.getElementById('v3Custo').textContent;
+    const c0 = custo();                                   // 15 m x 2 lados x 2 = 60
+    const lin = id => document.querySelector('#v3d-list .v3er[data-id="' + id + '"]');
+    const b3 = lin(3) && lin(3).querySelector('[data-lado="int"]'); if (b3) b3.click(); await esp(30);
+    const c1 = custo();                                   // 10x4 + 5x2 = 50
+    document.getElementById('v3vt-grp').click(); await esp(30);
+    const gA = [...document.querySelectorAll('#v3d-list .v3grp-h')].find(h => /PLACA A/.test(h.textContent));
+    const bg = gA && gA.querySelector('[data-lado="int"]'); if (bg) bg.click(); await esp(30);
+    const c2 = custo();                                   // 15 x 2 = 30
+    await esp(400);
+    const guard = (capturarSnapshot().linhas3d || { linhas: [] }).linhas.map(l => l.app);
+    window.v3ExportarSistema(); await esp(50);
+    const bt = document.querySelector('#v3Aplicar [data-v3ap="tudo"]'); if (bt) bt.click(); await esp(50);
+    return { c0, c1, c2, guard, els: elementos.map(e => e.nome + '|' + e.app + '|' + e.qtd) };
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r);
+  t.ok('padrão: os dois lados', !r.erro && /60,00/.test(r.c0), J);
+  t.ok('"Só int." numa linha tira o lado externo dela do custo', !r.erro && /50,00/.test(r.c1), J);
+  t.ok('"Só int." no grupo vale para todas as linhas dele', !r.erro && /30,00/.test(r.c2), J);
+  t.ok('o lado fica guardado na obra', !r.erro && JSON.stringify(r.guard) === '["int1","int1","int1"]', J);
+  t.ok('o orçamento recebe "Só interno"', !r.erro && r.els.includes('PLACA A|int1|2') && r.els.includes('PLACA B|int1|1'), J);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
+teste('pu-3d-vistas', async (b, t) => {
+  // Tela nova do 3D do PU: vistas iguais às do SketchUp (Topo com o verde
+  // para cima, Frente olhando o verde, Lado pela direita, a vista que estava
+  // no SketchUp), peças em transparência e a lista levando a câmera à linha
+  if (!fs.existsSync(path.join(RAIZ, 'calculadora-pu', 'medicao.html'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'calculadora-pu' }, 'medicao.html');
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    for (let i = 0; i < 50 && !window.v3LoadJSON; i++) await esp(100);
+    const lg = document.getElementById('loginScreen'); if (lg) lg.style.setProperty('display', 'none', 'important');
+    abrirViewer3D(); await esp(80);
+    window.v3LoadJSON({ obra: 'Exemplo', camera: { eye: [-10, -20, 8], target: [5, 5, 0], up: [0, 0, 1], fov: 35 },
+      pecas: [{ nome: 'PLACA A', tipo: 'Placa', min: [0, -0.07, 0], max: [10, 0.07, 3] }],
+      linhas: [{ id: 1, nome: 'PLACA A', tipo: 'Placa', ml: 10, pt1: [0, 0, 0], pt2: [10, 0, 0] },
+               { id: 2, nome: 'PILAR P1', tipo: 'Pilar', ml: 3, pt1: [10, 10, 0], pt2: [10, 10, 3] }] }, 'x_linhasPU.json');
+    await esp(80);
+    const h = window.__v3Teste, rel = () => { const c = h.camera(), a = h.alvo(); return [c[0] - a[0], c[1] - a[1], c[2] - a[2]]; };
+    const clica = v => document.querySelector('#v3bar [data-v3v="' + v + '"]').click();
+    clica('topo'); const topo = rel();
+    clica('frente'); const frente = rel();
+    clica('lado'); const lado = rel();
+    const skVis = getComputedStyle(document.getElementById('v3vSk')).display !== 'none';
+    clica('sketchup'); const sk = h.camera();
+    const pecasBtn = getComputedStyle(document.getElementById('v3PecasBtn')).display !== 'none';
+    clica('iso');
+    const row = [...document.querySelectorAll('#v3d-list .v3er')].find(x => /PILAR P1/.test(x.textContent));
+    row.querySelector('.v3en').click(); await esp(50);
+    const alvo = h.alvo();
+    return { topo, frente, lado, skVis, sk, pecasBtn, alvo };
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r);
+  const so = (v, i) => v && Math.abs(v[i]) > 1 && v.every((x, k) => k === i || Math.abs(x) < Math.abs(v[i]) * 0.01);
+  t.ok('Topo olha de cima', !r.erro && so(r.topo, 1) && r.topo[1] > 0, J);
+  t.ok('Frente olha de -Y do SketchUp (o +Z do 3D)', !r.erro && so(r.frente, 2) && r.frente[2] > 0, J);
+  t.ok('Lado olha de +X', !r.erro && so(r.lado, 0) && r.lado[0] > 0, J);
+  t.ok('"Vista do SketchUp" usa a câmera do arquivo', !r.erro && r.skVis && Math.abs(r.sk[0] + 10) < 0.01 && Math.abs(r.sk[1] - 8) < 0.01 && Math.abs(r.sk[2] - 20) < 0.01, J);
+  t.ok('as peças do arquivo aparecem (botão Peças)', !r.erro && r.pecasBtn, J);
+  t.ok('clicar na linha da lista leva a câmera até ela', !r.erro && Math.abs(r.alvo[0] - 10) < 0.01 && Math.abs(r.alvo[1] - 1.5) < 0.01 && Math.abs(r.alvo[2] + 10) < 0.01, J);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
+teste('nuvem-rede', async (b, t) => {
+  const alvos = repos().map(r => [r, 'index.html']).concat(fs.existsSync(path.join(RAIZ, 'calculadora-pu', 'medicao.html')) ? [['calculadora-pu', 'medicao.html']] : []);
+  for (const [r, pag] of alvos) {
+    const { ctx, pg } = await abre(b, { 'sis.local': r }, pag);
+    const res = await pg.evaluate(async () => {
+      if (!window.firebase || !firebase.database) return { erro: 'sem firebase' };
+      if (!firebase.apps.length) firebase.initializeApp({ apiKey: 'x', databaseURL: 'https://teste-rm-default-rtdb.firebaseio.com', projectId: 'teste-rm' });
+      const db = firebase.database(); try { db.goOffline(); } catch (e) {}
+      const falhas = [];
+      const tenta = (n, f) => { try { const p = f(); if (p && p.catch) p.catch(() => {}); } catch (e) { falhas.push(n + ': ' + e.message.slice(0, 80)); } };
+      tenta('set chave', () => db.ref('teste_rm/a').set({ 'x/y': 1, 'c.d': { v: 2 }, 'e[f]': 3 }));
+      tenta('set undefined/NaN', () => db.ref('teste_rm/b').set({ a: undefined, b: NaN, c: [1, undefined, Infinity] }));
+      tenta('update', () => db.ref('teste_rm').update({ 'c/d': 1, 'g.h': 2 }));
+      tenta('push', () => db.ref('teste_rm/l').push({ '[i]': 1 }));
+      return { protegido: !!firebase.database.Reference.prototype.__rmNuvem, falhas, anotados: (window.RM_NUVEM_AJUSTES || []).length };
+    });
+    t.ok(r + (pag !== 'index.html' ? '/' + pag : ''), res && res.protegido && !res.falhas.length && res.anotados >= 4,
+      JSON.stringify(res));
+    await ctx.close();
+  }
+});
+
+teste('orcamento-servicos-sem-fornecedor', async (b, t) => {
+  // Serviços são terceiros, sem vínculo com as empresas do banco: a linha e
+  // a seção não mostram "fornecedor", e o valor é o do cadastro do serviço
+  if (!fs.existsSync(path.join(RAIZ, 'orcamento-rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'orcamento-rm' });
+  const r = await pg.evaluate(() => {
+    S.categorias.push({ id: 'cat_srv_t', nome: 'SERVIÇOS', items: [{ id: 'sv1', grupo: 'Elétrica', tipo: '', unidade: 'un', valor: 82 }] });
+    S.categorias.push({ id: 'cat_out_t', nome: 'OUTRA TESTE', items: [{ id: 'ot1', grupo: 'Peça', tipo: '', unidade: 'un', valor: 10 }] });
+    S.linhasCat.push({ lid: 'lt1', catId: 'cat_srv_t', itemId: 'sv1', qtd: 2, forn: 'FORNECEDOR QUALQUER' });
+    S.linhasCat.push({ lid: 'lt2', catId: 'cat_out_t', itemId: 'ot1', qtd: 1 });
+    renderLines(); recompute();
+    const secs = [...document.querySelectorAll('#catSecs > div')];
+    const srv = secs.find(d => /SERVIÇOS/.test(d.querySelector('.secttl').textContent));
+    const out = secs.find(d => /OUTRA TESTE/.test(d.querySelector('.secttl').textContent));
+    return { srvSel: srv ? srv.querySelectorAll('select').length : -1, srvTot: (document.getElementById('tot-lt1') || {}).textContent || '',
+      outSel: out ? out.querySelectorAll('select.cat-forn-l').length : -1 };
+  }).catch(e => ({ erro: e.message }));
+  t.ok('serviços sem campo de fornecedor', !r.erro && r.srvSel === 0 && /164,00/.test(r.srvTot) && r.outSel === 1 && !erros.length, JSON.stringify(r) + ' ' + erros.join(' | '));
+  await ctx.close();
+});
+
+teste('orcamento-esquadrias-fluxo', async (b, t) => {
+  // "Está difícil de usar. Ao clicar em novo orçamento deveria abrir campos,
+  // com opções como um banco de dados, e gerar os preços baseados no que já
+  // orcei." E: "a coluna do m² fica travada se não tiver nada semelhante".
+  // Antes: preço digitado entrava como "estimado" e o banco nunca aprendia;
+  // Novo orçamento só limpava; 12 botões soltos no topo; sem R$/m².
+  if (!fs.existsSync(path.join(RAIZ, 'orcamento-rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'orcamento-rm' });
+  const esp = ms => pg.waitForTimeout(ms);
+  const r = {};
+  try {
+    await pg.evaluate(() => { S.esqHist = [{ k: 'Janela de correr|1500|1200|OBRA A', tipo: 'Janela de correr', larg: 1500, alt: 1200, m2: 1.8, qtd: 1,
+      unit: 1150, total: 1150, m2preco: 638.89, fornecedor: 'VIDRACARIA X', obra: 'OBRA A', data: new Date().toISOString().slice(0, 10) }]; orcAba('esq'); });
+    await esp(300);
+    r.topo = await pg.evaluate(() => { const t = document.querySelector('#esqHost .esq-topo') || document.querySelector('.esq-topo');
+      const vis = [...t.querySelectorAll('button,summary')].filter(x => x.offsetParent !== null && !x.closest('.esq-menu-l'));
+      const menu = [...t.querySelectorAll('.esq-menu-l button')].map(x => x.textContent.trim());
+      return { n: vis.length, menu }; });
+    r.foco = await pg.evaluate(() => { if (typeof esqNovoOrc !== 'function') return 'sem esqNovoOrc'; esqNovoOrc(); return new Promise(ok => setTimeout(() => ok((document.activeElement || {}).id || ''), 150)); });
+    // passo 1: fornecedor digitado e o padrão escolhido com o cursor ainda no campo
+    // (o change do fornecedor redesenhava o bloco no meio de outro desenho: erro na página)
+    await pg.fill('#esqForn', 'VIDRACARIA X', { timeout: 3000 }).catch(() => {});
+    await pg.evaluate(() => { if (typeof esqPadSet === 'function') esqPadSet('vidro', 'Incolor temperado'); });
+    await esp(100);
+    r.padrao = await pg.evaluate(() => ({ forn: S.fornecedorDest, cab: (document.getElementById('q_fornecedorDest') || {}).value }));
+    // passo 2: digita o tipo e escolhe do banco
+    await pg.fill('#esqAddTipo', 'janela cor', { timeout: 3000 }).catch(e => { r.erroAdd = e.message; });
+    await esp(150);
+    r.sug = await pg.evaluate(() => ((document.getElementById('esqAddSug') || {}).innerText || '').replace(/\s+/g, ' '));
+    await pg.keyboard.press('Enter').catch(() => {});
+    await pg.fill('#esqAddLarg', '1500', { timeout: 3000 }).catch(() => {}); await pg.fill('#esqAddAlt', '1200', { timeout: 3000 }).catch(() => {}); await pg.fill('#esqAddQtd', '4', { timeout: 3000 }).catch(() => {});
+    await esp(150);
+    r.prev = await pg.evaluate(() => ((document.getElementById('esqAddPrev') || {}).innerText || '').replace(/\s+/g, ' '));
+    await pg.keyboard.press('Enter').catch(() => {});
+    await esp(250);
+    r.item = await pg.evaluate(() => { const e = (S.esquadrias || [])[0] || {}; return { tipo: e.tipo, qtd: +e.qtd, unit: +e.unit, estado: e.estado, foco: (document.activeElement || {}).id || '' }; });
+    // preço digitado na linha: é preço informado e o banco aprende
+    r.digitado = await pg.evaluate(async () => { const e = S.esquadrias[0]; const i = document.querySelector('#esqLista tr[data-esq="' + e.id + '"] [data-col="unit"]');
+      if (!i) return { erro: 'sem campo' }; i.value = '2000'; i.dispatchEvent(new Event('input', { bubbles: true }));
+      return { estado: e.estado, banco: (S.esqHist || []).length }; });
+    // peça sem nada parecido: R$/m² editável calcula o custo
+    await pg.fill('#esqAddTipo', 'maxiar', { timeout: 3000 }).catch(() => {}); await pg.keyboard.press('Enter').catch(() => {});
+    await pg.fill('#esqAddLarg', '600', { timeout: 3000 }).catch(() => {}); await pg.fill('#esqAddAlt', '600', { timeout: 3000 }).catch(() => {}); await pg.fill('#esqAddQtd', '2', { timeout: 3000 }).catch(() => {});
+    await pg.keyboard.press('Enter').catch(() => {}); await esp(250);
+    r.rm2 = await pg.evaluate(() => { const e = S.esquadrias[1]; if (!e) return { erro: 'não adicionou' };
+      const i = document.querySelector('#esqLista tr[data-esq="' + e.id + '"] [data-col="rm2"]');
+      if (!i) return { erro: 'sem R$/m²', unit: e.unit }; const antes = i.disabled;
+      i.value = '700'; i.dispatchEvent(new Event('input', { bubbles: true }));
+      return { travado: antes, unit: Math.round(+e.unit * 100) / 100, tipo: e.tipo }; });
+    // trazer do que já orcei
+    r.traz = await pg.evaluate(async () => {
+      S.orcamentosSalvos = [{ id: 'o1', nome: 'OBRA B', salvoEm: '01/08/2026 10:00:00', editadoEm: Date.parse('2026-08-01T12:00:00'),
+        quote: { obra: 'OBRA B', fornecedorDest: 'VIDRACARIA X', esquadrias: [{ id: 'z1', tipo: 'Porta de giro pivotante', larg: 1200, alt: 2400, qtd: 1, unit: 2400, estado: 'estimado' }] } }];
+      if (typeof esqTrazAbre !== 'function') return { erro: 'sem esqTrazAbre' };
+      esqTrazAbre(); await new Promise(ok => setTimeout(ok, 100));
+      const linhas = document.querySelectorAll('#esqTrazCorpo input[type=checkbox]:checked').length;
+      esqTrazAplica();
+      const h = (S.esqHist || []).find(x => x.tipo === 'Porta de giro pivotante');
+      const est = esqEstimativa({ tipo: 'Porta de giro pivotante', larg: 1200, alt: 2400 });
+      return { linhas, obra: h && h.obra, unit: est && est.unit };
+    });
+  } catch (e) { r.erro = e.message; }
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  t.ok('o topo tem no máximo 6 botões; PDF, WhatsApp e lista com preços ficam em "Pedir preço"',
+    !r.erro && r.topo && r.topo.n <= 6 && ['Gerar PDF do pedido', 'Mensagem para WhatsApp', 'Lista com preços'].every(x => r.topo.menu.some(m => m.indexOf(x) >= 0)), J);
+  t.ok('Novo orçamento abre os campos: o cursor vai para o cliente', !r.erro && r.foco === 'esqCli', J);
+  t.ok('o fornecedor do passo 1 é o mesmo do cabeçalho do orçamento', !r.erro && r.padrao && r.padrao.forn === 'VIDRACARIA X' && r.padrao.cab === 'VIDRACARIA X', J);
+  t.ok('digitar o tipo mostra o que já foi orçado (do banco, com o preço)', !r.erro && /Janela de correr/.test(r.sug || '') && /1 cotação/.test(r.sug || ''), J);
+  t.ok('com a medida, o preço sugerido aparece antes de adicionar (mesma medida: R$ 1.150,00)', !r.erro && /1\.150,00/.test(r.prev || ''), J);
+  t.ok('Enter adiciona com o preço sugerido e o cursor volta para o tipo', !r.erro && r.item && r.item.tipo === 'Janela de correr' && r.item.qtd === 4 &&
+    r.item.unit === 1150 && r.item.estado === 'estimado' && r.item.foco === 'esqAddTipo', J);
+  t.ok('preço digitado é preço informado e entra no banco', !r.erro && r.digitado && r.digitado.estado === 'confirmado' && r.digitado.banco === 2, J);
+  t.ok('sem nada parecido, o R$/m² é editável e calcula o custo (700 × 0,36 m² = 252,00)', !r.erro && r.rm2 && r.rm2.travado === false && r.rm2.unit === 252 && r.rm2.tipo === 'Maxiar encaixilhada', J);
+  t.ok('"Trazer do que já orcei" leva ao banco as esquadrias com preço dos orçamentos salvos', !r.erro && r.traz && r.traz.linhas === 1 && r.traz.obra === 'OBRA B' && r.traz.unit === 2400, J);
+  t.ok('sem erro na página', !erros.length, J);
+  await ctx.close();
+});
+
+teste('orcamento-numero-e-revisao', async (b, t) => {
+  // Avaliação do Orçamento: o número ficava vazio ("0001" era só o exemplo
+  // apagado do campo) e saía no papel sem número; salvar perguntava o nome
+  // toda vez; e em "Atualizar o orçamento salvo?", Cancelar SALVAVA UMA CÓPIA
+  // -- quem desistia criava um duplicado. Agora: número sozinho, nome tirado
+  // do cliente e da obra, e a pergunta tem três saídas claras, uma delas a
+  // nova revisão (R1, R2) que guarda a anterior e sai do relatório.
+  if (!fs.existsSync(path.join(RAIZ, 'orcamento-rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'orcamento-rm' });
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    window.confirm = () => true; window.print = () => {}; window.printQuote = null;
+    const ano = Date.now();
+    S.orcamentosSalvos = [{ id: 'orcvelho', nome: 'Antigo', cliente: 'Cliente Fictício Z', obra: '', numero: '0007', ts: ano, editadoEm: ano, status: 'aberto', totalNum: 100, quote: { numero: '0007' } }];
+    clearQuote(); await esp(50);
+    const placeholder = document.getElementById('q_numero').placeholder;
+    S.cliente = 'Cliente Fictício A'; S.obra = 'Galpão Teste'; initRender();
+    addPerfilLine(S.perfis[0].id); await esp(50);
+    const n0 = S.orcamentosSalvos.length;
+    salvarOrcamento(); await esp(80);
+    const perguntouNome = document.getElementById('askOverlay').classList.contains('open');
+    if (perguntouNome) askOk();
+    await esp(50);
+    const novo = S.orcamentosSalvos.find(e => e.id === S.orcamentoAtualId) || {};
+    const primeiro = { n: S.orcamentosSalvos.length - n0, numero: novo.numero, nome: novo.nome, campo: document.getElementById('q_numero').value };
+    const dialogo = () => document.getElementById('escolhaOverlay');
+    const escolhe = async v => { salvarOrcamento(); await esp(60); const d = dialogo(); if (!d || !d.classList.contains('open')) return 'sem pergunta';
+      const bts = [...d.querySelectorAll('[data-esc]')].map(x => x.textContent.trim()).join('|');
+      d.querySelector('[data-esc="' + v + '"]').click(); await esp(60); return bts; };
+    const botoes = await escolhe('');
+    const aposCancelar = S.orcamentosSalvos.length - n0;
+    addPerfilLine(S.perfis[0].id); await esp(30);
+    await escolhe('atualizar');
+    const aposAtualizar = { n: S.orcamentosSalvos.length - n0, mesmo: S.orcamentoAtualId === novo.id };
+    await escolhe('revisao');
+    const r1 = S.orcamentosSalvos.find(e => e.id === S.orcamentoAtualId) || {};
+    await escolhe('revisao');
+    const r2 = S.orcamentosSalvos.find(e => e.id === S.orcamentoAtualId) || {};
+    const original = S.orcamentosSalvos.find(e => e.id === novo.id) || {};
+    const rel = relDadosAno(new Date().getFullYear()).map(e => e.numero).sort().join(',');
+    // imprimir sem número também numera (o papel nunca sai sem)
+    novoOrcamento(); await esp(30); addPerfilLine(S.perfis[0].id); await esp(30);
+    document.getElementById('orcPrintMode').value = 'interno'; orcImprimir(); await esp(600);
+    const impresso = document.getElementById('q_numero').value;
+    return { placeholder, perguntouNome, primeiro, botoes, aposCancelar, aposAtualizar,
+      r1: { numero: r1.numero, nome: r1.nome }, r2: r2.numero, original: { subst: original.substituidoPor === r1.id, numero: original.numero },
+      r1subst: r1.substituidoPor === r2.id, rel, impresso };
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r);
+  t.ok('o campo não finge um número ("automático", não "0001")', !r.erro && r.placeholder !== '0001' && /autom/i.test(r.placeholder), J);
+  t.ok('salvar não pergunta o nome', !r.erro && !r.perguntouNome, J);
+  t.ok('número seguinte ao maior já usado, nome = cliente · obra', !r.erro && r.primeiro.n === 1 && r.primeiro.numero === '0008' && r.primeiro.campo === '0008' && r.primeiro.nome === 'Cliente Fictício A · Galpão Teste', J);
+  t.ok('salvar de novo: Atualizar, Nova revisão ou Cancelar', !r.erro && /Atualizar/.test(r.botoes) && /revis/i.test(r.botoes) && /Cancelar/.test(r.botoes), J);
+  t.ok('Cancelar não salva cópia', !r.erro && r.aposCancelar === 1, J);
+  t.ok('Atualizar mexe no mesmo', !r.erro && r.aposAtualizar.n === 1 && r.aposAtualizar.mesmo, J);
+  t.ok('Nova revisão: 0008 R1, depois 0008 R2', !r.erro && r.r1.numero === '0008 R1' && r.r2 === '0008 R2' && /R1/.test(r.r1.nome), J);
+  t.ok('a anterior fica guardada e marcada como substituída', !r.erro && r.original.subst && r.original.numero === '0008' && r.r1subst, J);
+  t.ok('o relatório conta só a última revisão', !r.erro && r.rel === '0007,0008 R2', J);
+  t.ok('imprimir sem número já numera', !r.erro && r.impresso === '0009', J);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
+teste('orcamento-salvos-perda-e-validade', async (b, t) => {
+  // Perdido sem motivo não ensina nada: ao marcar Perdido, pergunta por quê
+  // (o campo "Motivo" ficava escondido em "Mais campos"). E orçamento com a
+  // validade passada ganha etiqueta na lista, como o "cobrar".
+  if (!fs.existsSync(path.join(RAIZ, 'orcamento-rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'orcamento-rm' });
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    const dia = n => { const d = new Date(Date.now() - n * 864e5); return String(d.getDate()).padStart(2, '0') + '/' + String(d.getMonth() + 1).padStart(2, '0') + '/' + d.getFullYear(); };
+    const e = (id, st, dias, val) => ({ id, nome: 'Cliente Fictício ' + id, cliente: 'Cliente Fictício ' + id, obra: '', numero: '', ts: Date.now() - dias * 864e5, editadoEm: Date.now(), status: st, statusEm: Date.now(), totalNum: 100, total: 'R$ 100,00', quote: { data: dia(dias), validade: val } });
+    S.orcamentosSalvos = [e('A', 'enviado', 20, '15 dias'), e('B', 'aberto', 2, '15 dias'), e('C', 'aprovado', 40, '15 dias'), e('D', 'aberto', 5, '')];
+    orcAba('salvos'); await esp(200);
+    const item = id => [...document.querySelectorAll('#savedList .saved-item')].find(x => x.textContent.includes('Fictício ' + id));
+    const vencida = ['A', 'B', 'C', 'D'].map(id => /validade vencida/i.test((item(id) || {}).textContent || '') ? id : '').join('');
+    setStatusOrc('B', 'perdido'); await esp(80);
+    const pergunta = document.getElementById('askOverlay').classList.contains('open') ? document.getElementById('askMsg').textContent : '';
+    document.getElementById('askInput').value = 'preço'; askOk(); await esp(80);
+    const salvo = S.orcamentosSalvos.find(x => x.id === 'B');
+    return { vencida, pergunta, motivo: salvo.motivo, status: salvo.status, naLista: /preço/.test((item('B') || {}).textContent || '') };
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r);
+  t.ok('validade vencida só no enviado/aberto com prazo passado', !r.erro && r.vencida === 'A', J);
+  t.ok('marcar Perdido pergunta o motivo', !r.erro && /motivo|por que/i.test(r.pergunta), J);
+  t.ok('o motivo fica gravado e aparece na lista', !r.erro && r.status === 'perdido' && r.motivo === 'preço' && r.naLista, J);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
+teste('orcamento-tela-enxuta', async (b, t) => {
+  // Avaliação: as listas de sugestão reabriam depois de adicionar e tampavam a
+  // tabela; a barra de baixo quebrava em duas linhas no computador e, com a de
+  // cima, comia mais da metade da tela do celular; Controle e Mais repetiam o
+  // menu da engrenagem; os Ajustes estavam sem acento e ofereciam "Cor de
+  // destaque", que foge da marca.
+  if (!fs.existsSync(path.join(RAIZ, 'orcamento-rm'))) return;
+  for (const tela of [{ width: 1366, height: 768 }, { width: 390, height: 844 }]) {
+    const cel = tela.width < 500, onde = cel ? 'celular: ' : 'computador: ';
+    const { ctx, pg, erros } = await abre(b, { 'sis.local': 'orcamento-rm' }, 'index.html', { tela });
+    // a tela de entrada do Orçamento cobre a página mesmo com a classe hide: tira de vez
+    await pg.evaluate(() => document.querySelectorAll('#loginScreen,#lock-screen').forEach(e => { e.style.display = 'none'; }));
+    const esp = ms => pg.waitForTimeout(ms);
+    const r = {};
+    try {
+      await pg.fill('#searchPerfil', '100x40', { timeout: 3000 }); await esp(150);
+      await pg.fill('#addQtd', '120000'); await pg.press('#addQtd', 'Enter'); await esp(200);
+      r.suggP = await pg.evaluate(() => document.getElementById('sugg').classList.contains('open'));
+      await pg.focus('#searchCat'); await esp(150); await pg.press('#searchCat', 'ArrowDown'); await pg.press('#searchCat', 'Enter'); await esp(200);
+      r.suggC = await pg.evaluate(() => document.getElementById('suggCat').classList.contains('open'));
+      r.alturas = await pg.evaluate(() => ({ bar: Math.round(document.querySelector('.orc-bar').getBoundingClientRect().height),
+        topo: Math.round(document.querySelector('.appbar').getBoundingClientRect().height), total: document.getElementById('bar_total').textContent,
+        mesmaLinha: (() => { const a = document.getElementById('bar_total').getBoundingClientRect(), z = document.getElementById('bar_salvar').getBoundingClientRect(); return Math.abs((a.top + a.bottom) / 2 - (z.top + z.bottom) / 2) < 14; })(),
+        salvarVisivel: (() => { const s = document.getElementById('bar_salvar'); const q = s && s.getBoundingClientRect(); return !!q && q.width > 0 && q.bottom <= innerHeight; })() }));
+      r.topoBotoes = await pg.evaluate(() => [...document.querySelectorAll('.appbar button')].filter(x => x.offsetParent !== null).map(x => (x.textContent.trim() || x.title || x.getAttribute('aria-label') || '').slice(0, 20)));
+      // o menu da engrenagem tem o que saiu do topo
+      // a página rola suave (scroll-behavior): espera chegar ao topo antes de clicar
+      await pg.evaluate(() => window.scrollTo(0, 0)); await esp(700);
+      await pg.click('.orc-tab.gear', { timeout: 3000 }); await esp(150);
+      r.menu = await pg.evaluate(() => [...document.querySelectorAll('.orc-menu button')].map(x => x.textContent.trim()));
+      await pg.click('.orc-menu button[data-ac="empresa"]'); await esp(300);
+      r.empresa = await pg.evaluate(() => { const p = document.querySelector('#panel-cad'); return p && p.classList.contains('on') ? p.innerText.replace(/\s+/g, ' ').length : 0; });
+      await pg.evaluate(() => { orcAba('orc'); openDB('ajustes'); }); await esp(200);
+      r.ajustes = await pg.evaluate(() => document.getElementById('ajustesBody').innerText);
+      r.cor = await pg.evaluate(() => { S.cfg.accent = '#1f5fae'; applyCfg(); return document.documentElement.style.getPropertyValue('--red'); });
+    } catch (e) { r.erro = e.message; }
+    const J = JSON.stringify(Object.assign({}, r, { ajustes: undefined }));
+    const semAcento = (r.ajustes || '').match(/\b(orcamento|padrao|Padroes|Aparencia|visiveis|Memoria|voce|nao|ja|Botao|Opcao|marcacao|unitario|so|ha|Sao)\b/gi) || [];
+    t.ok(onde + 'depois de adicionar, as sugestões fecham', !r.erro && r.suggP === false && r.suggC === false, J);
+    t.ok(onde + 'barra de baixo numa linha só, Salvar à vista', !r.erro && r.alturas.mesmaLinha && r.alturas.bar <= (cel ? 80 : 90) && r.alturas.salvarVisivel && /\d{3}\.\d{3}/.test(r.alturas.total), J);
+    if (cel) t.ok(onde + 'barra de cima numa linha só', !r.erro && r.alturas.topo <= 64, J);
+    t.ok(onde + 'sem Controle e Mais no topo', !r.erro && !r.topoBotoes.some(x => /^(Controle|Mais)$/.test(x)), J);
+    t.ok(onde + 'a engrenagem tem cotações, catálogos, exportar e importar', !r.erro && ['Cota', 'Catálogo', 'Exportar', 'Importar'].every(k => r.menu.some(x => x.includes(k))), J);
+    t.ok(onde + 'Dados da empresa abre preenchido', !r.erro && r.empresa > 60, J);
+    t.ok(onde + 'Ajustes com acento', !r.erro && !semAcento.length, semAcento.join(','));
+    t.ok(onde + 'sem "Cor de destaque": a cor é a da marca', !r.erro && !/Cor de destaque/.test(r.ajustes) && r.cor === '', J);
+    t.ok(onde + 'sem erro na página', !erros.length, erros.join(' | '));
+    await ctx.close();
+  }
+});
+
+teste('orcamento-area-telhas-so-com-telha', async (b, t) => {
+  // Orçamento só de tubos saía com "Área total das telhas 0,00 m²" na folha
+  // (cliente e fornecedor) e na barra de baixo: a linha só existe com telha
+  if (!fs.existsSync(path.join(RAIZ, 'orcamento-rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'orcamento-rm' });
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    S.categorias.push({ id: 'cat_tub_t', nome: 'TUBOS', items: [{ id: 'tb1', grupo: 'TUBO REDONDO 1"', tipo: '', unidade: 'barra', valor: 50 }] });
+    S.linhasCat.push({ lid: 'lt1', catId: 'cat_tub_t', itemId: 'tb1', qtd: 10 });
+    renderLines(); recompute(); await esp(500);
+    const vis = id => { const e = document.getElementById(id); if (!e) return null; const q = e.getBoundingClientRect(); return getComputedStyle(e).display !== 'none' && q.height > 0; };
+    const barra = () => { const v = document.getElementById('bar_area_telhas'); return v ? vis('bar_area_telhas') && getComputedStyle(v.parentElement).display !== 'none' : null; };
+    const tela = vis('t_area_telhas_row'), bar = barra();
+    const sh = document.querySelector('.sheet'); if (sh) sh.classList.add('supplier');
+    const forn = vis('t_area_telhas_row'); if (sh) sh.classList.remove('supplier');
+    // e com telha ela volta
+    const te = (S.telhas || [])[0];
+    if (te) { S.linhasTelha.push({ lid: 'tt1', telhaId: te.id, comp: 6, qtd: 4 }); renderLines(); recompute(); await esp(500); }
+    return { tela, bar, forn, comTelha: te ? vis('t_area_telhas_row') && barra() : 'sem telha no cadastro' };
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r);
+  t.ok('só tubos: sem "Área total das telhas" na folha', !r.erro && r.tela === false, J);
+  t.ok('só tubos: sem área de telhas na folha do fornecedor', !r.erro && r.forn === false, J);
+  t.ok('só tubos: sem "Telhas" na barra de baixo', !r.erro && r.bar === false, J);
+  t.ok('com telha, a área volta na folha e na barra', !r.erro && r.comTelha === true, J);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
+teste('orcamento-sync', async (b, t) => {
+  if (!fs.existsSync(path.join(RAIZ, 'orcamento-rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'orcamento-rm' });
+  const r = await pg.evaluate(async () => {
+    const J = o => JSON.parse(JSON.stringify(o)), esp = (ms) => new Promise(x => setTimeout(x, ms || 80)), out = {};
+    let env = [], nuvem = null, versoes = {};
+    FB.ready = true; FB.leuNuvem = true; FB.nuvemVazia = false; FB.applying = false; FB.booting = false;
+    FB.ref = { update(p) { const bad = fbChaveProibida(p, ''); if (bad) throw new Error('invalid key ' + bad); env.push(J(p)); return Promise.resolve(); },
+      once() { return Promise.resolve({ val: () => J(nuvem) }); }, off() {}, on() {} };
+    FB.db = { ref(pth) { return { transaction(fn) { const k = pth.split('/')[1]; const v = fn(versoes[k] === undefined ? null : versoes[k]); if (v !== undefined) versoes[k] = J(v); return Promise.resolve(); },
+      remove() { return Promise.resolve(); }, orderByKey() { return { limitToLast() { return { once() { return Promise.resolve({ val: () => J(versoes) }); } }; } }; } }; } };
+    // base comum; a nuvem ganha uma categoria (feita em outro aparelho)
+    // a nuvem de verdade já passou pelas migrações: parte de um cadastro migrado
+    fbApply(J(Object.assign(cloudData(), { _updatedAt: 500 }))); await esp();
+    const velho = J(cloudData()); velho._updatedAt = 1000; fbApply(J(velho)); await esp(); FB.ultimaNuvem = J(velho);
+    nuvem = J(velho); nuvem.categorias = (nuvem.categorias || []).concat([{ id: 'cat_t', nome: 'TESTE', items: [{ id: 'i1' }, { id: 'i2' }, { id: 'i3' }] }]); nuvem._updatedAt = 5000;
+    // 1) aparelho velho com o Banco de dados aberto edita outro campo: não sobe as categorias velhas
+    document.getElementById('panel-cad') && document.getElementById('panel-cad').classList.add('on');
+    fbOnValue(J(nuvem)); await esp();
+    env = []; S.perfis[0].preco = (Number(S.perfis[0].preco) || 0) + 1; fbPush(); await esp();
+    const p1 = env[env.length - 1] || {};
+    out.naoSobeCategoriasVelhas = (!('categorias' in p1) && ('perfis' in p1)) || Object.keys(p1).join(',');
+    out.marcaEscritor = !!(p1._escritor && p1._escritor.t === p1._updatedAt);
+    out.guardouVersao = Object.keys(versoes).length === 1;
+    document.getElementById('panel-cad') && document.getElementById('panel-cad').classList.remove('on');
+    nuvem.perfis = J(S.perfis); nuvem._updatedAt = 9000; FB.ultimaNuvem = J(nuvem); fbApply(J(nuvem)); await esp();
+    out.recebeuCategoria = S.categorias.some(c => c.id === 'cat_t');
+    // 2) freio: apagar 3 itens de uma vez fica segurado
+    env = []; S.categorias.find(c => c.id === 'cat_t').items = []; fbPush(); await esp();
+    out.freio = !('categorias' in (env[0] || {}));
+    S.categorias = J(nuvem.categorias); FB.avisouFreio = false;
+    // 3) chave proibida num orçamento salvo: vai trocada, o envio acontece
+    S.orcamentosSalvos = [{ id: 'o1', nome: 't', quote: { compras: { rates: { '["A","B",3]': { value: 1 } } }, outra: { 'a.b': 1 } } }];
+    env = []; fbPush(); await esp(); out.chaveProibidaSobe = env.length === 1;
+    // 4) "Sincronizar agora" num aparelho sem mudança não sobe o cadastro
+    env = []; fbSincronizarAgora(); await esp(200); out.sincronizarNaoSobeCadastro = !env.some(p => 'categorias' in p);
+    // 5) Recuperar: acrescenta o que falta, sem apagar
+    const f = J(cloudData()); f.categorias = f.categorias.concat([{ id: 'cat_r', nome: 'RECUPERA', items: [] }]);
+    const itens = recDiff(f); itens.forEach(i => i.fn()); out.recuperar = S.categorias.some(c => c.id === 'cat_r') && S.categorias.some(c => c.id === 'cat_t');
+    return out;
+  });
+  Object.keys(r).forEach(k => t.ok('orçamento: ' + k, r[k] === true, JSON.stringify(r[k])));
+  t.ok('orçamento: sem erro de página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
+teste('gravar-antes', async (b, t) => {
+  const casos = {
+    'Controle-estoque-maquinas': `(async()=>{const w=[];fdb={set(){w.push(1);return Promise.resolve();},transaction(){w.push(1);},off(){}};fdbLido=false;salvar();const a=w.length;fdbLido=true;salvar();return a===0&&w.length===1;})()`,
+    'controle_cheques': `(async()=>{const w=[];dbRef={set(){w.push(1);return Promise.resolve();},transaction(){w.push(1);}};storageMode='cloud';cloudInit=false;saveDB();const a=w.length;cloudInit=true;saveDB();return a===0&&w.length===1;})()`,
+    'almo-os': `(async()=>{const w=[];fbRef={update(){w.push(1);return Promise.resolve();}};fbReady=false;fbSync();const a=w.length;fbReady=true;fbSync();return a===0&&w.length===1;})()`,
+    // a gravação recusada tem de aparecer no aviso padrão, não só na etiquetinha
+    'calculo_pre_moldados': `(async()=>{let av=0;const o=window.rmNuvemErro;window.rmNuvemErro=function(){av++;};fbDB={ref(){return {set(){return Promise.reject(new Error('PERMISSION_DENIED'));},update(){return Promise.reject(new Error('PERMISSION_DENIED'));}};}};fbAuthReady=true;await fbSet('pre_moldados/x',{a:1});await fbUpdate({a:1});window.rmNuvemErro=o;return av===2;})()`,
+    'Pedidos_perfitec': `(async()=>{let av=0;const o=window.rmNuvemErro;window.rmNuvemErro=function(){av++;};useFirebase=true;db={ref(){return {set(){return Promise.reject(new Error('PERMISSION_DENIED'));}};}};dataWrite('p',{a:1});await new Promise(r=>setTimeout(r,60));window.rmNuvemErro=o;return av===1;})()`,
+  };
+  for (const r of Object.keys(casos)) {
+    if (!fs.existsSync(path.join(RAIZ, r))) continue;
+    const { ctx, pg } = await abre(b, { 'sis.local': r });
+    let ok, det = '';
+    try { ok = await pg.evaluate(casos[r]); } catch (e) { ok = false; det = e.message.slice(0, 160); }
+    t.ok(r, ok === true, det); await ctx.close();
+  }
+});
+
+teste('login-conta', async (b, t) => {
+  if (!fs.existsSync(path.join(RAIZ, 'central_rm'))) return;
+  const FOTO = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+  for (const r of repos()) {
+    if (r === 'central_rm') continue;
+    const h = fs.readFileSync(path.join(RAIZ, r, 'index.html'), 'utf8'); if (h.indexOf('id="rmPortaBloco"') < 0) continue;
+    const { ctx, pg } = await abre(b, { 'central.local': 'central_rm', 'sis.local': r });
+    await pg.evaluate((FOTO) => { CURRENT_EMAIL = 'teste@rm.com'; localStorage.setItem('rm_avatares_dispositivo', JSON.stringify({ 'teste@rm.com': FOTO }));
+      const g = document.createElement('span'); g.id = 'greeting-name'; g.textContent = 'Teste'; document.body.appendChild(g);
+      const f = document.createElement('iframe'); f.style.cssText = 'position:fixed;inset:0;width:100%;height:100%;z-index:99999;border:0';
+      f.addEventListener('load', () => enviaContaAoQuadro(f)); f.src = 'http://sis.local/index.html'; document.body.appendChild(f); }, FOTO).catch(() => {});
+    await pg.waitForTimeout(3500);
+    const fr = pg.frames().find(f => f.url().includes('sis.local'));
+    const res = fr ? await fr.evaluate(() => ({ foto: !!document.querySelector('.rmp-foto.com-foto'), nome: (document.querySelector('.rmp-nome') || {}).textContent })).catch(e => ({ erro: e.message })) : { erro: 'sem quadro' };
+    t.ok(r, res.foto && res.nome === 'Teste', JSON.stringify(res)); await ctx.close();
+  }
+});
+
+teste('login-nome-trocado', async (b, t) => {
+  // defeito: trocou o nome da saudação (Bianca -> Maiara) e a porta continuou
+  // com o antigo -- o nome lembrado no aparelho não acompanhava a troca, a
+  // sessão já aberta trazia o perfil velho e a porta do sistema regravava
+  // esse nome velho por cima do que a Central mandou
+  if (!fs.existsSync(path.join(RAIZ, 'central_rm'))) return;
+  const sis = repos().find(r => r !== 'central_rm' && fs.readFileSync(path.join(RAIZ, r, 'index.html'), 'utf8').indexOf('id="rmPortaBloco"') >= 0);
+  const { ctx, pg, erros } = await abre(b, { 'central.local': 'central_rm', 'sis.local': sis });
+  const lemb = () => JSON.parse(localStorage.getItem('rm_login_lembrado') || 'null');
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    const L = () => JSON.parse(localStorage.getItem('rm_login_lembrado') || 'null');
+    localStorage.setItem('rm_login_lembrado', JSON.stringify({ email: 'teste@rm.com', nome: 'Bianca' }));
+    CURRENT_EMAIL = 'teste@rm.com'; applyGreeting('Bianca');
+    const f = document.createElement('iframe'); f.style.cssText = 'position:fixed;inset:0;width:100%;height:100%;z-index:99999;border:0';
+    f.addEventListener('load', () => enviaContaAoQuadro(f)); f.src = 'http://sis.local/index.html'; document.body.appendChild(f);
+    await esp(3000);
+    const out = { antes: L().nome };
+    setUsername('Maiara'); await esp(300);
+    out.trocou = L().nome;
+    out.quadro = f.contentDocument ? null : 'outro-endereco';
+    // sessão já aberta neste aparelho com o perfil velho: a Central pede o novo
+    localStorage.setItem('rm_login_lembrado', JSON.stringify({ email: 'teste@rm.com', nome: 'Bianca' }));
+    const velho = { email: 'teste@rm.com', displayName: 'Bianca', reload() { this.displayName = 'Maiara Souza'; return Promise.resolve(); } };
+    if (typeof atualizaNomeDaConta === 'function') await atualizaNomeDaConta(velho); await esp(50);
+    out.recarregou = L().nome; out.saudacao = (document.getElementById('greeting-name') || {}).textContent;
+    // e entrar com a sessão velha não volta o nome antigo
+    window._rmLembrarAoEntrar = undefined;
+    loginGuardarAoEntrar({ email: 'teste@rm.com', displayName: 'Bianca' }); await esp(30);
+    out.naoVoltou = L().nome;
+    return out;
+  }).catch(e => ({ erro: e.message }));
+  const fr = pg.frames().find(f => f.url().includes('sis.local'));
+  const porta = fr ? await fr.evaluate(() => (document.querySelector('.rmp-nome') || {}).textContent).catch(e => 'erro ' + e.message) : 'sem quadro';
+  const J = JSON.stringify(r) + ' porta=' + porta + ' ' + erros.join(' | ');
+  t.ok('trocar o nome na Central já troca o da porta deste aparelho (Bianca -> Maiara)', !r.erro && r.antes === 'Bianca' && r.trocou === 'Maiara', J);
+  t.ok('o sistema aberto recebe o nome novo na hora', porta === 'Maiara', J);
+  t.ok('sessão aberta com perfil velho: a Central busca o novo (porta e saudação)', !r.erro && r.recarregou === 'Maiara' && r.saudacao === 'Maiara Souza', J);
+  t.ok('entrar com o perfil velho não devolve o nome antigo', !r.erro && r.naoVoltou === 'Maiara', J);
+  await ctx.close();
+  // porta do sistema: perfil guardado velho não regrava por cima
+  const s2 = await abre(b, { 'sis.local': sis });
+  const p2 = await s2.pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    const L = () => (JSON.parse(localStorage.getItem('rm_login_lembrado') || 'null') || {}).nome;
+    const g = window.__rmPortaGuardar; if (typeof g !== 'function') return { erro: 'sem o gancho da porta' };
+    localStorage.setItem('rm_login_lembrado', JSON.stringify({ email: 'teste@rm.com', nome: 'Maiara' }));
+    g({ email: 'teste@rm.com', displayName: 'Bianca', reload: () => Promise.reject(new Error('sem internet')) }); await esp(50);
+    const semNet = L();
+    g({ email: 'teste@rm.com', displayName: 'Bianca', reload() { this.displayName = 'Maiara Souza'; return Promise.resolve(); } }); await esp(50);
+    return { semNet, comNet: L() };
+  }).catch(e => ({ erro: e.message }));
+  t.ok('porta do sistema: sem internet não volta o nome antigo; com internet usa o perfil novo', !p2.erro && p2.semNet === 'Maiara' && p2.comNet === 'Maiara', JSON.stringify(p2));
+  await s2.ctx.close();
+});
+
+teste('leitor-folha-cotas-legiveis', async (b, t) => {
+  // PDF da planificação para o fornecedor: na "Vista da dobra" as cotas
+  // (abas, base, abertura) saíam com 3-4 px -- a letra era calculada para a
+  // vista ocupando a folha inteira, mas no PDF ela fica em meia largura e
+  // baixa. Os números têm de sair legíveis no papel
+  if (!fs.existsSync(path.join(RAIZ, 'leitor_dwg'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'leitor_dwg' });
+  await semLogin(pg);
+  await pg.setViewportSize({ width: 760, height: 1100 });   // A4 com margem de 8 mm, a 96 dpi
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    if (typeof window.__plnFolhaTeste !== 'function') return { erro: 'sem a folha' };
+    // obra / pedido: digitada uma vez, separa um pedido do outro na folha
+    const ob = document.getElementById('plnObra'); if (!ob) return { erro: 'sem o campo Obra / pedido' };
+    ob.value = 'Obra Teste Silva'; ob.dispatchEvent(new Event('input', { bubbles: true }));
+    const pa = document.getElementById('printArea');
+    pa.innerHTML = window.__plnFolhaTeste({ modo: 'perfil', trechos: [50, 170, 50], dobras: [{ ang: 90, sent: 1 }, { ang: 90, sent: 1 }], comp: 3000, esp: 2 });
+    pa.classList.remove('hide');
+    document.body.classList.add('so-folha');
+    await esp(200);
+    const txt = [...pa.querySelectorAll('.pf-vista svg text')];
+    const alturas = txt.map(x => Math.round(x.getBoundingClientRect().height * 10) / 10).filter(h => h > 0);
+    const sheet = pa.querySelector('.pln-folha').getBoundingClientRect();
+    const obraFolha = ((pa.querySelector('.rm-obra') || {}).textContent || '').replace(/\s+/g, ' ');
+    return { obraFolha, n: txt.length, menor: Math.min.apply(null, alturas), alturas, textos: txt.map(x => x.textContent).join(' | '), altFolha: Math.round(sheet.height) };
+  }).catch(e => ({ erro: e.message }));
+  await pg.emulateMedia({ media: 'print' });
+  const imp = await pg.evaluate(() => { const txt = [...document.querySelectorAll('#printArea .pf-vista svg text')];
+    const a = txt.map(x => x.getBoundingClientRect().height).filter(h => h > 0); const f = document.querySelector('#printArea .pln-folha');
+    const pe = document.getElementById('rm-pe-imp'), cs = pe ? getComputedStyle(pe) : null;
+    const fio = document.querySelector('#printArea .rm-head'), fh = fio ? parseFloat(getComputedStyle(fio, '::after').height) : 99;
+    return { menor: Math.round(Math.min.apply(null, a) * 10) / 10, altFolhaMm: f ? Math.round(f.getBoundingClientRect().height / 3.7795) : 0,
+      rodape: !!(cs && cs.display !== 'none' && cs.visibility === 'visible' && /rmestruturas/.test(pe.textContent)), fio: fh }; }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify({ r, imp }).slice(0, 900);
+  t.ok('obra / pedido sai no cabeçalho da folha', !r.erro && /Obra Teste Silva/.test(r.obraFolha), J);
+  t.ok('vista da dobra com as cotas das abas, da base e a abertura', !r.erro && r.n >= 5 && /170/.test(r.textos) && /50/.test(r.textos), J);
+  // 8 px de caixa ~ 6 pt de letra: o mínimo para ler no papel sem lupa
+  t.ok('cotas legíveis no papel (pelo menos 8 px de altura na impressão)', !r.erro && !imp.erro && imp.menor >= 8, J);
+  t.ok('rodapé da papelaria visível no papel e fio laranja fino (até 0,7 mm)', !imp.erro && imp.rodape && imp.fio <= 2.7, J);
+  t.ok('a folha continua cabendo numa A4', !imp.erro && imp.altFolhaMm > 0 && imp.altFolhaMm <= 281, J);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
+teste('leitor-pilar-em-pe', async (b, t) => {
+  // a mesma treliça desenhada em pé (pilar) perdia as travessas: 12 peças
+  // em vez de 26, diagonais compridas demais e compra a menos
+  if (!fs.existsSync(path.join(RAIZ, 'leitor_dwg'))) return;
+  const res = {};
+  for (const [k, emPe] of [['deitada', false], ['emPe', true]]) {
+    const { ctx, pg, erros } = await leitorImporta(b, trelicaTeste('trelica_' + k, { emPe, nome: emPe ? 'PILAR 01' : 'TRELIÇA 01' }));
+    res[k] = await pg.evaluate(() => { const T = window.__leitorTeste; if (!T) return { erro: 'sem gancho' };
+      const d = T.secoes(), s = (d.secoes || [])[0];
+      return { np: s ? s.np : 0, cortes: s ? s.gr.map(g => g.tipo[0] + Math.round(g.corte) + 'x' + g.qtdTotal).sort().join(' ') : '',
+        lista: T.estado().LASTROWS.map(r => r.name + ':' + r.bars).join(' ') }; }).catch(e => ({ erro: e.message }));
+    res[k].erros = erros.join(' | ');
+    await ctx.close();
+  }
+  const J = JSON.stringify(res);
+  t.ok('pilar em pé tem as mesmas peças da treliça deitada', !res.deitada.erro && !res.emPe.erro && res.deitada.np === 26 && res.emPe.np === 26 && res.deitada.cortes === res.emPe.cortes, J);
+  t.ok('e a mesma compra', res.deitada.lista && res.deitada.lista === res.emPe.lista, J);
+  t.ok('sem erro na página', !res.deitada.erros && !res.emPe.erros, J);
+});
+
+teste('leitor-blocos', async (b, t) => {
+  // treliça e ficha desenhadas como BLOCO (INSERT) não eram lidas: o leitor
+  // só via LINE/POLYLINE soltas e o desenho chegava vazio
+  if (!fs.existsSync(path.join(RAIZ, 'leitor_dwg'))) return;
+  const res = {};
+  for (const [k, arq] of [['solta', trelicaTeste('trelica_solta')], ['bloco', trelicaBloco('trelica_bloco')]]) {
+    const { ctx, pg, erros } = await leitorImporta(b, arq);
+    res[k] = await pg.evaluate(() => { const T = window.__leitorTeste; if (!T) return { erro: 'sem gancho' };
+      const d = T.secoes(), s = (d.secoes || [])[0], e = T.estado();
+      return { np: s ? s.np : 0, cortes: s ? s.gr.map(g => g.tipo[0] + Math.round(g.corte) + 'x' + g.qtdTotal).sort().join(' ') : '',
+        ficha: e.FICHAS.map(f => f.nome + '|' + f.qty + '|' + f.profiles.join(',')).join(' ; '),
+        lista: e.LASTROWS.map(r => r.name + ':' + r.bars).join(' ') }; }).catch(e => ({ erro: e.message }));
+    res[k].erros = erros.join(' | ');
+    await ctx.close();
+  }
+  const J = JSON.stringify(res);
+  t.ok('treliça em bloco (girado, escalado, cor ByBlock) dá as mesmas peças', !res.bloco.erro && res.bloco.np === 26 && res.bloco.cortes === res.solta.cortes, J);
+  t.ok('ficha em bloco com atributos é lida', /TRELI[ÇC]A 01\|2\|/i.test(res.bloco.ficha) && /40x100x40/.test(res.bloco.ficha) && /30x93x30/.test(res.bloco.ficha), J);
+  t.ok('e a mesma compra', res.solta.lista && res.solta.lista === res.bloco.lista, J);
+  t.ok('sem erro na página', !res.solta.erros && !res.bloco.erros, J);
+});
+
+teste('leitor-checagem', async (b, t) => {
+  // o desenho com defeito (ponta solta, banzo fora do quadro, ficha sem
+  // perfil) passava calado: só aparecia como número estranho na compra
+  if (!fs.existsSync(path.join(RAIZ, 'leitor_dwg'))) return;
+  const res = {};
+  for (const [k, opt] of [['limpa', {}], ['defeito', { solta: true, fora: true, semPerfil: true }]]) {
+    const { ctx, pg, erros } = await leitorImporta(b, trelicaTeste('checagem_' + k, opt));
+    res[k] = await pg.evaluate(() => { const T = window.__leitorTeste; if (!T || !T.checagem) return { erro: 'sem gancho' };
+      const c = T.checagem(), el = document.getElementById('checagem');
+      return { tipos: c.map(x => x.tipo).sort().join(','), xy: c.map(x => x.tipo + '@' + Math.round(x.x) + ',' + Math.round(x.y)).join(' '),
+        tela: el ? el.innerText.replace(/\s+/g, ' ').trim() : '(sem painel)' }; }).catch(e => ({ erro: e.message }));
+    res[k].erros = erros.join(' | ');
+    await ctx.close();
+  }
+  const J = JSON.stringify(res), d = res.defeito;
+  t.ok('desenho limpo não tem aviso', !res.limpa.erro && res.limpa.tipos === '', J);
+  t.ok('acha a ponta solta no lugar dela', /solta@550,60/.test(d.xy || ''), J);
+  t.ok('acha a linha colorida fora do quadro', /fora@2150,0/.test(d.xy || ''), J);
+  t.ok('acha a ficha sem perfil', /ficha@/.test(d.xy || ''), J);
+  t.ok('mostra na tela com coordenadas', /Checagem do desenho/i.test(d.tela || '') && /X\s*550/.test(d.tela || '') && /TRELIÇA 02/.test(d.tela || ''), J);
+  t.ok('sem erro na página', !res.limpa.erros && !d.erros, J);
+});
+
+teste('leitor-conferir-por-estrutura', async (b, t) => {
+  // "Conferir a leitura" mostrava o desenho inteiro numa caixa só: uma linha
+  // solta longe das estruturas encolhia tudo, e a treliça virava um risco.
+  // Agora cada estrutura tem o seu quadro na largura toda (com vão, altura e
+  // peças), o que sobrou fora vai num quadro próprio, e o desenho inteiro
+  // continua a um clique, com zoom.
+  if (!fs.existsSync(path.join(RAIZ, 'leitor_dwg'))) return;
+  const { ctx, pg, erros } = await leitorImporta(b, trelicaTeste('conferir_est', { fora: true }), { viewport: { width: 1400, height: 900 } });
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    const card = document.querySelector('.conf-card'), cw = card.getBoundingClientRect().width;
+    const tiles = [...document.querySelectorAll('#conferir .conf-tile')];
+    const est = tiles.find(x => !x.classList.contains('fora')), fora = tiles.find(x => x.classList.contains('fora'));
+    const desenho = est && est.querySelector('svg path');
+    const larg = desenho ? desenho.getBoundingClientRect().width : 0;
+    const out = { n: tiles.length, cab: est ? est.innerText.replace(/\s+/g, ' ') : '', fora: fora ? fora.innerText.replace(/\s+/g, ' ') : '', ocupa: Math.round(larg / cw * 100) };
+    const bt = document.querySelector('#conferir [data-conf-modo="tudo"]'); if (bt) bt.click(); await esp(150);
+    const svg = document.querySelector('#conferir .conf-tudo svg');
+    out.tudo = !!svg; out.marca = !!(svg && svg.querySelector('.conf-marca-fora'));
+    if (svg) { const v0 = svg.getAttribute('viewBox'); const q = svg.getBoundingClientRect();
+      svg.dispatchEvent(new WheelEvent('wheel', { deltaY: -200, clientX: q.x + q.width / 2, clientY: q.y + q.height / 2, bubbles: true, cancelable: true })); await esp(50);
+      out.zoom = v0 !== svg.getAttribute('viewBox'); out.altura = Math.round(q.height); }
+    return out;
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  t.ok('um quadro por estrutura e um para o que ficou fora', !r.erro && r.n === 2, J);
+  t.ok('a treliça ocupa a largura do quadro (≥ 70%)', !r.erro && r.ocupa >= 70, J);
+  t.ok('o quadro diz nome, quantidade, vão e altura', !r.erro && /TRELIÇA 01/.test(r.cab) && /2×/.test(r.cab) && /vão 12,00 m/.test(r.cab) && /altura 0,80 m/.test(r.cab), J);
+  t.ok('a linha fora de estrutura tem quadro próprio, com onde achar', !r.erro && /fora de estrutura/i.test(r.fora) && /X\s*2\.?150/.test(r.fora), J);
+  t.ok('"Desenho inteiro" mostra tudo, marca o que está fora e aproxima com a roda', !r.erro && r.tudo && r.marca && r.zoom && r.altura >= 380, J);
+  t.ok('sem erro na página', !erros.length, J);
+  await ctx.close();
+});
+
+teste('leitor-suporte-de-terca-ignorado', async (b, t) => {
+  // o suporte de terça (quadrado/retângulo sobre o banzo) aparecia em
+  // "Conferir a leitura" como linha de peça -- e, sozinho, como "linha fora
+  // de estrutura". Não é peça: nem no conferir, nem no detalhamento.
+  if (!fs.existsSync(path.join(RAIZ, 'leitor_dwg'))) return;
+  const le = async (arq) => {
+    const { ctx, pg, erros } = await leitorImporta(b, arq, { viewport: { width: 1400, height: 900 } });
+    const r = await pg.evaluate(() => { const T = window.__leitorTeste; if (!T) return { erro: 'sem gancho' };
+      const s = (T.secoes().secoes || [])[0];
+      return { pecas: s ? s.gr.reduce((a, g) => a + g.qtd, 0) : -1, grupos: s ? s.gr.map(g => g.qtd + '×' + g.corte).join(' ') : '',
+        fora: !!document.querySelector('#conferir .conf-tile.fora'), res: (document.querySelector('#conferir .conf-res') || {}).innerText || '',
+        cab: ((document.querySelector('#conferir .conf-tile:not(.fora)') || {}).innerText || '').replace(/\s+/g, ' ') }; }).catch(e => ({ erro: e.message }));
+    await ctx.close(); return { r, erros };
+  };
+  const base = await le(trelicaTeste('sup_base')), com = await le(trelicaTeste('sup_com', { suportes: true }));
+  const J = JSON.stringify({ base: base.r, com: com.r }) + ' ' + base.erros.concat(com.erros).join(' | ');
+  t.ok('conferir: o suporte sozinho não vira "linha fora de estrutura"', !com.r.erro && !com.r.fora && /nenhuma linha de peça sobrando/.test(com.r.res), J);
+  t.ok('conferir: o suporte sobre o banzo não conta como peça interna', !com.r.erro && com.r.cab.includes('2 de banzo · 13 internas'), J);
+  t.ok('detalhamento: as mesmas peças com e sem suporte', !com.r.erro && base.r.pecas > 0 && com.r.grupos === base.r.grupos, J);
+  t.ok('sem erro na página', !base.erros.length && !com.erros.length, J);
+});
+
+/* lê o "Conferir a leitura" de uma estrutura e o detalhamento dela */
+async function leitorConfere(b, arq, antes) {
+  const { ctx, pg, erros } = await leitorImporta(b, arq, { viewport: { width: 1400, height: 900 }, antes });
+  const r = await pg.evaluate(() => { const T = window.__leitorTeste; if (!T) return { erro: 'sem gancho' };
+    const s = (T.secoes().secoes || [])[0];
+    const tile = document.querySelector('#conferir .conf-tile:not(.fora)');
+    const tx = e => e ? e.innerText.replace(/\s+/g, ' ') : '';
+    return { det: s ? { b: s.banzos.length, i: s.internos.length } : null,
+      cab: tx(tile && tile.querySelector('.conf-med')), ign: tx(tile && tile.querySelector('.conf-ign')),
+      lista: tile ? [...tile.querySelectorAll('.conf-lista li')].map(tx) : [], marcas: tile ? tile.querySelectorAll('svg .conf-marca').length : 0,
+      notas: tx(tile && tile.querySelector('.conf-notas')), res: tx(document.querySelector('#conferir .conf-res')) }; }).catch(e => ({ erro: e.message }));
+  await ctx.close(); return { r, erros };
+}
+
+teste('leitor-conferir-igual-detalhamento', async (b, t) => {
+  // o "Conferir" tinha a sua própria regra de o que é peça e contava a linha
+  // duplicada (e antes o suporte) que o detalhamento já tirava. Agora ele
+  // desenha as peças do detalhamento, e o que ficou de fora aparece em cinza
+  // com o motivo.
+  if (!fs.existsSync(path.join(RAIZ, 'leitor_dwg'))) return;
+  const { r, erros } = await leitorConfere(b, trelicaTeste('conf_igual', { duplicada: true, supPoly: true }));
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  t.ok('as contagens do quadro são as do detalhamento', !r.erro && r.det && r.cab.includes(r.det.b + ' de banzo · ' + r.det.i + ' internas'), J);
+  t.ok('o que foi ignorado aparece com o motivo (duplicada, suporte)', !r.erro && /duplicada/i.test(r.ign) && /suporte/i.test(r.ign), J);
+  t.ok('sem erro na página', !erros.length, J);
+});
+
+teste('leitor-conferir-marca-problemas', async (b, t) => {
+  // ponta que não fecha, peça solta e linha duplicada eram só texto no
+  // relatório: agora ganham um círculo numerado no desenho e a coordenada
+  if (!fs.existsSync(path.join(RAIZ, 'leitor_dwg'))) return;
+  const { r, erros } = await leitorConfere(b, trelicaTeste('conf_marca', { curta: true, solta: true, duplicada: true }));
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  const L = (r.lista || []).join(' || ');
+  t.ok('um círculo por problema no desenho (≥ 3)', !r.erro && r.marcas >= 3 && r.lista.length === r.marcas, J);
+  t.ok('ponta fechada até o banzo, com a folga', /ponta.*fechada.*mm/i.test(L), J);
+  t.ok('peça que não liga: fora da conta', /não liga/i.test(L), J);
+  t.ok('linha duplicada', /duplicada/i.test(L), J);
+  t.ok('cada item diz onde achar (X · Y)', (r.lista || []).every(x => /X -?\d.*Y -?\d/.test(x)), J);
+  t.ok('sem erro na página', !erros.length, J);
+});
+
+teste('leitor-avisos-de-leitura', async (b, t) => {
+  // o que sumia calado: peça desenhada como polilinha, linha ligada à
+  // estrutura sem a cor de peça, e perfil que não existe no catálogo
+  if (!fs.existsSync(path.join(RAIZ, 'leitor_dwg'))) return;
+  // base de preços fictícia com o banzo da treliça: o interno estranho não está nela
+  const db = { densidade: 8000, telhas: [], categorias: [], fornecedorAtivo: 'f1',
+    fornecedores: [{ id: 'f1', nome: 'FORNECEDOR TESTE', precos: { '2,00': 9 } }],
+    perfis: [{ id: 'pU', tipo: 'U', dims: '40x100x40', esp: '2,00', grupo: 'U CARBONO', slitter: 180, comp: 6000 }] };
+  const antes = 'try{localStorage.setItem("rm_orc_db_v1",' + JSON.stringify(JSON.stringify(db)) + ')}catch(e){}';
+  const { r, erros } = await leitorConfere(b, trelicaTeste('conf_aviso', { polAberta: true, semCor: true, perfilInt: 'U 77x211x77 #4,25' }), antes);
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  const L = (r.lista || []).join(' || ');
+  t.ok('polilinha aberta ligada à estrutura: avisa que ficou fora da conta', /polilinha/i.test(L), J);
+  t.ok('linha sem cor de peça ligada à estrutura: avisa', /sem a cor de peça/i.test(L), J);
+  t.ok('perfil fora do catálogo: avisa (e só ele)', /77x211x77/.test(r.notas) && /catálogo/i.test(r.notas) && !/40x100x40/.test(r.notas), J);
+  t.ok('sem erro na página', !erros.length, J);
+});
+
+teste('leitor-unidade-automatica', async (b, t) => {
+  // a porta da unidade aparecia sempre, mesmo quando o cabeçalho do arquivo
+  // e as medidas do desenho concordavam. Agora só pergunta na dúvida.
+  if (!fs.existsSync(path.join(RAIZ, 'leitor_dwg'))) return;
+  const le = async (arq) => {
+    const { ctx, pg, erros } = await abre(b, { 'sis.local': 'leitor_dwg' }, 'index.html');
+    await semLogin(pg); await pg.setInputFiles('#file', arq); await pg.waitForTimeout(2500);
+    const r = await pg.evaluate(() => ({ porta: !document.getElementById('unitGate').classList.contains('hide'),
+      status: (document.getElementById('unitStatus') || {}).textContent || '', unit: document.getElementById('unit').value,
+      seg: window.__leitorTeste ? window.__leitorTeste.estado().SEG.length : 0 }));
+    await ctx.close(); return { r, erros };
+  };
+  const ok = await le(trelicaTeste('unid_ok')), conflito = await le(trelicaTeste('unid_conf', { insunits: 4 }));
+  const J = JSON.stringify({ ok: ok.r, conflito: conflito.r }) + ' ' + ok.erros.concat(conflito.erros).join(' | ');
+  t.ok('cabeçalho e desenho concordam: importa sem perguntar', !ok.r.porta && ok.r.unit === '10' && ok.r.seg > 0, J);
+  t.ok('e diz que foi automático, com a unidade', /autom/i.test(ok.r.status) && /cent/i.test(ok.r.status), J);
+  t.ok('discordam: a porta continua perguntando', conflito.r.porta, J);
+  t.ok('sem erro na página', !ok.erros.length && !conflito.erros.length, J);
+});
+
+teste('leitor-modelo-de-desenho-rm', async (b, t) => {
+  // O modelo de desenho RM: cada coisa na sua camada (RM-BANZO, RM-INTERNO,
+  // RM-QUADRO, RM-SUPORTE) e a ficha no bloco FICHA_RM. A camada manda mais
+  // que a cor -- e o que está em RM-SUPORTE nunca é peça, mesmo pintado de
+  // vermelho e preso entre os banzos.
+  if (!fs.existsSync(path.join(RAIZ, 'leitor_dwg'))) return;
+  const L = [];
+  const ln = (x1, y1, x2, y2, lay, cor) => L.push([x1, y1, x2, y2, cor == null ? 7 : cor, lay]);
+  ln(0, 0, 1200, 0, 'RM-BANZO'); ln(0, 80, 1200, 80, 'RM-BANZO');
+  for (const x of [0, 200, 400, 600, 800, 1000, 1200]) ln(x, 0, x, 80, 'RM-INTERNO');
+  for (let x = 0; x < 1200; x += 200) ln(x, 80, x + 200, 0, 'RM-INTERNO');
+  ln(100, 0, 100, 80, 'RM-SUPORTE', 1);            // vermelho, entre os banzos: mesmo assim não é peça
+  ln(300, 80, 300, 95, 'RM-SUPORTE', 1); ln(300, 95, 310, 95, 'RM-SUPORTE', 1); ln(310, 95, 310, 80, 'RM-SUPORTE', 1);
+  const q = [[-50, -60], [1250, -60], [1250, 200], [-50, 200]];
+  for (let i = 0; i < 4; i++) ln(q[i][0], q[i][1], q[(i + 1) % 4][0], q[(i + 1) % 4][1], 'RM-QUADRO', 3);
+  const camada = await leitorConfere(b, dxfTeste('modelo_camadas', L, [['TRELIÇA 01\\PU 40x100x40 #2,00\\PU 30x93x30 #2,00\\PQTD: 2', 100, 160]]));
+  // o exemplo que vai junto com o modelo tem de ser lido sem nenhum aviso
+  const ex = path.join(RAIZ, 'leitor_dwg', 'modelo', 'RM_EXEMPLO.dxf');
+  const exemplo = fs.existsSync(ex) ? await leitorConfere(b, ex) : { r: { erro: 'sem modelo/RM_EXEMPLO.dxf' }, erros: [] };
+  const modelo = fs.existsSync(path.join(RAIZ, 'leitor_dwg', 'modelo', 'RM_MODELO.dxf'));
+  const J = JSON.stringify({ camada: camada.r, exemplo: exemplo.r, modelo }) + ' ' + camada.erros.concat(exemplo.erros).join(' | ');
+  t.ok('camada RM-BANZO / RM-INTERNO valem sem a cor', !camada.r.erro && camada.r.det && camada.r.det.b === 2, J);
+  t.ok('o que está em RM-SUPORTE não é peça (13 internas, não 14+)', !camada.r.erro && camada.r.det && camada.r.det.i === 13 && camada.r.cab.includes('13 internas'), J);
+  t.ok('o modelo vazio existe para baixar', modelo, J);
+  t.ok('o exemplo do modelo: ficha do bloco lida, estrutura detalhada, nenhum aviso', !exemplo.r.erro && exemplo.r.det && exemplo.r.det.b >= 2 && exemplo.r.det.i > 0 &&
+    /nenhum aviso/.test(exemplo.r.res) && /nenhuma linha de peça sobrando/.test(exemplo.r.res), J);
+  t.ok('sem erro na página', !camada.erros.length && !exemplo.erros.length, J);
+});
+
+teste('leitor-ficha-igual-detalhamento', async (b, t) => {
+  // o cartão da ficha dizia "E1" e "medido no desenho" pela linha de centro,
+  // enquanto o detalhamento chamava a mesma estrutura de "A" e cortava entre
+  // faces: dois números para a mesma peça
+  if (!fs.existsSync(path.join(RAIZ, 'leitor_dwg'))) return;
+  const { ctx, pg, erros } = await leitorImporta(b, trelicaTeste('ficha_det'));
+  const r = await pg.evaluate(() => { const T = window.__leitorTeste; if (!T) return { erro: 'sem gancho' };
+    const s = (T.secoes().secoes || [])[0], br = s && s.banzosResumo;
+    const card = document.querySelector('#fichas .card'), txt = card ? card.innerText.replace(/\s+/g, ' ') : '';
+    const int = s ? s.gr.reduce((a, g) => a + g.corte * g.qtd, 0) : 0;
+    return { letra: s && s.letra, txt, banzo: br ? (br.superior.porEstrutura + br.inferior.porEstrutura) / 10 : 0, int: int / 10 }; }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  t.ok('ficha mostra a letra do detalhamento', !r.erro && r.letra && new RegExp('QUADRO DO DESENHO · ' + r.letra + '\\b').test(r.txt) && !/· E\d/.test(r.txt), J);
+  // o cartão compacto mostra em metros, por estrutura, na linha de cada perfil
+  const m = v => (v / 100).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  t.ok('banzo: a medida do cartão é a do detalhamento', r.banzo > 0 && new RegExp('BANZO .*?' + m(r.banzo).replace('.', '\\.') + ' m detalhamento').test(r.txt), J);
+  t.ok('interno: a medida do cartão é a do detalhamento', r.int > 0 && new RegExp('INTERNO .*?' + m(r.int).replace('.', '\\.') + ' m detalhamento').test(r.txt), J);
+  t.ok('sem erro na página', !erros.length, J);
+  await ctx.close();
+});
+
+teste('leitor-ficha-compacta', async (b, t) => {
+  // o cartão da ficha ocupava meia tela: perfis em duas colunas largas, lista
+  // do catálogo sempre aberta, comprimento à mão e fora de catálogo sempre à
+  // vista. Agora é uma linha por perfil e o resto fica em "ajustes".
+  if (!fs.existsSync(path.join(RAIZ, 'leitor_dwg'))) return;
+  const { ctx, pg, erros } = await leitorImporta(b, trelicaTeste('ficha_compacta'), { viewport: { width: 1400, height: 900 } });
+  const r = await pg.evaluate(async () => {
+    const card = document.querySelector('#fichas .card'); if (!card) return { erro: 'sem cartão' };
+    const vis = e => !!e && e.getClientRects().length > 0 && getComputedStyle(e).visibility !== 'hidden';
+    const out = { alt: Math.round(card.getBoundingClientRect().height), cmVisivel: vis(card.querySelector('[data-compm-f]')),
+      linhas: card.querySelectorAll('.frow').length, perfil: !!card.querySelector('input[data-f="0"][data-p="0"]') };
+    const bt = card.querySelector('[data-fmais="0|0"]'); if (bt) bt.click(); await new Promise(x => setTimeout(x, 100));
+    out.abreCm = vis(card.querySelector('[data-compm-f="0"][data-compm-p="0"]'));
+    const fora = card.querySelector('[data-foratog-f="0"][data-foratog-p="0"]');
+    if (fora) { fora.checked = true; fora.dispatchEvent(new Event('change')); } await new Promise(x => setTimeout(x, 150));
+    const c2 = document.querySelector('#fichas .card');
+    out.foraAberto = vis(c2.querySelector('[data-fora-f="0"][data-fora-p="0"][data-fora-k="slitter"]'));
+    out.tagFora = /fora de catálogo/.test(c2.querySelector('.frow').innerText);
+    return out; }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  t.ok('uma linha por perfil, cartão baixo (≤ 220 px com 2 perfis)', !r.erro && r.linhas === 2 && r.alt <= 220 && r.perfil, J);
+  t.ok('comprimento à mão fica em "ajustes", fechado de início', !r.erro && !r.cmVisivel && r.abreCm, J);
+  t.ok('perfil fora de catálogo ligado: os campos aparecem e a linha mostra a marca', !r.erro && r.foraAberto && r.tagFora, J);
+  t.ok('sem erro na página', !erros.length, J);
+  await ctx.close();
+});
+
+teste('leitor-chapas-faixas', async (b, t) => {
+  // Num lote em que todas as tiras têm a mesma largura (o caso comum: um
+  // perfil interno por espessura), o encaixe vira um problema de comprimentos
+  // em faixas de 2.990 mm. As heurísticas de retângulos davam 401 faixas no
+  // caso 4 (67 chapas de 1.200); montando cada faixa pela maior peça + o
+  // melhor complemento, e escolhendo 1.200/1.500 pela menor área, sobra menos.
+  if (!fs.existsSync(path.join(RAIZ, 'leitor_dwg'))) return;
+  const { ctx, pg, erros } = await leitorImporta(b, path.join(FIX_LEITOR, 'caso4.dxf'));
+  const r = await pg.evaluate(() => { const T = window.__leitorTeste; if (!T || !T.chapas) return { erro: 'sem gancho de chapas' };
+    const c = T.chapas(); return { area: c.area, placed: c.placed, expected: c.expected, validar: c.validar, sheets: c.sheets.length }; }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  t.ok('menos área comprada que as 67 chapas de 1.200 (241,2 m²)', !r.erro && r.area < 241.2e6 - 1, J);
+  t.ok('todas as peças encaixadas e o plano passa na validação', !r.erro && r.placed === r.expected && r.expected > 0 && !r.validar.length, J);
+  t.ok('sem erro na página', !erros.length, J);
+  await ctx.close();
+});
+
+teste('leitor-chapas-retalhos', async (b, t) => {
+  // a sobra de cada chapa ficava só como texto ("faixa livre estimada"). Agora
+  // vira retalho com medida e peso: na tela, no relatório e, se pedido, numa
+  // camada própria do DXF (RETALHO) -- nunca na camada de corte.
+  if (!fs.existsSync(path.join(RAIZ, 'leitor_dwg'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'leitor_dwg' });
+  const r = await pg.evaluate(() => { const T = window.__leitorTeste; if (!T || !T.rmChapas) return { erro: 'sem gancho' };
+    const C = T.rmChapas, perf = C.profile('U 50x180x50', 3.75);
+    const rows = [{ ...perf, perfil: 'U 50x180x50 #3,75', mat: 'carbono', cod: 'A1', len: 2000, qty: 12 }];
+    const plan = C.makePlan(rows, { mode: '1200', margin: 5, gap: 0 });
+    const s = plan.sheets[0], ret = C.retalhos ? C.retalhos(s, plan.cfg) : null;
+    if (!ret) return { erro: 'sem retalhos()', sheets: plan.sheets.length };
+    const sobre = ret.some(q => s.placed.some(p => q.x < p.x + p.w - 1e-6 && p.x < q.x + q.w - 1e-6 && q.y < p.y + p.h - 1e-6 && p.y < q.y + q.h - 1e-6));
+    const com = C.dxf(s, { ...plan.cfg, remnantDxf: true }), sem = C.dxf(s, plan.cfg);
+    return { n: ret.length, menores: ret.map(q => Math.min(q.w, q.h)), kg: ret.reduce((a, q) => a + q.kg, 0), sobre,
+      dxfCom: /\n8\r?\nRETALHO\r?\n/.test(com) && /RETALHO/.test(com), dxfSem: /RETALHO/.test(sem) };
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  t.ok('a chapa tem retalhos com lado ≥ 100 mm e peso', !r.erro && r.n >= 1 && r.menores.every(v => v >= 100) && r.kg > 0, J);
+  t.ok('retalho não invade peça', !r.erro && !r.sobre, J);
+  t.ok('DXF: camada RETALHO só quando pedida', !r.erro && r.dxfCom && !r.dxfSem, J);
+  t.ok('sem erro na página', !erros.length, J);
+  await ctx.close();
+});
+
+teste('leitor-comparativo-custo', async (b, t) => {
+  // "Gostaria de uma aba onde consigo ver a comparação de valor entre barras
+  // de 6 metros, detalhado e chapas+serviços -- hoje só pelo botão
+  // aproveitamento em barra 6 m". Os três números já existiam (relatório e
+  // painel de chapas); faltava o lugar onde se olha os três juntos.
+  if (!fs.existsSync(path.join(RAIZ, 'leitor_dwg'))) return;
+  const { ctx, pg, erros } = await leitorImporta(b, trelicaTeste('comparativo'));
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    const vis = el => !!el && !!(el.offsetWidth || el.offsetHeight);
+    const L = window.__leitorTeste;
+    localStorage.setItem(L.cuKey, JSON.stringify({ barra: 300 }));           // preço fictício da barra de 6 m
+    L.chapasCfg({ sheetRkg: 7.5, serviceRkg: 4 });                           // chapa e serviço fictícios
+    const out = {};
+    const sub = document.querySelector('[data-dsub="comp"]');
+    out.temSub = !!sub;
+    if (!sub) return out;
+    sub.click(); await esp(400);
+    out.listaEscondida = !vis(document.getElementById('detLista'));
+    out.compVisivel = vis(document.getElementById('detComp'));
+    const cmp = L.comparativo();
+    out.esperado = cmp.textos;
+    const cards = [...document.querySelectorAll('#detComp .cmp-card')];
+    out.titulos = cards.map(c => (c.querySelector('.cmp-tit') || {}).textContent || '');
+    out.valores = cards.map(c => ((c.querySelector('.cmp-val') || {}).textContent || '').trim());
+    const vals = cmp.valores, min = Math.min(...vals);
+    out.melhor = cards.map((c, i) => c.classList.contains('melhor') ? i : -1).filter(i => i >= 0);
+    out.melhorEsperado = vals.indexOf(min);
+    out.barras = document.querySelector('#detComp .cmp-barras') ? document.querySelector('#detComp .cmp-barras').innerText.replace(/\s+/g, ' ') : '';
+    out.econ = cmp.economia;
+    // sem o preço da chapa, o terceiro caminho diz o que falta e leva ao painel
+    L.chapasCfg({ sheetRkg: null });
+    document.querySelector('[data-dsub="lista"]').click(); await esp(150);
+    document.querySelector('[data-dsub="comp"]').click(); await esp(300);
+    const c3 = document.querySelectorAll('#detComp .cmp-card')[2];
+    out.falta = c3 ? c3.innerText.replace(/\s+/g, ' ') : '';
+    const ir = c3 && c3.querySelector('[data-cmp="chapas"]');
+    if (ir) { ir.click(); await esp(400); }
+    out.painelAberto = vis(document.getElementById('cpPanel'));
+    out.voltouLista = vis(document.getElementById('detLista'));
+    return out;
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  t.ok('Detalhamento ganha a sub-aba Comparativo de custo', !r.erro && r.temSub && r.compVisivel && r.listaEscondida, J);
+  t.ok('três caminhos: barras de 6 m, detalhado, chapas + serviços', !r.erro && r.titulos.length === 3 &&
+    /barras de 6 m/i.test(r.titulos[0]) && /detalhad/i.test(r.titulos[1]) && /chapas/i.test(r.titulos[2]), J);
+  t.ok('os mesmos valores do relatório e do painel de chapas', !r.erro && r.valores.join('|') === r.esperado.join('|'), J);
+  t.ok('o mais barato destacado', !r.erro && r.melhor.length === 1 && r.melhor[0] === r.melhorEsperado, J);
+  t.ok('as barras de 6 m: sem detalhamento, a comprar e economia', !r.erro && r.econ && r.barras.includes(String(r.econ.baseCompra)) &&
+    r.barras.includes(String(r.econ.aComprar)) && /economia/i.test(r.barras), J);
+  t.ok('sem o preço da chapa: diz o que falta e abre o painel de chapas', !r.erro && /chapa/i.test(r.falta) && /falta|informe/i.test(r.falta) && r.painelAberto && r.voltouLista, J);
+  t.ok('sem erro na página', !erros.length, J);
+  await ctx.close();
+});
+
+teste('leitor-folha-fechar-no-alto', async (b, t) => {
+  // "Quero um botão fechar na parte superior para não precisar descer toda
+  // tela. Em todas as abas": as folhas (detalhamento, aproveitamento,
+  // lista...) só tinham Imprimir e Fechar no pé. E no quadro "O que o
+  // detalhamento mudou na compra" a nota "162 + 4 em 2 perfis" colava no
+  // número: "166 barras162 + 4 em 2 perfis".
+  if (!fs.existsSync(path.join(RAIZ, 'leitor_dwg'))) return;
+  const { ctx, pg, erros } = await leitorImporta(b, trelicaTeste('fechar-no-alto'));
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    const pa = document.getElementById('printArea'), out = {};
+    const topo = () => {
+      const t = pa.firstElementChild, f = t && t.querySelector('[data-pa="fechar"]');
+      if (!t || !t.classList.contains('pa-topo') || !f) return { tem: false };
+      const q = f.getBoundingClientRect(), h = pa.getBoundingClientRect();
+      return { tem: true, perto: q.top - h.top < 60, imp: !!t.querySelector('[data-pa="imp"]') };
+    };
+    for (const id of ['cutReport', 'detalhar']) {
+      document.getElementById(id).click(); await esp(1000);
+      window.scrollTo({ top: Math.max(0, pa.getBoundingClientRect().top + scrollY - 200), behavior: 'instant' }); await esp(150);
+      out[id] = topo();
+      // rolando até o meio da folha, o Fechar continua à vista
+      window.scrollTo(0, pa.offsetTop + Math.min(1500, pa.offsetHeight / 2)); await esp(150);
+      const f = pa.querySelector('.pa-topo [data-pa="fechar"]');
+      const q = f && f.getBoundingClientRect();
+      out[id].aVista = !!q && q.top >= 0 && q.bottom <= innerHeight;
+      if (id === 'cutReport') {
+        const card = [...pa.querySelectorAll('.rc-econ-g>div:not(.destaque)')].find(d => d.querySelector('i'));
+        if (card) { const bq = card.querySelector('b').getBoundingClientRect(), iq = card.querySelector('i').getBoundingClientRect();
+          out.notaAbaixo = iq.top >= bq.bottom - 1; out.nota = card.innerText.replace(/\s+/g, ' '); } else out.notaAbaixo = 'sem nota';
+      }
+      if (f) f.click(); await esp(200);
+      out[id].fechou = pa.classList.contains('hide');
+    }
+    return out;
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  t.ok('Aproveitamento: Fechar e Imprimir no alto da folha', !r.erro && r.cutReport.tem && r.cutReport.perto && r.cutReport.imp, J);
+  t.ok('Aproveitamento: o Fechar acompanha a rolagem e fecha', !r.erro && r.cutReport.aVista && r.cutReport.fechou, J);
+  t.ok('Detalhamento: Fechar no alto, à vista e fechando', !r.erro && r.detalhar.tem && r.detalhar.perto && r.detalhar.aVista && r.detalhar.fechou, J);
+  t.ok('"162 + 4 em 2 perfis" numa linha própria, embaixo do número', !r.erro && r.notaAbaixo === true, J);
+  t.ok('sem erro na página', !erros.length, J);
+  await ctx.close();
+});
+
+teste('leitor-chapas-retalhos-tela', async (b, t) => {
+  // os retalhos aparecem no painel (tabela com medidas e kg) e no mapa da chapa
+  if (!fs.existsSync(path.join(RAIZ, 'leitor_dwg'))) return;
+  const { ctx, pg, erros } = await leitorImporta(b, path.join(FIX_LEITOR, 'caso4.dxf'), { viewport: { width: 1400, height: 900 } });
+  const r = await pg.evaluate(async () => { const esp = ms => new Promise(x => setTimeout(x, ms));
+    document.getElementById('chapasParceiro').click(); await esp(2500);
+    const sec = document.querySelector('#cpResults .cp-ret'), n = document.querySelectorAll('#cpSheet option').length;
+    const sel = document.getElementById('cpSheet'); if (sel) { sel.value = String(n - 1); sel.dispatchEvent(new Event('change', { bubbles: true })); } await esp(300);
+    return { sec: sec ? sec.innerText.replace(/\s+/g, ' ') : '', mapa: document.querySelectorAll('#cpStage .cp-retalho').length,
+      info: (document.getElementById('cpSheetInfo') || {}).innerText || '' }; }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  t.ok('painel mostra os retalhos com quantidade e kg', !r.erro && /Retalhos aproveitáveis/.test(r.sec) && /\d+ retalho\(s\) · [\d.,]+ kg/.test(r.sec), J);
+  t.ok('o mapa da última chapa marca o retalho e a legenda dá a medida', !r.erro && r.mapa >= 1 && /Retalho\(s\): \d/.test(r.info), J);
+  t.ok('sem erro na página', !erros.length, J);
+  await ctx.close();
+});
+
+teste('leitor-recalcular-perfil', async (b, t) => {
+  // trocar o perfil no relatório e "recalcular" mudava só o detalhamento: a
+  // lista de compra seguia com o perfil antigo da ficha
+  if (!fs.existsSync(path.join(RAIZ, 'leitor_dwg'))) return;
+  const { ctx, pg, erros } = await leitorImporta(b, trelicaTeste('recalc'));
+  const r = await pg.evaluate(async () => { const T = window.__leitorTeste; if (!T) return { erro: 'sem gancho' };
+    document.getElementById('detalhar').click(); await new Promise(x => setTimeout(x, 500));
+    const i = document.querySelector('#printArea [data-perfil="int"][data-letra="A"]'), bt = document.getElementById('dtRecalcA');
+    if (!i || !bt) return { erro: 'sem campo/botão' };
+    i.value = 'U 40x93x40 #2,25'; bt.click(); await new Promise(x => setTimeout(x, 500));
+    const e = T.estado(), s = (T.secoes().secoes || [])[0];
+    return { ficha: e.FICHAS[0].profiles.join(' | '), det: s && s.nomeInt, lista: e.LASTROWS.map(r => r.name).join(' | '),
+      cartao: [...document.querySelectorAll('#fichas input[data-f="0"][data-p="1"]')].map(x => x.value).join() }; }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  t.ok('o perfil novo vai para a ficha', !r.erro && /40x93x40 #2,25/.test(r.ficha) && /40x93x40 #2,25/.test(r.cartao), J);
+  t.ok('detalhamento e lista de compra usam o mesmo perfil', /40x93x40 #2,25/.test(r.det || '') && /40x93x40 #2,25/.test(r.lista || '') && !/30x93x30/.test(r.lista || ''), J);
+  t.ok('sem erro na página', !erros.length, J);
+  await ctx.close();
+});
+
+teste('leitor-alinhamento-misto', async (b, t) => {
+  // grupo de 7 verticais iguais: só as 2 das pontas ficam junto à linha, mas
+  // o relatório dizia "junto à linha" para o grupo todo (pegava da 1ª peça)
+  if (!fs.existsSync(path.join(RAIZ, 'leitor_dwg'))) return;
+  const { ctx, pg, erros } = await leitorImporta(b, trelicaTeste('alinha'));
+  const r = await pg.evaluate(async () => {
+    document.getElementById('detalhar').click(); await new Promise(x => setTimeout(x, 500));
+    const tr = [...document.querySelectorAll('#printArea tr')].map(x => [...x.cells].map(c => c.innerText.replace(/\s+/g, ' ').trim()).join(' | ')).filter(x => /vertical/.test(x));
+    return { tr }; }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  const v = (r.tr || []).find(x => /^7 \| 14 \|/.test(x)) || '';
+  t.ok('grupo misto diz quantas ficam junto à linha', /2 de 7 junto à linha/.test(v), J);
+  t.ok('sem erro na página', !erros.length, J);
+  await ctx.close();
+});
+
+teste('leitor-exporta-perfil-cadastro', async (b, t) => {
+  // os perfis iam para o Orçamento como item avulso com o NOSSO preço por
+  // barra: sem peso, sem o R$/kg do fornecedor, sem cotação. O que existe no
+  // cadastro agora vai como linha de perfil (perfilId), respeitando o material.
+  if (!fs.existsSync(path.join(RAIZ, 'leitor_dwg'))) return;
+  const db = { densidade: 8000, telhas: [], categorias: [], fornecedorAtivo: 'f1',
+    fornecedores: [{ id: 'f1', nome: 'FORNECEDOR TESTE', precos: { '2,00': 9 } }],
+    perfis: [{ id: 'pU', tipo: 'U', dims: '40x100x40', esp: '2,00', grupo: 'U CARBONO', slitter: 180, comp: 6000 },
+      { id: 'pIg', tipo: 'U', dims: '30x93x30', esp: '2,00', grupo: 'U GALVANIZADO', slitter: 153, comp: 6000 },
+      { id: 'pIc', tipo: 'U', dims: '30x93x30', esp: '2,00', grupo: 'U CARBONO', slitter: 153, comp: 6000 }] };
+  const antes = 'try{localStorage.setItem("rm_orc_db_v1",' + JSON.stringify(JSON.stringify(db)) + ')}catch(e){}';
+  const { ctx, pg, erros } = await leitorImporta(b, trelicaTeste('exporta'), { antes });
+  const lista = await pg.evaluate(() => window.__leitorTeste.estado().LASTROWS.map(r => ({ n: r.name, b: r.bars, m: r.metros }))).catch(() => []);
+  let d = null;
+  try {
+    const [dl] = await Promise.all([pg.waitForEvent('download', { timeout: 8000 }), pg.click('#exportOrc')]);
+    d = JSON.parse(fs.readFileSync(await dl.path(), 'utf8'));
+  } catch (e) { d = { erro: e.message }; }
+  const J = JSON.stringify({ lista, d }) + ' ' + erros.join(' | ');
+  const lp = (d && d.linhasPerfil) || [], av = (d && d.linhasAvulso) || [];
+  const bz = lista.find(r => /40x100x40/.test(r.n)) || {}, it = lista.find(r => /30x93x30/.test(r.n)) || {};
+  t.ok('perfis do cadastro vão como linha de perfil', lp.length === 2 && !av.length, J);
+  t.ok('banzo: perfilId certo, barras e barra de 6 m', lp.some(l => l.perfilId === 'pU' && l.qtd === bz.b && l.comp === 6000), J);
+  t.ok('interno carbono não vira o galvanizado', lp.some(l => l.perfilId === 'pIc' && l.qtd === it.b) && !lp.some(l => l.perfilId === 'pIg'), J);
+  t.ok('sem erro na página', !erros.length, J);
+  await ctx.close();
+});
+
+teste('leitor-modelo-dxf', async (b, t) => {
+  // o modelo de desenho RM: o vazio (camadas + bloco da ficha, para virar
+  // .dwt no AutoCAD) e o exemplo, que o próprio leitor tem de ler sem aviso
+  if (!fs.existsSync(path.join(RAIZ, 'leitor_dwg'))) return;
+  // o download de um link não passa pelo servidor de mentira do teste: confere
+  // que o clique baixa o arquivo com o nome certo e lê o arquivo que o link aponta
+  const baixa = async (sel, nome) => {
+    const a = await abre(b, { 'sis.local': 'leitor_dwg' }); await semLogin(a.pg);
+    let arq = '';
+    try {
+      const href = await a.pg.$eval(sel, e => new URL(e.getAttribute('href'), location.href).pathname);
+      const [dl] = await Promise.all([a.pg.waitForEvent('download', { timeout: 8000 }), a.pg.click(sel)]);
+      const f = path.join(RAIZ, 'leitor_dwg', decodeURIComponent(href.replace(/^\//, '')));
+      if (dl.suggestedFilename() === nome && fs.existsSync(f)) arq = f;
+    } catch (e) {}
+    await a.ctx.close(); return arq;
+  };
+  const vazio = await baixa('#modeloDxf', 'RM_MODELO.dxf'), ex = await baixa('#exemploDxf', 'RM_EXEMPLO.dxf');
+  t.ok('os botões baixam o modelo e o exemplo', !!vazio && fs.existsSync(vazio) && !!ex && fs.existsSync(ex), vazio + ' ' + ex);
+  if (!vazio || !ex || !fs.existsSync(vazio) || !fs.existsSync(ex)) return;
+  const txt = fs.readFileSync(vazio, 'latin1');
+  t.ok('modelo traz as camadas e o bloco da ficha', ['RM-BANZO', 'RM-INTERNO', 'RM-QUADRO', 'RM-SUPORTE', 'FICHA_RM', 'ATTDEF'].every(l => txt.includes(l)), '');
+  t.ok('modelo em centímetros ($INSUNITS 5)', /\$INSUNITS\s*\r?\n\s*70\s*\r?\n\s*5\b/.test(txt), '');
+  const { ctx, pg, erros } = await leitorImporta(b, ex);
+  const r = await pg.evaluate(() => { const T = window.__leitorTeste, s = (T.secoes().secoes || []);
+    return { n: s.length, np: s[0] && s[0].np, ficha: T.estado().FICHAS.map(f => f.nome + '|' + f.qty + '|' + f.profiles.join(',')).join(';'),
+      checagem: T.checagem().map(x => x.tipo).join(','), lista: T.estado().LASTROWS.length }; }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  t.ok('o leitor detalha o exemplo: 1 estrutura com a ficha do bloco', !r.erro && r.n === 1 && r.np > 10 && /TESOURA 01\|1\|.*40x100x40.*30x93x30/i.test(r.ficha) && r.lista >= 2, J);
+  t.ok('e a checagem do desenho não acusa nada', r.checagem === '', J);
+  t.ok('sem erro na página', !erros.length, J);
+  await ctx.close();
+});
+
+/* fechamento fictício do SketchUp: uma parede de 4 m × 9 m */
+function fechamentoTeste(nome, duas) {
+  const d = { format: 'RM_FECHAMENTO_SKETCHUP', model: 'Teste fechamento', faces: [
+    { name: 'Parede alta', outer: [[0, 0, 0], [4000, 0, 0], [4000, 0, 9000], [0, 0, 9000]], normal: [0, 1, 0] }] };
+  if (duas) d.faces = [{ name: 'Parede frente', outer: [[0, 0, 0], [6000, 0, 0], [6000, 0, 3000], [0, 0, 3000]], normal: [0, -1, 0] },
+    { name: 'Parede lateral', outer: [[6000, 0, 0], [6000, 6000, 0], [6000, 6000, 3000], [6000, 0, 3000]], normal: [1, 0, 0] }];
+  const dir = path.join(require('os').tmpdir(), 'rm-testes-leitor'); fs.mkdirSync(dir, { recursive: true });
+  const f = path.join(dir, nome + '.rmfecha'); fs.writeFileSync(f, JSON.stringify(d)); return f;
+}
+
+teste('leitor-fechamento-divide', async (b, t) => {
+  // telha de fechamento mais comprida que o máximo só ganhava um aviso
+  // "passa do máximo" e ia assim para o pedido; a cobertura já dividia
+  if (!fs.existsSync(path.join(RAIZ, 'leitor_dwg'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'leitor_dwg' }); await semLogin(pg);
+  await pg.click('[data-aba="tel"]').catch(() => {}); await pg.waitForTimeout(600);
+  await pg.setInputFiles('#tlhSkpDiretoFile', fechamentoTeste('parede_alta')); await pg.waitForTimeout(1500);
+  const lista = () => pg.evaluate(() => [...document.querySelectorAll('#tlLista tr')].map(tr => [...tr.cells].map(c => c.innerText.replace(/\s+/g, ' ').trim()).join(' | ')));
+  const antes = await lista().catch(() => []);
+  await pg.evaluate(() => { const m = document.getElementById('tlMax'); m.value = '6000'; m.dispatchEvent(new Event('input', { bubbles: true }));
+    const tr = document.getElementById('tlTraspasse'); if (tr) { tr.value = '200'; tr.dispatchEvent(new Event('input', { bubbles: true })); } }).catch(() => {});
+  await pg.waitForTimeout(600);
+  const depois = await lista().catch(() => []);
+  const J = JSON.stringify({ antes, depois }) + ' ' + erros.join(' | ');
+  const n = (antes.find(x => /^9\.000 mm/.test(x)) || '').split(' | ')[1];
+  t.ok('sem máximo: telhas inteiras de 9.000 mm', !!n, J);
+  t.ok('com máximo 6.000 e transpasse 200: 2 partes de 4.600 mm, o dobro de peças', depois.some(x => /^4\.600 mm \| (\d+) /.test(x) && +x.split(' | ')[1] === 2 * +n && /2 partes/.test(x) && /transpasse 200/.test(x)) && !depois.some(x => /^9\.000 mm/.test(x)), J);
+  t.ok('sem erro na página', !erros.length, J);
+  await ctx.close();
+});
+
+/* galpão fictício como chega do SketchUp: a lateral partida em painéis entre
+   as janelas, cada um num "Agrupar#59" sem nome, e um pedaço da frente num
+   "Agrupar#63". Medidas em mm, z para cima. */
+function fechamentoGalpao(nome, semNomes) {
+  const ret = (x0, y0, x1, y1, h) => [[x0, y0, 0], [x1, y1, 0], [x1, y1, h], [x0, y0, h]];
+  const jan = (x0, x1, y) => [[x0, y, 1000], [x1, y, 1000], [x1, y, 2200], [x0, y, 2200]];
+  const faces = [
+    { name: 'GALPAO / LATERAL DIREITA', outer: ret(0, 0, 4000, 0, 5000), normal: [0, -1, 0] },
+    // painéis entre pilares de 250 mm, e 8 cm fora do plano da parte com nome
+    ...[4000, 8000, 12000].map(x => ({ name: 'GALPAO / Agrupar#59', outer: ret(x + 250, 80, x + 4000, 80, 5000), holes: [jan(x + 1000, x + 3000, 80)], normal: [0, 1, 0] })),
+    { name: 'GALPAO / FRENTE', outer: ret(0, 12000, 0, 2000, 5000), normal: [-1, 0, 0] },
+    { name: 'GALPAO / Agrupar#63', outer: ret(0, 2000, 0, 0, 5000), normal: [-1, 0, 0] },
+    { name: 'GALPAO / FUNDOS', outer: ret(16000, 0, 16000, 12000, 5000), normal: [1, 0, 0] },
+    // lateral esquerda em dois trechos com 6 m de vão aberto no meio
+    { name: 'GALPAO / LATERAL ESQUERDA', outer: ret(16000, 12000, 11000, 12000, 5000), normal: [0, 1, 0] },
+    { name: 'GALPAO / LATERAL ESQUERDA', outer: ret(5000, 12000, 0, 12000, 5000), normal: [0, 1, 0] },
+    // contorno que começa no canto de CIMA, como vem muitas vezes do SketchUp
+    { name: 'GALPAO / INTERNO', outer: ret(8000, 3000, 8000, 9000, 5000).slice(2).concat(ret(8000, 3000, 8000, 9000, 5000).slice(0, 2)), normal: [1, 0, 0] }];
+  const dir = path.join(require('os').tmpdir(), 'rm-testes-leitor'); fs.mkdirSync(dir, { recursive: true });
+  if (semNomes) faces.forEach((f, i) => { if (!/Agrupar/.test(f.name)) f.name = 'GALPAO / Agrupar#' + (100 + i); });
+  const f = path.join(dir, nome + '.rmfecha'); fs.writeFileSync(f, JSON.stringify({ format: 'RM_FECHAMENTO_SKETCHUP', model: 'Galpão teste', faces })); return f;
+}
+
+teste('leitor-fechamento-paredes', async (b, t) => {
+  // "Leitor está criando vários grupos, a lateral inteira deveria ser um grupo
+  // só, frente outro, fundos outro, interno outro. E cada um deve ter uma
+  // cor": cada painel entre janelas vinha do SketchUp num Agrupar#N próprio
+  // e virava uma parede; o 3D só alternava laranja e azul.
+  if (!fs.existsSync(path.join(RAIZ, 'leitor_dwg'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'leitor_dwg' }); await semLogin(pg);
+  await pg.click('[data-aba="tel"]').catch(() => {}); await pg.waitForTimeout(600);
+  await pg.setInputFiles('#tlhSkpDiretoFile', fechamentoGalpao('galpao_paineis')); await pg.waitForTimeout(1500);
+  const r = await pg.evaluate(() => { const T = window.__leitorTeste; if (!T || !T.fechamento) return { erro: 'sem gancho' };
+    const nomesTela = [...document.querySelectorAll('#tlFaces [data-tlh-nome]')].map(i => i.value);
+    const hex = c => '#' + (c.match(/\d+/g) || []).slice(0, 3).map(v => (+v).toString(16).padStart(2, '0')).join('');
+    const coresTela = [...document.querySelectorAll('#tlFaces .tl-face')].map(f => { const i = f.querySelector('.tl-cor');
+      return i && i.offsetWidth > 0 ? hex(getComputedStyle(i).backgroundColor) : null; });
+    return { ...T.fechamento(), nomesTela, coresTela }; }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  const par = n => (r.paredes || []).find(p => p.nome === n) || {};
+  t.ok('5 paredes: lateral direita, frente, fundos, lateral esquerda, interno', !r.erro && r.paredes.length === 5 &&
+    ['LATERAL DIREITA', 'FRENTE', 'FUNDOS', 'LATERAL ESQUERDA', 'INTERNO'].every(n => r.paredes.some(p => p.nome === n)), J);
+  t.ok('nenhum Agrupar# sobra na tela nem no 3D', !r.erro && !r.nomesTela.some(n => /Agrupar/i.test(n)) && !r.rotulos.some(x => /Agrupar/i.test(x.nome)), J);
+  t.ok('a lateral inteira: 16 m de base e as 3 janelas dos painéis', Math.round(par('LATERAL DIREITA').base) === 16000 && par('LATERAL DIREITA').aberturas === 3, J);
+  t.ok('a frente junta o pedaço sem nome: 12 m', Math.round(par('FRENTE').base) === 12000, J);
+  // a grade da telha segue a parede inteira: a emenda dos painéis (4, 8 e 12 m)
+  // só é corte se cair, por acaso, na própria grade
+  t.ok('a telha corre seguida pela lateral (a emenda dos painéis não corta telha)', !r.erro && r.util > 0 &&
+    [4000, 8000, 12000].every(x => Math.abs(x / r.util - Math.round(x / r.util)) < 1e-6 || !(par('LATERAL DIREITA').cortes || []).some(c => Math.abs(c - x) < 1)), J);
+  t.ok('pilar de 250 mm entre painéis leva telha por cima (não vira corte)', !r.erro &&
+    [4000, 4250, 8000, 8250, 12000, 12250].every(x => Math.abs(x / r.util - Math.round(x / r.util)) < 1e-6 || !(par('LATERAL DIREITA').cortes || []).some(c => Math.abs(c - x) < 1)), J);
+  t.ok('vão de 6 m entre dois trechos da mesma lateral: uma parede, sem telha no vão', Math.round(par('LATERAL ESQUERDA').base) === 16000 &&
+    !(par('LATERAL ESQUERDA').cortes || []).some(c => c > 5001 && c < 10999) && par('LATERAL ESQUERDA').aberturas === 0, J);
+  t.ok('na lista, cada parede mostra a bolinha da sua cor', !r.erro && r.coresTela.length === 5 && r.coresTela.every((c, i) => c === r.paredes[i].cor), J);
+  t.ok('rótulo do 3D logo acima da própria parede, nunca solto no ar', !r.erro && r.rotulos.every(x => x.acimaDoTopo != null && x.acimaDoTopo > 0 && x.acimaDoTopo < 1500), J);
+  t.ok('cada parede com a sua cor, a mesma no rótulo do 3D', !r.erro && new Set(r.paredes.map(p => p.cor)).size === 5 &&
+    r.rotulos.length === 5 && r.rotulos.every(x => x.cor === par(x.nome).cor), J);
+  t.ok('sem erro na página', !erros.length, J);
+  await ctx.close();
+});
+
+teste('leitor-fechamento-divisoria-perto', async (b, t) => {
+  // "o leitor não pega a parede divisória interna": a regra da parede dupla
+  // (face de fora + face de dentro da MESMA parede) olhava até 3 m e entre
+  // grupos diferentes -- a divisória a 2 m da frente, do mesmo tamanho, era
+  // descartada como se fosse o lado de dentro da frente
+  if (!fs.existsSync(path.join(RAIZ, 'leitor_dwg'))) return;
+  const ret = (x0, y0, x1, y1, h) => [[x0, y0, 0], [x1, y1, 0], [x1, y1, h], [x0, y0, h]];
+  // a extensão já manda cada parede com uma face só: a frente sozinha, e a
+  // divisória sozinha 2 m para dentro. Os fundos chegam com as duas faces
+  // (5 cm), como mandava a versão antiga da extensão.
+  const faces = [
+    { name: 'GALPAO / FRENTE', outer: ret(0, 0, 16000, 0, 5000), normal: [0, -1, 0] },
+    { name: 'GALPAO / DIVISORIA', outer: ret(0, 2000, 16000, 2000, 5000), normal: [0, -1, 0] },
+    { name: 'GALPAO / FUNDOS', outer: ret(16000, 12000, 0, 12000, 5000), normal: [0, 1, 0] },
+    { name: 'GALPAO / FUNDOS', outer: ret(0, 11950, 16000, 11950, 5000), normal: [0, -1, 0] }];
+  const arq = path.join(require('os').tmpdir(), 'rm-testes-leitor', 'divisoria.rmfecha');
+  fs.mkdirSync(path.dirname(arq), { recursive: true });
+  fs.writeFileSync(arq, JSON.stringify({ format: 'RM_FECHAMENTO_SKETCHUP', model: 'Divisória teste', faces }));
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'leitor_dwg' }); await semLogin(pg);
+  await pg.click('[data-aba="tel"]').catch(() => {}); await pg.waitForTimeout(600);
+  await pg.setInputFiles('#tlhSkpDiretoFile', arq); await pg.waitForTimeout(1500);
+  const r = await pg.evaluate(() => ({ ...window.__leitorTeste.fechamento(), info: (document.getElementById('fbInfoTel') || {}).textContent })).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify({ paredes: r.paredes && r.paredes.map(p => p.nome), info: r.info, erro: r.erro }) + ' ' + erros.join(' | ');
+  t.ok('a divisória a 2 m da frente continua na leitura', !r.erro && r.paredes.some(p => p.nome === 'DIVISORIA'), J);
+  t.ok('o lado de dentro dos fundos (5 cm) continua fora: 3 paredes, 1 face interna ignorada', !r.erro && r.paredes.length === 3 && /1 internas? ignorada/.test(r.info || ''), J);
+  t.ok('sem erro na página', !erros.length, J);
+  await ctx.close();
+});
+
+teste('leitor-extensao-sketchup', async (b, t) => {
+  // a extensão do SketchUp descartava a divisória a menos de 3 m de outra
+  // parede como "face interna duplicada" -- ela nem chegava ao arquivo. A
+  // extensão mora em leitor_dwg/sketchup; o .rbz é o que se baixa pela tela.
+  const raiz = path.join(RAIZ, 'leitor_dwg', 'sketchup'); if (!fs.existsSync(raiz)) return;
+  let ruby = true; try { cp.execSync('ruby -v', { stdio: 'ignore' }); } catch (e) { ruby = false; }
+  if (ruby) {
+    let saida = '', ok = true;
+    try { saida = cp.execSync('ruby ' + JSON.stringify(path.join(raiz, 'testes', 'fechamento_divisoria.rb'))).toString(); } catch (e) { ok = false; saida = String(e.stdout || e.message); }
+    t.ok('a divisória perto da parede continua no arquivo da extensão', ok && /OK A/.test(saida) && /OK B/.test(saida), saida);
+    t.ok('nada some calado: a face descartada vai no arquivo com o motivo, e a versão da extensão também', ok && /OK C/.test(saida) && /OK D/.test(saida), saida);
+  }
+  // o .rbz baixado é exatamente o código que está no repositório
+  const lista = cp.execSync('unzip -l ' + JSON.stringify(path.join(raiz, 'RM_Coberturas.rbz'))).toString();
+  const dentro = cp.execSync('unzip -p ' + JSON.stringify(path.join(raiz, 'RM_Coberturas.rbz')) + ' RM_Coberturas/main.rb').toString();
+  t.ok('o .rbz tem o mesmo main.rb do repositório', /RM_Coberturas\.rb/.test(lista) && dentro === fs.readFileSync(path.join(raiz, 'RM_Coberturas', 'main.rb'), 'utf8'), lista);
+  const html = fs.readFileSync(path.join(RAIZ, 'leitor_dwg', 'index.html'), 'utf8');
+  t.ok('a tela de telhas tem o link para baixar a extensão', /href="sketchup\/RM_Coberturas\.rbz"/.test(html), '');
+  // a versão é uma só: a do instalador, a que vai no arquivo e a do link
+  const vLoader = (fs.readFileSync(path.join(raiz, 'RM_Coberturas.rb'), 'utf8').match(/extension\.version = '([\d.]+)'/) || [])[1];
+  const vMain = (fs.readFileSync(path.join(raiz, 'RM_Coberturas', 'main.rb'), 'utf8').match(/EXTENSION_VERSION = '([\d.]+)'/) || [])[1];
+  const vTela = (html.match(/RM Coberturas ([\d.]+)\)/) || [])[1], vLeitor = (html.match(/const TLH_EXT_VERSAO='([\d.]+)'/) || [])[1];
+  t.ok('uma versão só: instalador, arquivo exportado, link e aviso do Leitor', !!vLoader && [vMain, vTela, vLeitor].every(v => v === vLoader), JSON.stringify({ vLoader, vMain, vTela, vLeitor }));
+});
+
+teste('leitor-fechamento-nada-some', async (b, t) => {
+  // "A exportação continua ignorando o fechamento interno": a face tomada
+  // como lado de dentro de outra parede sumia sem rastro -- na extensão e no
+  // Leitor -- e o arquivo não dizia de que versão da extensão veio. Agora a
+  // face descartada chega no arquivo, aparece na tela com o motivo e volta
+  // com um clique; e arquivo de extensão antiga é avisado
+  if (!fs.existsSync(path.join(RAIZ, 'leitor_dwg'))) return;
+  const ret = (x0, y0, x1, y1, h) => [[x0, y0, 0], [x1, y1, 0], [x1, y1, h], [x0, y0, h]];
+  // área como o SketchUp manda (m²)
+  const ar = f => Object.assign(f, { area_m2: Math.hypot(f.outer[1][0] - f.outer[0][0], f.outer[1][1] - f.outer[0][1]) * f.outer[2][2] / 1e6 });
+  const base = [
+    { name: 'GALPAO / FRENTE', outer: ret(0, 0, 16000, 0, 5000), normal: [0, -1, 0] },
+    { name: 'GALPAO / LATERAL', outer: ret(16000, 0, 16000, 3000, 5000), normal: [1, 0, 0] },
+    { name: 'GALPAO / LATERAL', outer: ret(16000, 9000, 16000, 12000, 5000), normal: [1, 0, 0] },
+    { name: 'GALPAO / FUNDOS', outer: ret(16000, 12000, 0, 12000, 5000), normal: [0, 1, 0] },
+    { name: 'GALPAO / FUNDOS', outer: ret(0, 11950, 16000, 11950, 5000), normal: [0, -1, 0] }].map(ar);
+  const dir = path.join(require('os').tmpdir(), 'rm-testes-leitor'); fs.mkdirSync(dir, { recursive: true });
+  const velho = path.join(dir, 'nada_some_velho.rmfecha'), novo = path.join(dir, 'nada_some_novo.rmfecha');
+  fs.writeFileSync(velho, JSON.stringify({ format: 'RM_FECHAMENTO_SKETCHUP', model: 'Velho', faces: base }));
+  fs.writeFileSync(novo, JSON.stringify({ format: 'RM_FECHAMENTO_SKETCHUP', model: 'Novo', extension_version: '1.2.6', faces: base,
+    // a divisória em dois painéis (pilar de 250 mm no meio) e o lado de dentro da frente
+    ignored_faces: [
+      { name: 'GALPAO / Agrupar#63', outer: ret(0, 2000, 7875, 2000, 5000), normal: [0, -1, 0], ignored_reason: 'lado de dentro de GALPAO / FRENTE (2000 mm)' },
+      { name: 'GALPAO / Agrupar#63', outer: ret(8125, 2000, 16000, 2000, 5000), normal: [0, -1, 0], ignored_reason: 'lado de dentro de GALPAO / FRENTE (2000 mm)' },
+      { name: 'GALPAO / FRENTE', outer: ret(16000, 50, 0, 50, 5000), normal: [0, 1, 0], ignored_reason: 'lado de dentro de GALPAO / FRENTE (50 mm)' },
+      // o trecho do meio da lateral, que estava no vão
+      { name: 'GALPAO / LATERAL', outer: ret(16000, 3000, 16000, 9000, 5000), normal: [1, 0, 0], ignored_reason: 'lado de dentro de GALPAO / LATERAL (60 mm)' }].map(ar) }));
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'leitor_dwg' }); await semLogin(pg);
+  await pg.click('[data-aba="tel"]').catch(() => {}); await pg.waitForTimeout(600);
+  const le = () => pg.evaluate(() => ({ paredes: window.__leitorTeste.fechamento().paredes.map(p => p.nome),
+    bases: Object.fromEntries(window.__leitorTeste.fechamento().paredes.map(p => [p.nome, Math.round(p.base)])),
+    areas: Object.fromEntries(window.__leitorTeste.fechamento().paredes.map(p => [p.nome, p.area])),
+    umaSo: document.querySelectorAll('#tlFaces [data-tlh-dupla]').length,
+    info: (document.getElementById('fbInfoTel') || {}).textContent || '', lista: ((document.getElementById('tlFaces') || {}).innerText || '').replace(/\s+/g, ' '),
+    volta: !!document.querySelector('#tlFaces [data-tlh-duplas]') }));
+  await pg.setInputFiles('#tlhSkpDiretoFile', velho); await pg.waitForTimeout(1500);
+  const r1 = await le().catch(e => ({ erro: e.message }));
+  await pg.setInputFiles('#tlhSkpDiretoFile', novo); await pg.waitForTimeout(1500);
+  const r2 = await le().catch(e => ({ erro: e.message }));
+  // traz só o primeiro painel da divisória
+  await pg.evaluate(() => { const bt = document.querySelector('#tlFaces [data-tlh-dupla]'); if (bt) bt.click(); }); await pg.waitForTimeout(800);
+  const r3 = await le().catch(e => ({ erro: e.message }));
+  // e depois o resto, de uma vez
+  await pg.evaluate(() => { const bt = document.querySelector('#tlFaces [data-tlh-duplas]'); if (bt) bt.click(); }); await pg.waitForTimeout(800);
+  const r4 = await le().catch(e => ({ erro: e.message }));
+  const J = JSON.stringify({ r1, r2, r3, r4 }).slice(0, 2500) + ' ' + erros.join(' | ');
+  t.ok('arquivo sem versão: avisa que a extensão é antiga e pede a nova', !r1.erro && /extensão antiga/i.test(r1.info + r1.lista), J);
+  t.ok('o lado de dentro dos fundos que o Leitor tirou aparece na lista, com como trazer de volta', !r1.erro && /FUNDOS/.test(r1.lista) && /lado de dentro/i.test(r1.lista) && r1.volta, J);
+  t.ok('arquivo da extensão nova: sem o aviso de versão', !r2.erro && !/extensão antiga/i.test(r2.info + r2.lista), J);
+  t.ok('as faces que a extensão descartou aparecem com o nome e o motivo, cada uma com o seu botão', !r2.erro && /Agrupar#63/.test(r2.lista) && /2000 mm/.test(r2.lista) && r2.umaSo === 5 && r2.paredes.length === 3, J);
+  t.ok('dá para trazer uma face só: o painel volta como INTERNO e o resto continua fora', !r3.erro && r3.paredes.includes('INTERNO') && r3.paredes.length === 4 && r3.umaSo === 4, J);
+  t.ok('trazendo o resto, a divisória volta INTEIRA (os dois painéis numa parede só, 16 m)', !r4.erro && r4.paredes.filter(n => /^INTERNO/.test(n)).length === 1 && r4.bases.INTERNO === 16000, J);
+  t.ok('o lado de dentro da frente se junta à frente, não vira outra parede', !r4.erro && r4.paredes.slice().sort().join('|') === 'FRENTE|FUNDOS|INTERNO|LATERAL', J);
+  const areas = r4.areas || {};
+  t.ok('a área da frente não dobra com o lado de dentro (80 m², não 160)', !r4.erro && areas.FRENTE === 80, J);
+  t.ok('o trecho que volta no vão da lateral soma a área dele (60 m², 12 m inteiros)', !r4.erro && areas.LATERAL === 60, J);
+  t.ok('a linha do arquivo acompanha: sem internas ignoradas depois de trazer todas', !r4.erro && !/internas ignoradas/.test(r4.info), J);
+  t.ok('sem erro na página', !erros.length, J);
+  await ctx.close();
+});
+
+teste('leitor-fechamento-paredes-sem-nome', async (b, t) => {
+  // no arquivo real todo grupo chega como "Agrupar#N": a parede ganha nome
+  // pela posição -- LATERAL ao longo do lado comprido, OITÃO no curto,
+  // INTERNO a que fica dentro da caixa do galpão
+  if (!fs.existsSync(path.join(RAIZ, 'leitor_dwg'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'leitor_dwg' }); await semLogin(pg);
+  await pg.click('[data-aba="tel"]').catch(() => {}); await pg.waitForTimeout(600);
+  await pg.setInputFiles('#tlhSkpDiretoFile', fechamentoGalpao('galpao_sem_nome', true)); await pg.waitForTimeout(1500);
+  const r = await pg.evaluate(() => window.__leitorTeste.fechamento()).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  const nomes = (r.paredes || []).map(p => p.nome).sort();
+  t.ok('5 paredes: LATERAL 1 e 2, OITÃO 1 e 2, INTERNO', !r.erro && nomes.join('|') === ['INTERNO', 'LATERAL 1', 'LATERAL 2', 'OITÃO 1', 'OITÃO 2'].join('|'), J);
+  t.ok('sem erro na página', !erros.length, J);
+  await ctx.close();
+});
+
+/* escolhe uma telha no catálogo Brastelha pela janela, como a pessoa faria */
+async function brasEscolhe(pg, sel, escolha) {
+  return pg.evaluate(async ({ sel, escolha }) => {
+    const esp = ms => new Promise(x => setTimeout(x, ms)), s = document.querySelector(sel);
+    s.value = 'bras:novo'; s.dispatchEvent(new Event('change', { bubbles: true })); await esp(200);
+    const ov = document.getElementById('brasov');
+    const out = { abriu: !!ov && ov.classList.contains('on') };
+    for (const k of ['l', 'm', 'n', 'i', 'esp', 'cor']) {
+      if (escolha[k] == null) continue;
+      const c = ov.querySelector('[data-bras="' + k + '"]'); if (!c) { out['sem_' + k] = true; continue; }
+      c.value = String(escolha[k]); c.dispatchEvent(new Event('change', { bubbles: true })); await esp(80);
+    }
+    out.ficha = ov.querySelector('.bras-ficha').innerText.replace(/\s+/g, ' ').trim();
+    out.cumeeiraNaLista = [...ov.querySelectorAll('[data-bras="l"] option')].some(o => /cumeeira/i.test(o.textContent));
+    const usa = ov.querySelector('[data-bras-x="usa"]'); out.usaHabilitado = !usa.disabled;
+    usa.click(); await esp(400);
+    out.fechou = !ov.classList.contains('on');
+    out.valor = document.querySelector(sel).value;
+    out.rotulo = document.querySelector(sel).selectedOptions[0] ? document.querySelector(sel).selectedOptions[0].textContent : '';
+    return out;
+  }, { sel, escolha });
+}
+
+teste('leitor-brastelha-fechamento', async (b, t) => {
+  // "falta acesso ao catálogo da Brastelha, para puxar a telha correta por lá":
+  // o campo de telha só listava o cadastro do Orçamento, sem a Brastelha
+  if (!fs.existsSync(path.join(RAIZ, 'leitor_dwg'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'leitor_dwg' }); await semLogin(pg);
+  await pg.click('[data-aba="tel"]').catch(() => {}); await pg.waitForTimeout(600);
+  await pg.setInputFiles('#tlhSkpDiretoFile', fechamentoGalpao('galpao_bras')); await pg.waitForTimeout(1500);
+  let r = {}, d = null;
+  try {
+    r = await brasEscolhe(pg, '#tlPerfil', { l: 'EPS', m: 'TP40', n: 50, i: 'SAN', esp: '0,50', cor: 'GALV' });
+    r.util = await pg.evaluate(() => +document.getElementById('tlUtil').value);
+    r.fab = await pg.evaluate(() => document.getElementById('tlFab').value);
+    r.max = await pg.evaluate(() => +document.getElementById('tlMax').value);
+    r.botao = await pg.evaluate(() => !document.getElementById('tlOrc').disabled);
+    const [dl] = await Promise.all([pg.waitForEvent('download', { timeout: 8000 }), pg.evaluate(() => document.getElementById('tlOrc').click())]);
+    d = JSON.parse(fs.readFileSync(await dl.path(), 'utf8'));
+  } catch (e) { r.erro = e.message; }
+  const L = d && d.linhasTelha && d.linhasTelha[0];
+  const J = JSON.stringify({ r, L }) + ' ' + erros.join(' | ');
+  t.ok('a janela abre pelo campo de telha, sem cumeeira na lista', r.abriu && r.cumeeiraNaLista === false, J);
+  t.ok('mostra a descrição da Brastelha e a largura útil dela (980)', /TÉRMICA EPS 50MM TP-40/.test(r.ficha || '') && /980 mm/.test(r.ficha || '') && r.usaHabilitado, J);
+  t.ok('a telha entra no campo, com a largura útil, o fabricante e o máximo do catálogo', r.fechou && /^orc:br_/.test(r.valor || '') && r.util === 980 && r.fab === 'Brastelha' && r.max === 12000, J);
+  t.ok('o botão do Orçamento fica ligado sem cadastro nenhum', r.botao === true, J);
+  t.ok('o arquivo leva a escolha: id da Brastelha, a seleção e a largura útil', !!L && /^br_/.test(L.telhaId) && L.larguraUtilMm === 980 && L.bras && L.bras.l === 'EPS' && L.bras.m === 'TP40', J);
+  t.ok('sem erro na página', !erros.length, J);
+  await ctx.close();
+});
+
+teste('leitor-brastelha-cobertura', async (b, t) => {
+  // o mesmo catálogo no campo de telha da cobertura
+  if (!fs.existsSync(path.join(RAIZ, 'leitor_dwg'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'leitor_dwg' }); await semLogin(pg);
+  await pg.click('[data-aba="tel"]').catch(() => {}); await pg.waitForTimeout(400);
+  await pg.setInputFiles('#cobSkpDiretoFile', coberturaDuasAguas('cob_bras')); await pg.waitForTimeout(2000);
+  let r = {};
+  try {
+    r = await brasEscolhe(pg, '#cobModelo', { l: 'SIM', m: 'ON18', esp: '0,50', cor: 'BRANCO' });
+    r.util = await pg.evaluate(() => +document.getElementById('cobUtil').value);
+    r.fab = await pg.evaluate(() => document.getElementById('cobFabricante').value);
+    r.estado = await pg.evaluate(() => window.rmCobertura.estado.orcTelhaId);
+  } catch (e) { r.erro = e.message; }
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  t.ok('abre pelo campo de telha da cobertura', r.abriu && r.fechou, J);
+  t.ok('ondulada ON-18 da Brastelha: 990 mm úteis, fabricante Brastelha', r.util === 990 && r.fab === 'Brastelha' && /^br_/.test(r.estado || ''), J);
+  t.ok('sem erro na página', !erros.length, J);
+  await ctx.close();
+});
+
+teste('orcamento-recebe-brastelha-do-leitor', async (b, t) => {
+  // a linha da Brastelha escolhida no Leitor ainda não existe no cadastro do
+  // Orçamento: tem de nascer na importação (e não virar "Telha removida")
+  if (!fs.existsSync(path.join(RAIZ, 'orcamento-rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'orcamento-rm' }); await semLogin(pg);
+  const bras = { l: 'EPS', m: 'TP40', n: 50, i: 'SAN', esp: '0,50', cor: 'GALV' };
+  const id = await pg.evaluate(c => brasIdDe(c), bras).catch(() => null);
+  const arq = path.join(require('os').tmpdir(), 'rm-testes-leitor', 'orc_bras.json');
+  fs.mkdirSync(path.dirname(arq), { recursive: true });
+  fs.writeFileSync(arq, JSON.stringify({ obra: 'Galpão teste', linhasTelha: [{ lid: 't1', telhaId: id, comp: 6000, qtd: 10, larguraUtilMm: 980, obs: '', bras }] }));
+  await pg.setInputFiles('#importFile', arq); await pg.waitForTimeout(1200);
+  const r = await pg.evaluate(() => { const l = (S.linhasTelha || [])[0], t = l && telhaById(l.telhaId);
+    const f = brasForn(false);
+    return { n: (S.linhasTelha || []).length, achou: !!t, desc: t && t.desc, util: t && t.larguraUtilMm, comBras: !!(t && t.bras),
+      semMarca: l && l.bras === undefined, fornecedor: f ? f.nome : null, tela: document.getElementById('tbTelhas') ? document.getElementById('tbTelhas').innerText : document.body.innerText.includes('Telha removida') }; }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  t.ok('a linha da Brastelha nasce no cadastro, com a descrição e a largura útil dela', !r.erro && r.achou && /TÉRMICA EPS 50MM TP-40/.test(r.desc || '') && r.util === 980 && r.comBras, J);
+  t.ok('não aparece "Telha removida"', !r.erro && r.tela !== true && !/Telha removida/.test(String(r.tela)), J);
+  t.ok('sem erro na página', !erros.length, J);
+  await ctx.close();
+});
+
+teste('leitor-fechamento-abertura-manual', async (b, t) => {
+  // porta que não está desenhada (ou só tem a verga) não tinha como entrar:
+  // a lista saía com telha a mais e o aviso só mandava redesenhar
+  if (!fs.existsSync(path.join(RAIZ, 'leitor_dwg'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'leitor_dwg' }); await semLogin(pg);
+  await pg.click('[data-aba="tel"]').catch(() => {}); await pg.waitForTimeout(600);
+  await pg.setInputFiles('#tlhSkpDiretoFile', fechamentoTeste('parede_porta')); await pg.waitForTimeout(1500);
+  const lista = () => pg.evaluate(() => [...document.querySelectorAll('#tlLista tr')].map(tr => [...tr.cells].slice(0, 2).map(c => c.innerText.trim()).join(' | ')));
+  const r = await pg.evaluate(async () => {
+    const espera = () => new Promise(x => setTimeout(x, 400));
+    const q = s => document.querySelector(s);
+    if (!q('[data-tlh-abx="0"]')) return { erro: 'sem campos de abertura manual' };
+    const put = (s, v) => { const i = q(s); i.value = v; i.dispatchEvent(new Event('input', { bubbles: true })); };
+    put('[data-tlh-abx="0"]', '980'); put('[data-tlh-abl="0"]', '980'); put('[data-tlh-aba="0"]', '2100'); put('[data-tlh-abp="0"]', '0');
+    q('[data-tlh-abadd="0"]').click(); await espera();
+    const comPorta = [...document.querySelectorAll('#tlLista tr')].map(tr => [...tr.cells].slice(0, 2).map(c => c.innerText.trim()).join(' | '));
+    const sel = q('[data-tlh-abtipo^="0|"]'); if (!sel) return { comPorta, erro: 'sem seletor de tipo' };
+    sel.value = 'nada'; sel.dispatchEvent(new Event('change', { bubbles: true })); await espera();
+    const ignorada = [...document.querySelectorAll('#tlLista tr')].map(tr => [...tr.cells].slice(0, 2).map(c => c.innerText.trim()).join(' | '));
+    return { comPorta, ignorada }; }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  t.ok('porta lançada à mão encurta a telha de cima (9.000 - 2.100 = 6.900)', !r.erro && (r.comPorta || []).some(x => /^6\.900 mm \| 1$/.test(x)) && (r.comPorta || []).some(x => /^9\.000 mm \| 4$/.test(x)), J);
+  t.ok('marcada como "não é abertura" volta a telha inteira', (r.ignorada || []).length === 1 && /^9\.000 mm \| 5$/.test(r.ignorada[0]), J);
+  t.ok('sem erro na página', !erros.length, J);
+  await ctx.close();
+});
+
+teste('leitor-pln-nuvem', async (b, t) => {
+  // o K aferido e os modelos de peça ficavam só no computador onde foram
+  // feitos; o projeto de planificação já ia para a nuvem
+  const raiz = path.join(RAIZ, 'leitor_dwg'); if (!fs.existsSync(raiz)) return;
+  const html = fs.readFileSync(path.join(raiz, 'index.html'), 'utf8');
+  const col = (html.match(/var COLECOES=\[([\s\S]*?)\];/) || [])[1] || '';
+  t.ok('K aferido e modelos de peça entram na nuvem', /rm_pln_k_aferido_v1/.test(col) && /rm_pln_models_v2/.test(col), col.slice(0, 300));
+});
+
+teste('leitor-pln-k-por-v', async (b, t) => {
+  // o mesmo aço, dobrado em matriz de V diferente, tem K diferente: guardar
+  // o K só por material/espessura/raio trazia o K da outra matriz
+  if (!fs.existsSync(path.join(RAIZ, 'leitor_dwg'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'leitor_dwg' }); await semLogin(pg);
+  await pg.click('[data-aba="pln"]').catch(() => {}); await pg.waitForTimeout(600);
+  const r = await pg.evaluate(async () => { const T = window.__plnTeste; if (!T) return { erro: 'sem gancho' };
+    const espera = () => new Promise(x => setTimeout(x, 200));
+    const base = T.kBase(), tab = {}; tab[base] = { k: 0.5, em: 1 }; tab[base + '|V16'] = { k: 0.4, em: 2 }; tab[base + '|V25'] = { k: 0.36, em: 3 };
+    localStorage.setItem('rm_pln_k_aferido_v1', JSON.stringify(tab));
+    const v = document.getElementById('plnV'), poe = x => { v.value = String(x); v.dispatchEvent(new Event('input', { bubbles: true })); };
+    poe(25); await espera(); const k25 = T.PLN().k, chave = T.kChave();
+    poe(16); await espera(); const k16 = T.PLN().k;
+    poe(40); await espera(); const k40 = T.PLN().k;
+    return { k25, k16, k40, chave }; }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  t.ok('cada V traz o K aferido nele', !r.erro && r.k25 === 0.36 && r.k16 === 0.4, J);
+  t.ok('V sem aferição usa a aferição antiga da chapa (sem V)', r.k40 === 0.5, J);
+  t.ok('a aferição nova é guardada com o V', /\|V25$/.test(r.chave || ''), J);
+  t.ok('sem erro na página', !erros.length, J);
+  await ctx.close();
+});
+
+teste('leitor-pln-modelos-novos', async (b, t) => {
+  // só havia U, UE e Z prontos: cantoneira, cartola, rufo, pingadeira e
+  // calha tinham de ser montados à mão no perfil especial
+  if (!fs.existsSync(path.join(RAIZ, 'leitor_dwg'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'leitor_dwg' }); await semLogin(pg);
+  await pg.click('[data-aba="pln"]').catch(() => {}); await pg.waitForTimeout(600);
+  const r = await pg.evaluate(async () => { const T = window.__plnTeste; if (!T || !T.secao) return { erro: 'sem gancho' };
+    const out = {};
+    const med = { l: [50, 50], cartola: [20, 40, 50, 40, 20], rufo: [15, 80, 200, 80, 15], pingadeira: [50, 100, 20], calha: [15, 100, 150, 120, 15] };
+    for (const k of Object.keys(med)) {
+      const bt = document.querySelector('[data-pln-grupo="' + k + '"]'); if (!bt) { out[k] = 'sem botão'; continue; }
+      bt.click(); await new Promise(x => setTimeout(x, 150));
+      T.PLN().trechos = med[k].slice(); const p = T.secao();
+      if (!p || p.length < 2) { out[k] = 'sem seção'; continue; }
+      const ys = p.map(q => q.y), xs = p.map(q => q.x);
+      out[k] = { n: T.PLN().trechos.length, d: T.PLN().dobras.length, w: Math.round(Math.max(...xs) - Math.min(...xs)), h: Math.round(Math.max(...ys) - Math.min(...ys)),
+        ini: [Math.round(p[0].x), Math.round(p[0].y)], fim: [Math.round(p[p.length - 1].x), Math.round(p[p.length - 1].y)] };
+    }
+    return out; }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  const ok = (k, n) => r[k] && r[k].n === n && r[k].d === n - 1;
+  t.ok('os cinco modelos novos existem com os trechos certos', !r.erro && ok('l', 2) && ok('cartola', 5) && ok('rufo', 5) && ok('pingadeira', 3) && ok('calha', 5), J);
+  // cartola: as duas abas no mesmo nível, pontas para fora (largura > topo)
+  t.ok('cartola: abas no mesmo nível e para fora', r.cartola && Math.abs(r.cartola.ini[1] - r.cartola.fim[1]) <= 3 && r.cartola.w > 80, J);
+  // rufo e calha: pontas no mesmo nível (seção simétrica)
+  t.ok('rufo e calha simétricos nas pontas', r.rufo && Math.abs(r.rufo.ini[1] - r.rufo.fim[1]) <= 3 && r.calha && r.calha.w >= 150, J);
+  // pingadeira: degrau (fixação e pingadeira em lados opostos da base)
+  t.ok('pingadeira em degrau', r.pingadeira && r.pingadeira.h >= 60, J);
+  t.ok('sem erro na página', !erros.length, J);
+  await ctx.close();
+});
+
+teste('leitor-ficha-planificar', async (b, t) => {
+  // para planificar o perfil de uma ficha era preciso redigitar tudo na aba
+  // Planificação: tipo, abas, base, espessura e material
+  if (!fs.existsSync(path.join(RAIZ, 'leitor_dwg'))) return;
+  const { ctx, pg, erros } = await leitorImporta(b, trelicaTeste('planificar'));
+  const r = await pg.evaluate(async () => {
+    const bt = document.querySelector('#fichas [data-pln-ficha="0|0"]'); if (!bt) return { erro: 'sem botão' };
+    bt.click(); await new Promise(x => setTimeout(x, 500));
+    const P = window.__plnTeste && window.__plnTeste.PLN();
+    return { aba: (document.querySelector('.aba.on') || {}).dataset?.aba, grupo: P && P.grupo, trechos: P && P.trechos.join('/'), esp: P && P.esp, nome: P && P.nome }; }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  t.ok('o banzo U 40x100x40 #2,00 abre na Planificação já preenchido', !r.erro && r.aba === 'pln' && r.grupo === 'u' && r.trechos === '40/100/40' && r.esp === 2 && /40x100x40/.test(r.nome || ''), J);
+  t.ok('sem erro na página', !erros.length, J);
+  await ctx.close();
+});
+
+teste('leitor-pln-ordem-dobra', async (b, t) => {
+  // a folha do fabricante dizia onde dobrar, mas não em que ordem; e o U
+  // estreito, que fecha em volta do punção, saía sem aviso
+  if (!fs.existsSync(path.join(RAIZ, 'leitor_dwg'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'leitor_dwg' }); await semLogin(pg);
+  await pg.click('[data-aba="pln"]').catch(() => {}); await pg.waitForTimeout(600);
+  const r = await pg.evaluate(() => { const T = window.__plnTeste; if (!T || !T.ordem) return { erro: 'sem gancho' };
+    const d90 = (n, s) => Array.from({ length: n }, (_, i) => ({ ang: 90, sent: s ? s[i] : 1 }));
+    return { ue: T.ordem([15, 40, 100, 40, 15], d90(4, [-1, -1, -1, -1])), uLargo: T.ordem([40, 100, 40], d90(2)), uEstreito: T.ordem([40, 30, 40], d90(2)) }; }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  t.ok('UE: dobra de fora para dentro (lábios, depois abas), sem aviso', !r.erro && r.ue.ordem.join(',') === '1,4,2,3' && !r.ue.avisos.length, J);
+  t.ok('U largo sem aviso; U estreito avisa colisão', r.uLargo && !r.uLargo.avisos.length && r.uEstreito.avisos.length === 1 && /punção/.test(r.uEstreito.avisos[0]), J);
+  t.ok('sem erro na página', !erros.length, J);
+  await ctx.close();
+});
+
+teste('leitor-pln-secao-dxf', async (b, t) => {
+  // a seção desenhada no CAD tinha de ser redigitada trecho por trecho
+  if (!fs.existsSync(path.join(RAIZ, 'leitor_dwg'))) return;
+  // UE 100x40x15 desenhado como polilinha, em mm, girado 30° e fora da origem
+  const pts = [[15, 40], [0, 40], [0, 0], [100, 0], [100, 40], [85, 40]].map(([x, y]) => {
+    const a = Math.PI / 6; return [500 + x * Math.cos(a) - y * Math.sin(a), 300 + x * Math.sin(a) + y * Math.cos(a)]; });
+  const L = [], q = (c, v) => L.push(String(c), String(v));
+  q(0, 'SECTION'); q(2, 'HEADER'); q(9, '$INSUNITS'); q(70, 4); q(0, 'ENDSEC'); q(0, 'SECTION'); q(2, 'ENTITIES');
+  q(0, 'LINE'); q(8, 'COTA'); q(62, 7); q(10, 0); q(20, 0); q(11, 30); q(21, 0);     // uma linha solta curta não atrapalha
+  q(0, 'LWPOLYLINE'); q(8, 'SECAO'); q(62, 7); q(90, pts.length); q(70, 0); pts.forEach(([x, y]) => { q(10, x.toFixed(4)); q(20, y.toFixed(4)); });
+  q(0, 'ENDSEC'); q(0, 'EOF');
+  const dir = path.join(require('os').tmpdir(), 'rm-testes-leitor'); fs.mkdirSync(dir, { recursive: true });
+  const arq = path.join(dir, 'secao_ue.dxf'); fs.writeFileSync(arq, L.join('\n') + '\n');
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'leitor_dwg' }); await semLogin(pg);
+  await pg.click('[data-aba="pln"]').catch(() => {}); await pg.waitForTimeout(600);
+  let r;
+  try { await pg.setInputFiles('#plnSecaoArq', arq); await pg.waitForTimeout(1200);
+    r = await pg.evaluate(() => { const P = window.__plnTeste.PLN(); return { grupo: P.grupo, tr: P.trechos.map(v => Math.round(v * 10) / 10).join('/'), ang: P.dobras.map(d => Math.round(d.ang)).join('/'), sent: [...new Set(P.dobras.map(d => d.sent))].length }; });
+  } catch (e) { r = { erro: e.message }; }
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  t.ok('a polilinha vira os 5 trechos do UE', !r.erro && r.tr === '15/40/100/40/15', J);
+  t.ok('4 dobras de 90° para o mesmo lado', r.ang === '90/90/90/90' && r.sent === 1, J);
+  t.ok('sem erro na página', !erros.length, J);
+  await ctx.close();
+});
+
+teste('leitor-pln-minicad', async (b, t) => {
+  // chapa de formato próprio: desenhar por coordenadas, marcar dobra e furo
+  // e o desenho virar a peça (contorno, dobra pelo lado paralelo, furo cotado)
+  if (!fs.existsSync(path.join(RAIZ, 'leitor_dwg'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'leitor_dwg' }); await semLogin(pg);
+  await pg.click('[data-aba="pln"]').catch(() => {}); await pg.waitForTimeout(500);
+  await pg.click('[data-pln-grupo="chapa"]').catch(() => {}); await pg.waitForTimeout(300);
+  let r;
+  try {
+    await pg.click('#mcadAbrir'); await pg.waitForTimeout(300);
+    const cmd = async c => { await pg.fill('#mcadIn', c); await pg.press('#mcadIn', 'Enter'); };
+    for (const c of ['L', '0,0', '@300,0', '@0,120', '@80<135', '@-100,0', '0,180', 'F',
+      'DOBRA', '0,40', '@300,0', '90', 'C', 'FURO', '60,80', '12']) await cmd(c);
+    const antes = await pg.evaluate(() => document.querySelector('[data-mcad-t="ortho"]').classList.contains('on'));
+    await pg.click('[data-mcad-t="ortho"]');
+    const depois = await pg.evaluate(() => document.querySelector('[data-mcad-t="ortho"]').classList.contains('on'));
+    await cmd('APLICAR'); await pg.waitForTimeout(400);
+    r = await pg.evaluate(() => { const P = window.__plnTeste.PLN(), M = window.__mcadTeste;
+      return { modo: P.modo, pts: P.chapa.pontos.map(p => Math.round(p.x) + ',' + Math.round(p.y)).join(' '), dob: M.dobrasPeca(), fur: M.furosPeca() }; });
+    r.ortho = [antes, depois];
+  } catch (e) { r = { erro: e.message }; }
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  t.ok('contorno por absoluto, relativo e polar', !r.erro && r.modo === 'chapa' && r.pts === '0,0 300,0 300,120 243,177 143,177 0,180', J);
+  t.ok('dobra paralela ao lado de baixo, a 40 mm na chapa', r.dob && r.dob.length === 1 && r.dob[0].lado === 0 && r.dob[0].naChapa === 40 && r.dob[0].sent === 1, J);
+  t.ok('furo Ø12 no lugar desenhado', r.fur && r.fur.length === 1 && r.fur[0].x === 60 && r.fur[0].y === 80 && r.fur[0].d === 12, J);
+  t.ok('botão ORTHO liga e desliga', r.ortho && r.ortho[0] === true && r.ortho[1] === false, J);
+  t.ok('sem erro na página', !erros.length, J);
+  await ctx.close();
+});
+
+teste('leitor-pln-minicad-offset', async (b, t) => {
+  // OFFSET como no AutoCAD: distância, o lado da chapa e para onde. Para fora
+  // e "Dobra", a chapa ganha uma aba dessa largura e a borda antiga vira a
+  // dobra; para dentro, linhas de construção -- e o furo vai no cruzamento.
+  if (!fs.existsSync(path.join(RAIZ, 'leitor_dwg'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'leitor_dwg' }); await semLogin(pg);
+  await pg.click('[data-aba="pln"]').catch(() => {}); await pg.waitForTimeout(500);
+  await pg.click('[data-pln-grupo="chapa"]').catch(() => {}); await pg.waitForTimeout(300);
+  let r;
+  try {
+    await pg.click('#mcadAbrir'); await pg.waitForTimeout(300);
+    const cmd = async c => { await pg.fill('#mcadIn', c); await pg.press('#mcadIn', 'Enter'); };
+    for (const c of ['RET', '0,0', '@300,120',
+      'OFFSET', '40', '150,120', '150,200', 'D', '90', 'C', '',
+      'O', '30', '0,60', '50,60', 'C', '',
+      'OFFSET', '25', '150,0', '150,10', '', '']) await cmd(c);
+    const meio = await pg.evaluate(() => { const M = window.__mcadTeste;
+      return { pts: M.D.pts.map(p => Math.round(p.x) + ',' + Math.round(p.y)).join(' '), aux: M.D.aux.length, dob: M.D.dobras.map(d => [d.a.y, d.b.y, d.ang, d.sent].join('/')),
+        snap: (() => { M.V.esc = 3; const s = M.snap(31.4, 26.1); return Math.round(s.p.x * 10) / 10 + ',' + Math.round(s.p.y * 10) / 10 + ' ' + s.marca; })() }; });
+    for (const c of ['FURO', '30,25', '10', 'APLICAR']) await cmd(c);
+    await pg.waitForTimeout(400);
+    r = await pg.evaluate(() => { const P = window.__plnTeste.PLN(), M = window.__mcadTeste;
+      return { pts: P.chapa.pontos.map(p => Math.round(p.x) + ',' + Math.round(p.y)).join(' '), dob: M.dobrasPeca(), fur: M.furosPeca(),
+        botao: !!document.querySelector('[data-mcad="OFFSET"]') }; });
+    await cmd('APAGAR'); await cmd('L');
+    r.auxDepois = await pg.evaluate(() => window.__mcadTeste.D.aux.length);
+    r.meio = meio;
+  } catch (e) { r = { erro: e.message }; }
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  t.ok('offset de 40 para fora: a chapa cresce uma aba de 40 (300×160)', !r.erro && r.meio.pts === '0,0 300,0 300,160 0,160', J);
+  t.ok('e a borda antiga (y=120) vira dobra de 90° para cima', !r.erro && r.meio.dob.length === 1 && r.meio.dob[0] === '120/120/90/1', J);
+  t.ok('para dentro: duas linhas de construção, e o OSNAP pega o cruzamento', !r.erro && r.meio.aux === 2 && r.meio.snap === '30,25 int', J);
+  t.ok('na peça: contorno 300×160, dobra a 40 do lado de cima, furo Ø10 no cruzamento', !r.erro && r.pts === '0,0 300,0 300,160 0,160' && r.dob.length === 1 && r.dob[0].naChapa === 40 && r.fur.length === 1 && r.fur[0].x === 30 && r.fur[0].y === 25 && r.fur[0].d === 10, J);
+  t.ok('botão Offset na barra; APAGAR L tira as linhas de construção', !r.erro && r.botao && r.auxDepois === 0, J);
+  t.ok('sem erro na página', !erros.length, J);
+  await ctx.close();
+});
+
+teste('leitor-fechamento-acessorios', async (b, t) => {
+  // o fechamento só listava telha: parafuso era contado à mão
+  if (!fs.existsSync(path.join(RAIZ, 'leitor_dwg'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'leitor_dwg' }); await semLogin(pg);
+  await pg.click('[data-aba="tel"]').catch(() => {}); await pg.waitForTimeout(600);
+  await pg.setInputFiles('#tlhSkpDiretoFile', fechamentoTeste('parede_acess')); await pg.waitForTimeout(1500);
+  const r = await pg.evaluate(() => [...document.querySelectorAll('#tlAcess tbody tr')].map(tr => [...tr.cells].slice(0, 3).map(c => c.innerText.trim()).join(' | '))).catch(e => ['erro ' + e.message]);
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  // rufo de topo, cantoneira de canto e arremate de base/pingadeira saíram
+  // da lista a pedido: não são itens que a RM leva junto do fechamento
+  t.ok('sem rufo, cantoneira de canto e arremate de pingadeira', r.length > 0 && !r.some(x => /^(Rufo|Cantoneira|Arremate)/.test(x)), J);
+  t.ok('parafusos pela área', r.some(x => /^Parafusos.*\| — \| \d+$/.test(x)), J);
+  t.ok('sem erro na página', !erros.length, J);
+  await ctx.close();
+});
+
+/* cobertura fictícia do SketchUp: duas águas de 10 m com cumeeira comum */
+function coberturaDuasAguas(nome, larg) {
+  const W = larg || 10000;
+  const R = [[0, 5000, 1000], [W, 5000, 1000]];
+  const k = Math.hypot(1000, 5000);
+  const face = (n, base) => ({ id: 'skp-' + n, name: n, path: n, holes: [], material: '',
+    normal: [0, (base ? 1000 : -1000) / k, 5000 / k], area_m2: W * k / 1e6,
+    outer: [[0, base, 0], [W, base, 0], R[1], R[0]],
+    edges: [{ id: n + '-e0', a: [0, base, 0], b: [W, base, 0], shared: false },
+      { id: n + '-e1', a: [W, base, 0], b: R[1], shared: false },
+      { id: n + '-e2', a: R[1], b: R[0], shared: true },
+      { id: n + '-e3', a: R[0], b: [0, base, 0], shared: false }] });
+  const d = { format: 'RM_COBERTURA_SKETCHUP', version: 1, units: 'mm', model: 'Teste cumeeira', faces: [face('AGUA SUL', 0), face('AGUA NORTE', 10000)] };
+  const dir = path.join(require('os').tmpdir(), 'rm-testes-leitor'); fs.mkdirSync(dir, { recursive: true });
+  const f = path.join(dir, nome + '.rmcob'); fs.writeFileSync(f, JSON.stringify(d)); return f;
+}
+
+teste('leitor-cobertura-util-pequena', async (b, t) => {
+  // relatório de erros: "Maximum call stack size exceeded" em
+  // calculaCoberturaPlanta. A conta roda a cada tecla: ao digitar 980 na
+  // largura útil ela passava por "9" e o telhado virava milhares de faixas
+  // de 9 mm (tela travada; a lista estourava a pilha no Math.min(...)).
+  if (!fs.existsSync(path.join(RAIZ, 'leitor_dwg'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'leitor_dwg' }); await semLogin(pg);
+  const digita = v => pg.evaluate(v => { const i = document.getElementById('cobUtil'); i.value = v; i.dispatchEvent(new Event('input', { bubbles: true })); }, v);
+  let r = {};
+  try { await pg.click('[data-aba="tel"]').catch(() => {}); await pg.waitForTimeout(400);
+    await pg.setInputFiles('#cobSkpDiretoFile', coberturaDuasAguas('util_pequena')); await pg.waitForTimeout(2000);
+    const t0 = Date.now(); await digita('9'); r.ms = Date.now() - t0;
+    r.nove = await pg.evaluate(() => { const c = window.rmCobertura.calcular(); return { ok: c.ok, erros: c.erros }; });
+    await digita('980');
+    r.certo = await pg.evaluate(() => { const c = window.rmCobertura.calcular(); return { ok: c.ok, faixas: c.faixas }; });
+    // desenho em outra unidade: 2 km de telhado não vira 2 mil faixas
+    await pg.setInputFiles('#cobSkpDiretoFile', coberturaDuasAguas('util_km', 2000000)); await pg.waitForTimeout(2000); await digita('980');
+    r.km = await pg.evaluate(() => { const c = window.rmCobertura.calcular(); return { ok: c.ok, erros: c.erros }; });
+  } catch (e) { r.erro = e.message; }
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  t.ok('útil de 9 mm (meio da digitação) não calcula: avisa e não trava', !r.erro && r.nove && r.nove.ok === false && /pequena demais/.test((r.nove.erros || []).join(' ')) && r.ms < 3000, J);
+  t.ok('terminada a digitação (980) volta a calcular', r.certo && r.certo.ok === true && r.certo.faixas > 0, J);
+  t.ok('2 km de largura: pede para conferir a unidade do desenho', r.km && r.km.ok === false && /unidade do desenho/.test((r.km.erros || []).join(' ')), J);
+  t.ok('sem erro na página', !erros.length, J);
+  await ctx.close();
+});
+
+teste('leitor-fechamento-3d-troca-rotulo', async (b, t) => {
+  // relatório de erros: "Failed to execute 'remove' on 'Element'" em
+  // tlh3dFechaEdicaoRotulo. Com o campo de um rótulo aberto, clicar no
+  // rótulo de outra face fechava o campo; o blur desse fechamento gravava e
+  // fechava de novo, e o primeiro remove achava o campo já fora da tela.
+  if (!fs.existsSync(path.join(RAIZ, 'leitor_dwg'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'leitor_dwg' }); await semLogin(pg);
+  const r = {};
+  try {
+    await pg.click('[data-aba="tel"]').catch(() => {}); await pg.waitForTimeout(400);
+    await pg.setInputFiles('#tlhSkpDiretoFile', fechamentoTeste('troca_rotulo', true)); await pg.waitForTimeout(1500);
+    await pg.evaluate(() => document.getElementById('tl3d').click()); await pg.waitForTimeout(900);
+    const rot = await pg.evaluate(() => window.rmFechamento3D.rotulosNaTela());
+    r.n = rot.length;
+    // o toque no canvas (pointerdown com preventDefault: o foco fica no campo)
+    const toca = q => pg.evaluate(q => { const cv = document.getElementById('tl3cv'), o = { bubbles: true, clientX: q.x, clientY: q.y, pointerId: 1, button: 0, isPrimary: true };
+      cv.dispatchEvent(new PointerEvent('pointerdown', o)); cv.dispatchEvent(new PointerEvent('pointerup', o)); }, q);
+    await toca(rot[0]); await pg.waitForTimeout(200);
+    r.aberto1 = await pg.evaluate(() => (document.getElementById('tl3editNome') || {}).value || null);
+    await toca(rot[1]); await pg.waitForTimeout(300);
+    r.aberto2 = await pg.evaluate(() => (document.getElementById('tl3editNome') || {}).value || null);
+    r.campos = await pg.evaluate(() => document.querySelectorAll('.d3editnome').length);
+    r.nomes = rot.map(x => x.nome);
+  } catch (e) { r.erro = e.message; }
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  t.ok('abre o campo do 1º rótulo', !r.erro && r.n >= 2 && r.aberto1 === r.nomes[0], J);
+  t.ok('clicar no 2º rótulo troca o campo, sem erro', r.aberto2 === r.nomes[1] && r.campos === 1 && !erros.length, J);
+  await ctx.close();
+});
+
+teste('leitor-cobertura-cumeeira', async (b, t) => {
+  // a cobertura listava só as telhas: a cumeeira (peça do tamanho da largura
+  // útil, aba de 300 mm em cada água) era contada à mão
+  if (!fs.existsSync(path.join(RAIZ, 'leitor_dwg'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'leitor_dwg' }); await semLogin(pg);
+  let skp = {};
+  try { await pg.click('[data-aba="tel"]').catch(() => {}); await pg.waitForTimeout(400);
+    await pg.setInputFiles('#cobSkpDiretoFile', coberturaDuasAguas('cumeeira')); await pg.waitForTimeout(2000);
+    await pg.evaluate(() => { const i = document.getElementById('cobUtil'); if (i) { i.value = '980'; i.dispatchEvent(new Event('input', { bubbles: true })); } });
+    skp = await pg.evaluate(() => { const C = window.rmCobertura; C.estado.util = 980; const c = C.cumeeira();
+      return c ? { pecas: c.pecas, rel: C.relevo && C.relevo(), ordem: C.relevo && (C.relevo() || {}).ordemCum, L: Math.round(c.trechos.reduce((s, x) => s + x.L, 0)), painel: (document.getElementById('cobCumPainel') || {}).innerText || '' } : { erro: 'nulo' }; });
+  } catch (e) { skp = { erro: e.message }; }
+  const med = await pg.evaluate(() => { const C = window.rmCobertura; if (!C || !C.cumeeira) return { erro: 'sem cumeeira' };
+    Object.assign(C.estado, { leitura: 'corte', aguas: 2, comprimento: 12000, projA: 5000, desnA: 500, projB: 5000, desnB: 500, util: 980, estruturas: 1 });
+    const duas = C.cumeeira(); C.estado.aguas = 1; const uma = C.cumeeira(); C.estado.aguas = 2;
+    const cr = C.cristas()[0], tg = C.gomosTelha(), rel = C.relevo && C.relevo(), ordem = rel && rel.ordemCum;
+    return { duas: duas && { pecas: duas.pecas, util: duas.util, aba: duas.aba, tipo: duas.tipo }, uma: uma && { pecas: uma.pecas, umaAgua: uma.umaAgua },
+      g1: cr && cr.pecas[0].gomos.map(Math.round).join(','), gUlt: cr && cr.pecas[cr.pecas.length - 1].gomos.map(Math.round).join(','),
+      gTelha: tg.flatMap(f => f.gomos).map(Math.round).join(','), gCum: cr && cr.pecas.flatMap(p => p.gomos).map(Math.round).join(','), rel, ordem }; }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify({ med, skp }) + ' ' + erros.join(' | ');
+  t.ok('por medidas: 12 m de cumeeira ÷ 980 = 13 peças TP-40, aba 300', !med.erro && med.duas.pecas === 13 && med.duas.util === 980 && med.duas.aba === 300 && med.duas.tipo === 'TP-40', J);
+  t.ok('uma água só não leva cumeeira', med.uma && med.uma.pecas === 0 && med.uma.umaAgua, J);
+  // a cumeeira acompanha o gomo da telha: TP-40 tem gomo a cada 196 mm
+  t.ok('gomos da cumeeira caem nos gomos da telha (98, 294, 490, 686, 882…)', med.g1 === '98,294,490,686,882' && med.gCum === med.gTelha && /^11858$/.test(med.gUlt), J);
+  // a telha também tem o gomo em relevo no 3D, igual ao da cumeeira
+  t.ok('3D por medidas: cada gomo da telha em relevo nas duas águas, 40 mm', med.rel && med.rel.gomos === 2 * med.gTelha.split(',').length && med.rel.altura === 40 && med.rel.faces >= 3 * med.rel.gomos, J);
+  // a aba lisa da peça cobria parte dos gomos dela no 3D (vão sem gomo na
+  // cumeeira): a aba vai sempre por baixo, os gomos por cima
+  t.ok('3D: nenhum gomo da cumeeira fica por baixo da aba', skp.ordem && /^b+g+$/.test(skp.ordem) && /^b+g+$/.test(med.ordem || ''), J);
+  // o gomo da cumeeira é um só, dobrando por cima da cumeeira: o gomo de uma
+  // água encontra o da outra no mesmo ponto (antes cada água tinha o seu e
+  // eles se desencontravam na linha da cumeeira)
+  t.ok('3D: gomo da cumeeira contínuo de uma água à outra', skp.rel && skp.rel.juntaCum != null && skp.rel.juntaCum < 0.5 && med.rel && med.rel.juntaCum != null && med.rel.juntaCum < 0.5, J);
+  // a cumeeira assenta na telha, não flutua acima dela
+  t.ok('3D: cumeeira assentada na telha', skp.rel && skp.rel.liftCum != null && skp.rel.liftCum <= 5, J);
+  t.ok('3D do SketchUp: gomos em relevo nas duas águas', skp.rel && skp.rel.gomos >= 100 && skp.rel.altura === 40, J);
+  t.ok('SketchUp: a aresta comum de 10 m vira 11 peças', !skp.erro && skp.L === 10000 && skp.pecas === 11, J);
+  t.ok('painel da cobertura mostra a cumeeira', /Cumeeira TP-40/.test(skp.painel || '') && /11\s*peças de 980 mm/.test(skp.painel || '') && /aba de 300 mm/.test(skp.painel || ''), J);
+  t.ok('sem erro na página', !erros.length, J);
+  await ctx.close();
+});
+
+teste('leitor-3d-fundo-engenharia', async (b, t) => {
+  // os 3D tinham fundo liso, sem referência: agora têm piso quadriculado,
+  // eixos e escala, em 3 estilos (escuro, claro, blueprint) trocados por um
+  // botão que vale para todos os 3D e fica lembrado
+  if (!fs.existsSync(path.join(RAIZ, 'leitor_dwg'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'leitor_dwg' }); await semLogin(pg);
+  const U = () => pg.evaluate(() => JSON.parse(JSON.stringify((window.RM3D && window.RM3D.ultimo) || {}))).catch(() => ({}));
+  const r = {};
+  try {
+    await pg.click('[data-aba="tel"]').catch(() => {}); await pg.waitForTimeout(400);
+    await pg.setInputFiles('#cobSkpDiretoFile', coberturaDuasAguas('fundo3d')); await pg.waitForTimeout(1800);
+    await pg.evaluate(() => { window.rmCobertura.estado.util = 980; const c = document.getElementById('cobConfirmar'); if (c) c.click(); });
+    await pg.waitForTimeout(400);
+    await pg.evaluate(() => document.getElementById('cob3d').click()); await pg.waitForTimeout(900);
+    r.cob1 = (await U()).cobertura;
+    r.botaoCob = await pg.evaluate(() => !!document.querySelector('#cob3ov [data-fundo3d]'));
+    await pg.evaluate(() => document.querySelector('#cob3ov [data-fundo3d]').click()); await pg.waitForTimeout(500);
+    r.cob2 = (await U()).cobertura;
+    r.salvo = await pg.evaluate(() => localStorage.getItem('rm_3d_fundo'));
+    r.pixel = await pg.evaluate(() => { const c = document.getElementById('cob3cv'); return [...c.getContext('2d').getImageData(Math.round(c.width / 2), 2, 1, 1).data].slice(0, 3); });
+    await pg.evaluate(() => document.getElementById('cob3close').click()); await pg.waitForTimeout(300);
+    await pg.setInputFiles('#tlhSkpDiretoFile', fechamentoTeste('fundo3d_parede')); await pg.waitForTimeout(1500);
+    await pg.evaluate(() => document.getElementById('tl3d').click()); await pg.waitForTimeout(900);
+    r.fech = (await U()).fechamento;
+    r.botaoFech = await pg.evaluate(() => !!document.querySelector('#tl3ov [data-fundo3d]'));
+    await pg.evaluate(() => document.getElementById('tl3x').click()); await pg.waitForTimeout(300);
+    await pg.click('[data-aba="pln"]').catch(() => {}); await pg.waitForTimeout(500);
+    r.pln = await pg.evaluate(async () => { const T = window.__plnTeste; if (!T || !T.pinta3D) return { erro: 'sem gancho' };
+      document.querySelector('[data-pln-grupo="l"]').click(); await new Promise(x => setTimeout(x, 200));
+      T.PLN().trechos = [50, 50]; T.PLN().comp = 1000; T.pinta3D(); await new Promise(x => setTimeout(x, 200));
+      const box = document.getElementById('plnVista3D');
+      return { u: (window.RM3D.ultimo || {}).planificacao, chao: !!(box && box.querySelector('.pln-chao')), botao: !!document.querySelector('#pane-pln [data-fundo3d]') }; });
+  } catch (e) { r.erro = e.message; }
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  t.ok('cobertura: piso, eixos e escala no estilo escuro', !r.erro && r.cob1 && r.cob1.estilo === 'escuro' && r.cob1.grade > 0 && r.cob1.escala > 0 && r.botaoCob, J);
+  t.ok('botão troca para o claro, redesenha e lembra', r.cob2 && r.cob2.estilo === 'claro' && r.salvo === 'claro' && r.pixel && r.pixel[0] > 225, J);
+  t.ok('fechamento: mesmo estilo, com piso e botão', r.fech && r.fech.estilo === 'claro' && r.fech.grade > 0 && r.botaoFech, J);
+  t.ok('planificação: mesmo estilo, com piso e botão', r.pln && r.pln.u && r.pln.u.estilo === 'claro' && r.pln.chao && r.pln.botao, J);
+  t.ok('sem erro na página', !erros.length, J);
+  await ctx.close();
+  // detalhamento
+  const L = await leitorImporta(b, trelicaTeste('fundo3d_trelica'));
+  const d = await L.pg.evaluate(async () => { document.getElementById('detalhar').click(); await new Promise(x => setTimeout(x, 500));
+    const bt = document.getElementById('dt3d'); if (!bt) return { erro: 'sem botão 3D' }; bt.click(); await new Promise(x => setTimeout(x, 800));
+    const u1 = (window.RM3D.ultimo || {}).detalhamento, b3 = document.querySelector('#d3ov [data-fundo3d]');
+    if (b3) b3.click(); await new Promise(x => setTimeout(x, 500));
+    return { u1, u2: (window.RM3D.ultimo || {}).detalhamento, botao: !!b3 }; }).catch(e => ({ erro: e.message }));
+  const J2 = JSON.stringify(d) + ' ' + L.erros.join(' | ');
+  t.ok('detalhamento: piso, eixos e escala, e o botão troca o estilo', !d.erro && d.u1 && d.u1.estilo === 'escuro' && d.u1.grade > 0 && d.u1.escala > 0 && d.u2 && d.u2.estilo === 'claro' && d.botao, J2);
+  t.ok('sem erro na página (detalhamento)', !L.erros.length, J2);
+  await L.ctx.close();
+});
+
+teste('leitor-3d-para-enviar', async (b, t) => {
+  // o "3D para enviar" leva o código do desenho junto: com o fundo de
+  // engenharia (RM3D) fora do arquivo, o 3D enviado quebrava ao abrir
+  if (!fs.existsSync(path.join(RAIZ, 'leitor_dwg'))) return;
+  const abreHtml = async (html) => { const pg2 = await b.newPage(); const er = []; pg2.on('pageerror', e => er.push(e.message));
+    await pg2.setContent(html, { waitUntil: 'load' }).catch(e => er.push(e.message)); await pg2.waitForTimeout(900);
+    const r = await pg2.evaluate(async () => { const u1 = JSON.parse(JSON.stringify((window.RM3D && window.RM3D.ultimo) || {}));
+      const bt = document.querySelector('[data-fundo3d]'); if (bt) bt.click(); await new Promise(x => setTimeout(x, 400));
+      return { u1, u2: JSON.parse(JSON.stringify((window.RM3D && window.RM3D.ultimo) || {})), botao: !!bt }; }).catch(e => ({ erro: e.message }));
+    await pg2.close(); return { ...r, er }; };
+  const baixa = async (pg, sel) => { const [dl] = await Promise.all([pg.waitForEvent('download', { timeout: 8000 }), pg.evaluate(s => document.getElementById(s).click(), sel)]);
+    return fs.readFileSync(await dl.path(), 'utf8'); };
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'leitor_dwg' }); await semLogin(pg);
+  let f = {};
+  try { await pg.click('[data-aba="tel"]').catch(() => {}); await pg.waitForTimeout(400);
+    await pg.setInputFiles('#tlhSkpDiretoFile', fechamentoTeste('enviar_parede')); await pg.waitForTimeout(1500);
+    await pg.evaluate(() => document.getElementById('tl3d').click()); await pg.waitForTimeout(700);
+    f = await abreHtml(await baixa(pg, 'tl3exp'));
+  } catch (e) { f = { erro: e.message }; }
+  const J = JSON.stringify(f) + ' ' + erros.join(' | ');
+  t.ok('fechamento: o 3D enviado abre sem erro, com piso e eixos', !f.erro && !(f.er || []).length && f.u1 && f.u1.fechamento && f.u1.fechamento.grade > 0, J);
+  t.ok('fechamento: o 3D enviado tem o botão de fundo', f.botao && f.u2 && f.u2.fechamento && f.u2.fechamento.estilo === 'claro', J);
+  await ctx.close();
+  const L = await leitorImporta(b, trelicaTeste('enviar_trelica'));
+  let d = {};
+  try { await L.pg.evaluate(async () => { document.getElementById('detalhar').click(); await new Promise(x => setTimeout(x, 500)); document.getElementById('dt3d').click(); });
+    await L.pg.waitForTimeout(800);
+    d = await abreHtml(await baixa(L.pg, 'd3exp'));
+  } catch (e) { d = { erro: e.message }; }
+  const J2 = JSON.stringify(d) + ' ' + L.erros.join(' | ');
+  t.ok('detalhamento: o 3D enviado abre sem erro, com piso e eixos', !d.erro && !(d.er || []).length && d.u1 && d.u1.detalhamento && d.u1.detalhamento.grade > 0, J2);
+  t.ok('detalhamento: o 3D enviado tem o botão de fundo', d.botao && d.u2 && d.u2.detalhamento && d.u2.detalhamento.estilo === 'claro', J2);
+  await L.ctx.close();
+});
+
+teste('leitor-cobertura-cumeeira-orcamento', async (b, t) => {
+  // a cumeeira vai ao Orçamento ligada ao cadastro: mesmo perfil (TP-40) e
+  // a mesma espessura da telha escolhida (0,50), peça = largura útil
+  if (!fs.existsSync(path.join(RAIZ, 'leitor_dwg'))) return;
+  const db = { densidade: 8000, perfis: [], fornecedores: [], categorias: [], telhas: [
+    { id: 'tt', cat: 'TELHAS', desc: 'TELHA TP-40 0,50MM - ML', preco: 60 },
+    { id: 'c43', cat: 'CUMEEIRAS', desc: 'CUMEEIRA TP-40 - 0,43MM X 700MM', preco: 38 },
+    { id: 'c50', cat: 'CUMEEIRAS', desc: 'CUMEEIRA TP-40 - 0,50MM X 700MM', preco: 45 },
+    { id: 'o50', cat: 'CUMEEIRAS', desc: 'CUMEEIRA ONDULADA - 0,50MM X 700MM', preco: 45 }] };
+  const antes = 'try{localStorage.setItem("rm_orc_db_v1",' + JSON.stringify(JSON.stringify(db)) + ')}catch(e){}';
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'leitor_dwg' }, 'index.html', { antes }); await semLogin(pg);
+  let d = null;
+  try {
+    await pg.click('[data-aba="tel"]').catch(() => {}); await pg.waitForTimeout(400);
+    await pg.setInputFiles('#cobSkpDiretoFile', coberturaDuasAguas('cumeeira_orc')); await pg.waitForTimeout(2000);
+    await pg.evaluate(() => { const C = window.rmCobertura; C.estado.orcTelhaId = 'tt'; C.estado.util = 1000; C.estado.confirmada = true; });
+    const [dl] = await Promise.all([pg.waitForEvent('download', { timeout: 8000 }), pg.evaluate(() => { const bt = document.getElementById('cobOrc'); bt.disabled = false; bt.click(); })]);
+    d = JSON.parse(fs.readFileSync(await dl.path(), 'utf8'));
+  } catch (e) { d = { erro: e.message }; }
+  const J = JSON.stringify(d && (d.linhasTelha || d)) + ' ' + erros.join(' | ');
+  const cum = ((d && d.linhasTelha) || []).find(l => /^c|^o/.test(l.telhaId));
+  t.ok('cumeeira TP-40 0,50 do cadastro, 10 peças de 1.000 mm', cum && cum.telhaId === 'c50' && cum.qtd === 10 && cum.comp === 1000, J);
+  t.ok('sem erro na página', !erros.length, J);
+  await ctx.close();
+});
+
+teste('leitor-cobertura-topo-escolha', async (b, t) => {
+  // "a cumeeira ou rufo precisa ser opção de escolha: o sistema define
+  // automaticamente, quero definir, ver no 3D e gerar as quantidades" --
+  // antes só aparecia "o topo leva rufo, não cumeeira", sem rufo nenhum
+  if (!fs.existsSync(path.join(RAIZ, 'leitor_dwg'))) return;
+  const db = { densidade: 8000, perfis: [], fornecedores: [], categorias: [], telhas: [{ id: 'tt', cat: 'TELHAS', desc: 'TELHA TP-40 0,50MM - ML', preco: 60 }] };
+  const antes = 'try{localStorage.setItem("rm_orc_db_v1",' + JSON.stringify(JSON.stringify(db)) + ')}catch(e){}';
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'leitor_dwg' }, 'index.html', { antes }); await semLogin(pg);
+  let r = {}, d = null;
+  try {
+    await pg.click('[data-aba="tel"]').catch(() => {}); await pg.waitForTimeout(400);
+    await pg.setInputFiles('#cobSkpDiretoFile', coberturaDuasAguas('topo_escolha')); await pg.waitForTimeout(2000);
+    r = await pg.evaluate(async () => {
+      const esp = ms => new Promise(x => setTimeout(x, ms)), C = window.rmCobertura;
+      C.estado.util = 980; C.estado.confirmada = true; C.estado.orcTelhaId = 'tt';
+      const out = {};
+      const a = C.cumeeira(); out.auto = { linhas: (a.linhas || []).map(l => l.tipo + '/' + l.auto), cum: a.pecas, rufo: a.rufo && a.rufo.pecas };
+      // escolhe rufo na linha de topo, pelo próprio painel
+      const sel = document.querySelector('#cobCumPainel select[data-cob-topo]');
+      out.temSelect = !!sel;
+      if (sel) { sel.value = 'rufo'; sel.dispatchEvent(new Event('change', { bubbles: true })); await esp(300); }
+      const r1 = C.cumeeira(); out.rufo = { cum: r1.pecas, pecas: r1.rufo && r1.rufo.pecas, metros: r1.rufo && Math.round(r1.rufo.metros * 100) / 100 };
+      out.painel = (document.getElementById('cobCumPainel') || {}).innerText || '';
+      const rel = C.relevo && C.relevo(); out.rufo3d = rel && rel.rufoQuads;
+      out.salvo = /"topos":\{[^}]*rufo/.test(localStorage.getItem('rm_cobertura_cfg_v1') || '');
+      return out;
+    });
+    const [dl] = await Promise.all([pg.waitForEvent('download', { timeout: 8000 }), pg.evaluate(() => { const bt = document.getElementById('cobOrc'); bt.disabled = false; bt.click(); })]);
+    d = JSON.parse(fs.readFileSync(await dl.path(), 'utf8'));
+    // uma água só, por medidas: o automático é rufo; forçando cumeeira, vira cumeeira de um lado
+    r.uma = await pg.evaluate(() => { const C = window.rmCobertura;
+      Object.assign(C.estado, { leitura: 'corte', aguas: 1, comprimento: 12000, projA: 5000, desnA: 500, util: 980, estruturas: 1, topos: {} });
+      const a = C.cumeeira(); const k = a.linhas[0] && a.linhas[0].key;
+      C.estado.topos = { [k]: 'cumeeira' }; const f = C.cumeeira();
+      C.estado.topos = { [k]: 'nada' }; const n = C.cumeeira();
+      const rel = C.relevo && C.relevo(); C.estado.topos = {};
+      return { auto: a.linhas.map(l => l.tipo).join(), rufoAuto: a.rufo.pecas, cumForcada: f.pecas, nada: n.pecas + n.rufo.pecas }; });
+  } catch (e) { r.erro = e.message; }
+  const av = ((d && d.linhasAvulso) || []).map(x => x.nome + ' ' + x.qtd).join(' | ');
+  const J = JSON.stringify({ r, av }) + ' ' + erros.join(' | ');
+  t.ok('duas águas: o sistema sugere cumeeira', !r.erro && r.auto && r.auto.linhas.join() === 'cumeeira/cumeeira' && r.auto.cum > 0, J);
+  t.ok('o painel tem a escolha por linha de topo', r.temSelect === true, J);
+  t.ok('escolhendo rufo: sai a cumeeira, entra rufo de 10 m em 4 peças de 3 m', r.rufo && r.rufo.cum === 0 && r.rufo.pecas === 4 && r.rufo.metros === 10 && /rufo/i.test(r.painel), J);
+  t.ok('o rufo aparece no 3D', r.rufo3d > 0, J);
+  t.ok('a escolha fica salva', r.salvo === true, J);
+  t.ok('o rufo vai ao Orçamento', /Rufo[^|]* 4(\s*\||$)/.test(av), J);
+  t.ok('uma água: o automático é rufo; forçando, cumeeira de 13 peças; "nada" zera', r.uma && r.uma.auto === 'rufo' && r.uma.rufoAuto === 5 && r.uma.cumForcada === 13 && r.uma.nada === 0, J);
+  t.ok('sem erro na página', !erros.length, J);
+  await ctx.close();
+});
+
+teste('leitor-cobertura-parafusos', async (b, t) => {
+  // "por que a quantidade de parafusos só no fechamento e não na cobertura?"
+  // -- os acessórios nasceram no fechamento e a cobertura ficou sem: agora
+  // a cobertura tem a taxa por m² (editável, gravada) e os parafusos saem na
+  // tela, no pedido impresso e no Orçamento
+  if (!fs.existsSync(path.join(RAIZ, 'leitor_dwg'))) return;
+  const db = { densidade: 8000, perfis: [], fornecedores: [], categorias: [], telhas: [{ id: 'tt', cat: 'TELHAS', desc: 'TELHA TP-40 0,50MM - ML', preco: 60 }] };
+  const antes = 'try{localStorage.setItem("rm_orc_db_v1",' + JSON.stringify(JSON.stringify(db)) + ')}catch(e){}';
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'leitor_dwg' }, 'index.html', { antes }); await semLogin(pg);
+  let r = {}, d = null;
+  try {
+    await pg.click('[data-aba="tel"]').catch(() => {}); await pg.waitForTimeout(400);
+    await pg.setInputFiles('#cobSkpDiretoFile', coberturaDuasAguas('parafusos_cob')); await pg.waitForTimeout(2000);
+    r = await pg.evaluate(async () => {
+      const esp = ms => new Promise(x => setTimeout(x, ms)), C = window.rmCobertura;
+      C.estado.util = 980; C.estado.confirmada = true; C.estado.orcTelhaId = 'tt';
+      const area = C.calcular().areaPedido, box = () => ((document.getElementById('cobAcess') || {}).innerText || '').replace(/\s+/g, ' ');
+      const taxa = v => { const inp = document.querySelector('#cobAcess input[data-cob-paraf]'); if (inp) { inp.value = v; inp.dispatchEvent(new Event('change', { bubbles: true })); } return !!inp; };
+      const out = { area };
+      out.temCampo = taxa('3'); await esp(300); out.tela3 = box();
+      taxa('5'); await esp(300);
+      out.tela5 = box();
+      out.salvo = /"parafM2":5/.test(localStorage.getItem('rm_cobertura_cfg_v1') || '');
+      return out;
+    });
+    const [dl] = await Promise.all([pg.waitForEvent('download', { timeout: 8000 }), pg.evaluate(() => { const bt = document.getElementById('cobOrc'); bt.disabled = false; bt.click(); })]);
+    d = JSON.parse(fs.readFileSync(await dl.path(), 'utf8'));
+  } catch (e) { r.erro = e.message; }
+  const av = ((d && d.linhasAvulso) || []).map(x => x.nome + ' ' + x.qtd).join(' | ');
+  const q3 = Math.ceil((r.area || 0) * 3), q5 = Math.ceil((r.area || 0) * 5);
+  const J = JSON.stringify({ r, av, q3, q5 }) + ' ' + erros.join(' | ');
+  t.ok('a cobertura tem o campo de parafusos por m²', !r.erro && r.temCampo === true, J);
+  t.ok('padrão de 3 por m² de telha pedida', !r.erro && r.area > 0 && new RegExp('\\b' + q3 + '\\b').test(r.tela3) && /parafuso/i.test(r.tela3), J);
+  t.ok('mudando a taxa, a quantidade muda e fica gravada', !r.erro && new RegExp('\\b' + q5 + '\\b').test(r.tela5) && r.salvo, J);
+  t.ok('os parafusos vão ao Orçamento', /Parafusos/.test(av) && new RegExp('Parafusos[^|]* ' + q5 + '(\\s|$)').test(av), J);
+  t.ok('sem erro na página', !erros.length, J);
+  await ctx.close();
+});
+
+teste('leitor-cobertura-dxf-arranjo', async (b, t) => {
+  // "por que o DXF gerado não se organiza conforme o projeto?" -- dois
+  // galpões de duas águas, lado a lado, saíam em escada: as águas eram
+  // empurradas todas num eixo só, de forma acumulada, até as que estavam em
+  // fileiras diferentes. E os textos saíam em vermelho, ruim de ler.
+  if (!fs.existsSync(path.join(RAIZ, 'leitor_dwg'))) return;
+  const k = Math.hypot(1000, 5000);
+  const face = (n, x0, base) => ({ id: 'skp-' + n, name: n, path: n, holes: [], material: '',
+    normal: [0, (base ? 1000 : -1000) / k, 5000 / k], area_m2: 10000 * k / 1e6,
+    outer: [[x0, base, 0], [x0 + 10000, base, 0], [x0 + 10000, 5000, 1000], [x0, 5000, 1000]], edges: [] });
+  const d = { format: 'RM_COBERTURA_SKETCHUP', version: 1, units: 'mm', model: 'Dois galpoes', faces: [
+    face('G1 SUL', 0, 0), face('G1 NORTE', 0, 10000), face('G2 SUL', 10600, 0), face('G2 NORTE', 10600, 10000)] };
+  const arq = path.join(require('os').tmpdir(), 'rm-testes-leitor', 'dois_galpoes.rmcob');
+  fs.mkdirSync(path.dirname(arq), { recursive: true }); fs.writeFileSync(arq, JSON.stringify(d));
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'leitor_dwg' }); await semLogin(pg);
+  let dxf = '';
+  try { await pg.click('[data-aba="tel"]').catch(() => {}); await pg.waitForTimeout(400);
+    await pg.setInputFiles('#cobSkpDiretoFile', arq); await pg.waitForTimeout(2000);
+    dxf = await pg.evaluate(() => { const C = window.rmCobertura; C.estado.util = 1000; C.estado.confirmada = true; return C.montarDXF(); });
+  } catch (e) { dxf = 'ERRO ' + e.message; }
+  // títulos de cada água (canto de cima, à esquerda) e cor das camadas
+  const L = dxf.split(/\r?\n/).map(x => x.trim()), tit = {}, cor = {};
+  for (let i = 0; i < L.length - 1; i += 2) {
+    if (L[i] === '0' && L[i + 1] === 'TEXT') { const e = {}; let j = i + 2; while (j < L.length - 1 && L[j] !== '0') { e[L[j]] = e[L[j]] || L[j + 1]; j += 2; }
+      const m = /^(G\d (SUL|NORTE))/.exec(e['1'] || ''); if (m && e['8'] === 'RM_TITULO') tit[m[1]] = { x: +e['10'], y: +e['20'] }; }
+    if (L[i] === '0' && L[i + 1] === 'LAYER') { const e = {}; let j = i + 2; while (j < L.length - 1 && L[j] !== '0') { e[L[j]] = e[L[j]] || L[j + 1]; j += 2; } if (e['2']) cor[e['2']] = e['62']; }
+  }
+  const J = JSON.stringify({ tit, cor, erro: /^ERRO/.test(dxf) ? dxf : '' }) + ' ' + erros.join(' | ');
+  const T = n => tit[n] || { x: NaN, y: NaN };
+  t.ok('as quatro águas no DXF', Object.keys(tit).length === 4, J);
+  t.ok('cada galpão numa coluna: norte em cima do sul, alinhados', Math.abs(T('G1 SUL').x - T('G1 NORTE').x) < 1 && T('G1 NORTE').y > T('G1 SUL').y &&
+    Math.abs(T('G2 SUL').x - T('G2 NORTE').x) < 1 && T('G2 NORTE').y > T('G2 SUL').y, J);
+  t.ok('os dois galpões lado a lado, na mesma fileira', T('G2 SUL').x > T('G1 SUL').x + 10000 && Math.abs(T('G2 SUL').y - T('G1 SUL').y) < 1, J);
+  t.ok('textos em branco (cor 7): títulos, códigos, cotas e reaproveitamento', ['RM_TITULO', 'RM_TEXTO', 'RM_COTA'].every(n => cor[n] === '7') && (cor.RM_REAPROVEITA == null || cor.RM_REAPROVEITA === '7'), J);
+  t.ok('sem erro na página', !erros.length, J);
+  await ctx.close();
+});
+
+teste('leitor-cobertura-desenho-tesouras', async (b, t) => {
+  // o telhado desenhado em planta "conforme as tesouras" (as águas já na
+  // medida inclinada), dois galpões lado a lado sem moldura em volta:
+  // · só o maior contorno virava bloco -- o outro galpão sumia
+  // · a inclinação padrão (10%) era aplicada por cima de uma medida que já
+  //   é a inclinada: 6,00 m de água viravam telha de 6,13 m
+  if (!fs.existsSync(path.join(RAIZ, 'leitor_dwg'))) return;
+  const L = (ax, ay, bx, by) => [ax, ay, bx, by, 7, '0', 'LINE'];
+  const arq = dxfTeste('dois_telhados_tesoura', [
+    // galpão 1: 8 x 12 m, cumeeira no meio (os lados partidos na cumeeira, como no desenho real)
+    // a cumeeira 0,4 mm fora do meio, como acontece no desenho real
+    L(0, 6000.4, 8000, 6000.4), L(0, 6000.4, 0, 12000), L(0, 6000.4, 0, 0), L(8000, 6000.4, 8000, 12000), L(8000, 6000.4, 8000, 0),
+    L(8000, 0, 0, 0), L(0, 12000, 8000, 12000),
+    // galpão 2: começa 1 m depois, ponta direita inclinada
+    L(9000, 6000, 19000, 6000), L(9000, 6000, 9000, 12000), L(9000, 6000, 9000, 0), L(9000, 12000, 21000, 12000),
+    L(21000, 12000, 19000, 6000), L(9000, 0, 17000, 0), L(17000, 0, 19000, 6000)], [], 4);
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'leitor_dwg' }); await semLogin(pg);
+  let r = {};
+  try {
+    await pg.click('[data-aba="tel"]').catch(() => {}); await pg.waitForTimeout(400);
+    await pg.setInputFiles('#fileTel', arq); await pg.waitForTimeout(1500);
+    if (await pg.evaluate(() => { const g = document.getElementById('unitGate'); return g && !g.classList.contains('hide'); })) await pg.click('[data-unit-choice="1"]');
+    await pg.waitForTimeout(600);
+    await pg.evaluate(() => { const bt = [...document.querySelectorAll('button')].find(x => x.innerText.trim() === 'Cobertura'); if (bt) bt.click(); }); await pg.waitForTimeout(1500);
+    r = await pg.evaluate(async () => {
+      const esp = ms => new Promise(x => setTimeout(x, ms)), C = window.rmCobertura;
+      const out = { blocos: (C.estado.blocos || []).filter(b => b.contornoValido !== false).map(b => Math.round(Math.min(...b.poligono.map(p => p.x)))) };
+      const cx = document.getElementById('cobVerdadeira'); out.temOpcao = !!cx;
+      if (cx) { cx.checked = true; cx.dispatchEvent(new Event('change', { bubbles: true })); await esp(300); }
+      C.estado.util = 1000; C.estado.confirmada = true;
+      const lista = C.calcular().lista || [];
+      out.retas1 = [...new Set(lista.filter(x => /setor/.test(x.agua) && x.tipo === 'reta' && /BLOCO 1/.test(x.agua)).map(x => x.mm || x.medida))];
+      out.pecas2 = lista.filter(x => /BLOCO 2/.test(x.agua)).reduce((s, x) => s + x.qtd, 0);
+      out.salvo = /"verdadeira":true/.test(localStorage.getItem('rm_cobertura_cfg_v1') || '');
+      out.dxfTit = (C.montarDXF().match(/BLOCO 1 \| [^\n]*/) || [''])[0];
+      const top = C.topo(); out.topo = top.map(l => l.tipo + ':' + Math.round(l.L));
+      return out;
+    });
+  } catch (e) { r.erro = e.message; }
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  t.ok('os dois galpões viram dois blocos, na ordem da esquerda para a direita', !r.erro && r.blocos && r.blocos.length === 2 && r.blocos[0] < r.blocos[1], J);
+  t.ok('a opção "medidas já inclinadas (tesouras)" existe e fica gravada', !r.erro && r.temOpcao && r.salvo, J);
+  t.ok('com ela, a telha é a água do desenho + beiral - folga: 6.000 + 150 - 50 = 6.100 (fração de milímetro do desenho não vira 1 cm a mais)', !r.erro && r.retas1 && r.retas1.length === 1 && r.retas1[0] === 6100, J);
+  t.ok('o segundo galpão também é preenchido', !r.erro && r.pecas2 > 0, J);
+  t.ok('a cumeeira passando pelos cantos do contorno é achada nos dois galpões (8 m e 10 m)', !r.erro && r.topo && r.topo.length === 2 && r.topo.includes('cumeeira:8000') && r.topo.includes('cumeeira:10000'), J);
+  t.ok('o DXF diz que a medida é a das tesouras, não uma inclinação', !r.erro && /MEDIDA DAS TESOURAS/.test(r.dxfTit) && !/INCLINACAO/.test(r.dxfTit), J);
+  t.ok('sem erro na página', !erros.length, J);
+  await ctx.close();
+});
+
+teste('leitor-cobertura-diagonal-ponta-longa', async (b, t) => {
+  // telha com recorte diagonal era comprada pelo EIXO (meio da faixa): a
+  // faixa que vai de 6,00 m numa borda a 4,56 m na outra pedia 5,76 m, e a
+  // telha não chegava na ponta comprida. Comprada pela ponta, a sobra do
+  // recorte (giro de 180°) cobre a faixa estreita da ponta.
+  // E a água mais curta perdia a última faixa: o meio dela caía fora da
+  // água (400 mm junto da cumeeira ficavam sem telha).
+  if (!fs.existsSync(path.join(RAIZ, 'leitor_dwg'))) return;
+  const L = (ax, ay, bx, by) => [ax, ay, bx, by, 7, '0', 'LINE'];
+  const arq = dxfTeste('telhado_diagonal_ponta', [
+    // água de cima: cumeeira 0→10,4 m, beiral 0→12,9 m (diagonal de 2,5 m)
+    // água de baixo: beiral 0→8,4 m, diagonal até a ponta da cumeeira
+    L(0, 6000, 10400, 6000), L(0, 6000, 0, 12000), L(0, 6000, 0, 0), L(0, 12000, 12900, 12000),
+    L(12900, 12000, 10400, 6000), L(0, 0, 8400, 0), L(8400, 0, 10400, 6000)], [], 4);
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'leitor_dwg' }); await semLogin(pg);
+  let r = {};
+  try {
+    await pg.click('[data-aba="tel"]').catch(() => {}); await pg.waitForTimeout(400);
+    await pg.setInputFiles('#fileTel', arq); await pg.waitForTimeout(1500);
+    if (await pg.evaluate(() => { const g = document.getElementById('unitGate'); return g && !g.classList.contains('hide'); })) await pg.click('[data-unit-choice="1"]');
+    await pg.waitForTimeout(600);
+    await pg.evaluate(() => { const bt = [...document.querySelectorAll('button')].find(x => x.innerText.trim() === 'Cobertura'); if (bt) bt.click(); }); await pg.waitForTimeout(1500);
+    r = await pg.evaluate(async () => {
+      const esp = ms => new Promise(x => setTimeout(x, ms)), C = window.rmCobertura;
+      const cx = document.getElementById('cobVerdadeira');
+      if (cx && !cx.checked) { cx.checked = true; cx.dispatchEvent(new Event('change', { bubbles: true })); await esp(300); }
+      Object.assign(C.estado, { util: 1000, beiral: 0, cumeeira: 0, sentido: 'ltr', reaproveitar: true, confirmada: true });
+      const res = C.calcular(), lista = res.lista || [], pecas = {};
+      lista.forEach(x => { pecas[x.mm] = (pecas[x.mm] || 0) + x.qtd; });
+      return { ok: res.ok, pecas, total: res.pecas, reuso: lista.flatMap(x => x.reusoPara || []),
+        faixas: (res.blocos || []).flatMap(bl => bl.setores.map(s => s.faixas.length)).sort((a, z) => a - z) };
+    });
+  } catch (e) { r.erro = e.message; }
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  t.ok('a diagonal é comprada pela ponta mais comprida (6.000 → 4.560 pede 6.000; 4.560 → 2.160 pede 4.560; embaixo 4.200 → 1.200 pede 4.200)',
+    !r.erro && r.ok && r.pecas && !r.pecas[5760] && !r.pecas[3360] && !r.pecas[5700] && !r.pecas[2700] && r.pecas[4560] === 1 && r.pecas[4200] === 1, J);
+  t.ok('a água mais curta tem a última faixa (400 mm junto da cumeeira): 13 faixas em cima, 11 embaixo', !r.erro && r.faixas && r.faixas.join(',') === '11,13', J);
+  t.ok('a sobra do recorte (giro de 180°) cobre a faixa estreita da ponta nas duas águas', !r.erro && r.reuso && r.reuso.length === 2 && !r.pecas[1080] && !r.pecas[2160] && !r.pecas[1200], J);
+  t.ok('pedido: 20 de 6.000 + 4.560 + 4.200 = 22 telhas', !r.erro && r.pecas && r.pecas[6000] === 20 && r.total === 22, J);
+  t.ok('sem erro na página', !erros.length, J);
+  await ctx.close();
+});
+
+teste('leitor-cobertura-dwg-depois-sketchup', async (b, t) => {
+  // "estou usando Abrir DWG da cobertura, como está gerando pelo SketchUp?"
+  // Depois de importar um .rmcob, o modo SketchUp ficava gravado e o DWG
+  // aberto em seguida era ignorado: a tela continuava com as faces antigas
+  // (Agrupar#22...) e a medida delas, não a do desenho.
+  if (!fs.existsSync(path.join(RAIZ, 'leitor_dwg'))) return;
+  const k = Math.hypot(1000, 5000);
+  const face = (n, base) => ({ id: 'skp-' + n, name: n, path: n, holes: [], material: '',
+    normal: [0, (base ? 1000 : -1000) / k, 5000 / k], area_m2: 10000 * k / 1e6,
+    outer: [[0, base, 0], [10000, base, 0], [10000, 5000, 1000], [0, 5000, 1000]], edges: [] });
+  const skp = path.join(require('os').tmpdir(), 'rm-testes-leitor', 'modelo_antigo.rmcob');
+  fs.mkdirSync(path.dirname(skp), { recursive: true });
+  fs.writeFileSync(skp, JSON.stringify({ format: 'RM_COBERTURA_SKETCHUP', version: 1, units: 'mm', model: 'Antigo', faces: [face('Agrupar#22', 0), face('Agrupar#23', 10000)] }));
+  const L = (ax, ay, bx, by) => [ax, ay, bx, by, 7, '0', 'LINE'];
+  const dwg = dxfTeste('planta_depois_skp', [L(0, 6000, 8000, 6000), L(0, 0, 8000, 0), L(8000, 0, 8000, 12000), L(8000, 12000, 0, 12000), L(0, 12000, 0, 0)], [], 4);
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'leitor_dwg' }); await semLogin(pg);
+  const le = () => pg.evaluate(() => { const C = window.rmCobertura;
+    return { leitura: C.estado.leitura, nomes: (C.estado.blocos || []).map(x => x.nome), tela: ((document.getElementById('tlov') || {}).innerText || '').slice(0, 400) }; });
+  const r = {};
+  try {
+    await pg.click('[data-aba="tel"]').catch(() => {}); await pg.waitForTimeout(400);
+    await pg.setInputFiles('#cobSkpDiretoFile', skp); await pg.waitForTimeout(1500);
+    r.antes = await le();
+    await pg.reload(); await pg.waitForTimeout(2500); await semLogin(pg);
+    await pg.click('[data-aba="tel"]').catch(() => {}); await pg.waitForTimeout(400);
+    await pg.setInputFiles('#fileTel', dwg); await pg.waitForTimeout(1500);
+    if (await pg.evaluate(() => { const g = document.getElementById('unitGate'); return g && !g.classList.contains('hide'); })) await pg.click('[data-unit-choice="1"]');
+    await pg.waitForTimeout(600);
+    await pg.evaluate(() => { const bt = [...document.querySelectorAll('button')].find(x => x.innerText.trim() === 'Cobertura'); if (bt) bt.click(); }); await pg.waitForTimeout(1500);
+    r.depois = await le();
+  } catch (e) { r.erro = e.message; }
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  t.ok('o .rmcob entrou como SketchUp (ponto de partida do teste)', !r.erro && r.antes && r.antes.leitura === 'sketchup', J);
+  t.ok('o DWG aberto depois é lido como planta, não fica o SketchUp antigo', !r.erro && r.depois && r.depois.leitura === 'planta', J);
+  t.ok('as faces antigas (Agrupar#) saem; entra o bloco do desenho', !r.erro && r.depois && r.depois.nomes.length > 0 && !r.depois.nomes.some(n => /Agrupar/.test(n)) && !/Agrupar|SketchUp ·/.test(r.depois.tela), J);
+  t.ok('sem erro na página', !erros.length, J);
+  await ctx.close();
+});
+
+teste('leitor-cobertura-dois-telhados-riscados', async (b, t) => {
+  // "o sistema leu apenas um bloco, e tinha 2": com um quadro em volta dos
+  // dois telhados, o quadro virava UM bloco e só o maior contorno contava;
+  // com as telhas riscadas em outra cor por dentro, o telhado retangular
+  // passava por "quadro" e sumia, e uma linha de telha (12 m, maior que a
+  // cumeeira) virava a cumeeira.
+  if (!fs.existsSync(path.join(RAIZ, 'leitor_dwg'))) return;
+  const L = (ax, ay, bx, by, cor) => [ax, ay, bx, by, cor || 7, '0', 'LINE'];
+  const telhados = [
+    L(0, 6000, 8000, 6000), L(0, 6000, 0, 12000), L(0, 6000, 0, 0), L(8000, 6000, 8000, 12000), L(8000, 6000, 8000, 0),
+    L(8000, 0, 0, 0), L(0, 12000, 8000, 12000),
+    L(9000, 6000, 19000, 6000), L(9000, 6000, 9000, 12000), L(9000, 6000, 9000, 0), L(9000, 12000, 21000, 12000),
+    L(21000, 12000, 19000, 6000), L(9000, 0, 17000, 0), L(17000, 0, 19000, 6000)];
+  const riscos = [];
+  for (let x = 1000; x < 8000; x += 1000) riscos.push(L(x, 0, x, 12000, 3));                 // galpão 1: beiral a beiral
+  for (let x = 10000; x < 19000; x += 1000) { riscos.push(L(x, 6000, x, 12000, 3)); if (x < 17000) riscos.push(L(x, 0, x, 6000, 3)); }
+  const quadro = [L(-2000, -2000, 23000, -2000, 1), L(23000, -2000, 23000, 14000, 1), L(23000, 14000, -2000, 14000, 1), L(-2000, 14000, -2000, -2000, 1)];
+  const arqQ = dxfTeste('dois_telhados_quadro', telhados.concat(quadro), [], 4);
+  const arqR = dxfTeste('dois_telhados_riscados', telhados.concat(riscos), [], 4);
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'leitor_dwg' }); await semLogin(pg);
+  const le = async arq => {
+    await pg.click('[data-aba="tel"]').catch(() => {}); await pg.waitForTimeout(400);
+    await pg.setInputFiles('#fileTel', arq); await pg.waitForTimeout(1500);
+    if (await pg.evaluate(() => { const g = document.getElementById('unitGate'); return g && !g.classList.contains('hide'); })) await pg.click('[data-unit-choice="1"]');
+    await pg.waitForTimeout(600);
+    await pg.evaluate(() => { const bt = [...document.querySelectorAll('button')].find(x => x.innerText.trim() === 'Cobertura'); if (bt) bt.click(); }); await pg.waitForTimeout(1500);
+    return pg.evaluate(() => { const C = window.rmCobertura; C.detectar();
+      const area = p => Math.abs(p.reduce((s, a, i) => { const q = p[(i + 1) % p.length]; return s + a.x * q.y - q.x * a.y; }, 0) / 2e6);
+      return (C.estado.blocos || []).map(b => ({ m2: Math.round(area(b.poligono || [])), cum: b.cumeeira ? Math.round(Math.hypot(b.cumeeira.b.x - b.cumeeira.a.x, b.cumeeira.b.y - b.cumeeira.a.y)) : 0, ok: b.contornoValido !== false })); });
+  };
+  const r = {};
+  try { r.quadro = await le(arqQ); r.riscados = await le(arqR); } catch (e) { r.erro = e.message; }
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  const certo = v => v && v.length === 2 && v.every(x => x.ok) && v[0].m2 === 96 && v[1].m2 === 120 && v[0].cum === 8000 && v[1].cum === 10000;
+  t.ok('dois telhados dentro de um quadro: dois blocos (96 m² e 120 m²), cada um com a sua cumeeira', !r.erro && certo(r.quadro), J);
+  t.ok('com as telhas riscadas por dentro: os dois blocos continuam, e a cumeeira não é uma linha de telha', !r.erro && certo(r.riscados), J);
+  t.ok('sem erro na página', !erros.length, J);
+  await ctx.close();
+});
+
+teste('leitor-cobertura-medida-ordem-sobra', async (b, t) => {
+  // "compare ambos": o desenho cotado tinha 6.300 e 4.830,94 e o Leitor
+  // pedia 6.299 e 4.830 (a tolerância de 1 mm cortava para baixo); o bloco
+  // da direita saía como BLOCO 1; e as diagonais pequenas vinham da sobra
+  // sem ter onde escolher comprar.
+  if (!fs.existsSync(path.join(RAIZ, 'leitor_dwg'))) return;
+  const L = (ax, ay, bx, by, cor) => [ax, ay, bx, by, cor || 7, '0', 'LINE'];
+  const dx = 40000;   // o telhado com diagonal fica à direita, mas é desenhado primeiro
+  const arq = dxfTeste('medida_ordem_sobra', [
+    L(dx + 0, 6000, dx + 10000, 6000), L(dx + 0, 6000, dx + 0, 12000), L(dx + 0, 12000, dx + 12350, 12000), L(dx + 12350, 12000, dx + 10000, 6000),
+    L(dx + 0, 6000, dx + 0, 0), L(dx + 0, 0, dx + 10000, 0), L(dx + 10000, 0, dx + 10000, 6000),
+    L(dx - 3000, -3000, dx + 15000, -3000, 85), L(dx + 15000, -3000, dx + 15000, 15000, 85), L(dx + 15000, 15000, dx - 3000, 15000, 85), L(dx - 3000, 15000, dx - 3000, -3000, 85),
+    L(0, 6000, 8000, 6000), L(0, 0, 8000, 0), L(8000, 0, 8000, 12000), L(8000, 12000, 0, 12000), L(0, 12000, 0, 0),
+    L(-3000, -3000, 11000, -3000, 85), L(11000, -3000, 11000, 15000, 85), L(11000, 15000, -3000, 15000, 85), L(-3000, 15000, -3000, -3000, 85)], [], 4);
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'leitor_dwg' }); await semLogin(pg);
+  let r = {};
+  try {
+    await pg.click('[data-aba="tel"]').catch(() => {}); await pg.waitForTimeout(400);
+    await pg.setInputFiles('#fileTel', arq); await pg.waitForTimeout(1500);
+    if (await pg.evaluate(() => { const g = document.getElementById('unitGate'); return g && !g.classList.contains('hide'); })) await pg.click('[data-unit-choice="1"]');
+    await pg.waitForTimeout(600);
+    await pg.evaluate(() => { const bt = [...document.querySelectorAll('button')].find(x => x.innerText.trim() === 'Cobertura'); if (bt) bt.click(); }); await pg.waitForTimeout(1500);
+    r = await pg.evaluate(async () => {
+      const esp = ms => new Promise(x => setTimeout(x, ms)), C = window.rmCobertura;
+      const cx = document.getElementById('cobVerdadeira');
+      if (cx && !cx.checked) { cx.checked = true; cx.dispatchEvent(new Event('change', { bubbles: true })); await esp(300); }
+      const op = document.getElementById('cobReaproveitar'); const out = { temOpcao: !!op, padrao: C.estado.reaproveitar, marcada: !!(op && op.checked) };
+      Object.assign(C.estado, { util: 1000, beiral: 0, cumeeira: 0, agrupamento: 1, sentido: 'ltr', confirmada: true });
+      const conta = () => { const res = C.calcular(), p = {}; (res.lista || []).forEach(x => { p[x.mm] = (p[x.mm] || 0) + x.qtd; }); return { pecas: p, total: res.pecas }; };
+      out.x0 = C.estado.blocos.map(b => Math.round(Math.min(...b.poligono.map(p => p.x))));
+      out.sem = conta();
+      if (op) { op.checked = true; op.dispatchEvent(new Event('change', { bubbles: true })); await esp(300); C.estado.confirmada = true; }
+      out.com = conta();
+      out.salvo = /"reaproveitar":true/.test(localStorage.getItem('rm_cobertura_cfg_v1') || '');
+      if (window.rmCobertura.abrir) { C.estado.confirmada = true; window.rmCobertura.abrir(); await esp(400); }
+      out.nota = ((document.getElementById('cobTotais') || {}).innerText || '').replace(/\s+/g, ' ');
+      return out;
+    });
+    // gravado antes da caixa existir (reaproveitar:true sem ninguém escolher)
+    await pg.evaluate(() => { const c = JSON.parse(localStorage.getItem('rm_cobertura_cfg_v1') || '{}'); c.reaproveitar = true; delete c.sobraEscolhida; localStorage.setItem('rm_cobertura_cfg_v1', JSON.stringify(c)); });
+    await pg.reload(); await pg.waitForTimeout(2500);
+    r.antigo = await pg.evaluate(() => window.rmCobertura.estado.reaproveitar);
+  } catch (e) { r.erro = e.message; }
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  t.ok('o valor gravado antes da opção existir não liga a sobra sozinho', !r.erro && r.antigo === false, J);
+  t.ok('a medida do desenho não perde 1 mm: 6.000 é 6.000 e 3.446,8 é 3.447 (nunca 5.999 / 3.446)',
+    !r.erro && r.sem && r.sem.pecas[6000] === 37 && r.sem.pecas[3447] === 1 && !r.sem.pecas[5999] && !r.sem.pecas[3446], J);
+  t.ok('os blocos seguem da esquerda para a direita, mesmo desenhados na ordem inversa', !r.erro && r.x0 && r.x0.length === 2 && r.x0[0] < r.x0[1], J);
+  t.ok('como no desenho: de saída cada faixa é uma telha comprada (a ponta de 894 entra no pedido)',
+    !r.erro && r.temOpcao && r.padrao === false && !r.marcada && r.sem && r.sem.pecas[894] === 1, J);
+  t.ok('marcando "reaproveitar a sobra", a ponta sai da sobra (uma telha a menos) e fica gravado',
+    !r.erro && r.com && r.com.total === r.sem.total - 1 && !r.com.pecas[894] && r.salvo, J);
+  t.ok('e o total para fabricar diz que essa ponta sai da sobra, sem compra', !r.erro && /sobra/i.test(r.nota || '') && /1 faixa/.test(r.nota || ''), J);
+  t.ok('sem erro na página', !erros.length, J);
+  await ctx.close();
+});
+
+teste('leitor-linha-duplicada', async (b, t) => {
+  // uma diagonal desenhada duas vezes (uma por cima da outra) virava peça a
+  // mais, sem aviso: 26 → 28
+  if (!fs.existsSync(path.join(RAIZ, 'leitor_dwg'))) return;
+  const { ctx, pg, erros } = await leitorImporta(b, trelicaTeste('trelica_dup', { duplicada: true }));
+  const r = await pg.evaluate(async () => { const T = window.__leitorTeste; if (!T) return { erro: 'sem gancho' };
+    const s = (T.secoes().secoes || [])[0];
+    document.getElementById('detalhar').click(); await new Promise(x => setTimeout(x, 400));
+    return { np: s ? s.np : 0, aviso: (document.getElementById('printArea').innerText.match(/[^\n]*duplicad[^\n]*/i) || [''])[0] }; }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  t.ok('linha repetida não vira peça a mais', !r.erro && r.np === 26, J);
+  t.ok('e o relatório avisa a duplicada', !r.erro && /1 linha/.test(r.aviso), J);
+  await ctx.close();
+});
+
+teste('leitor-ajustes-gravados', async (b, t) => {
+  // quebra, barra, folga... nunca ficavam gravados: a gravação quebrava num
+  // campo de telha que saiu da tela
+  if (!fs.existsSync(path.join(RAIZ, 'leitor_dwg'))) return;
+  const { ctx, pg, erros } = await leitorImporta(b, trelicaTeste('trelica_aj'));
+  await pg.evaluate(() => { const poe = (id, v) => { const e = document.getElementById(id); e.value = v; e.dispatchEvent(new Event('input')); };
+    poe('quebra', '15'); poe('folga', '9'); poe('barra', '12000'); poe('seguranca', '3'); });
+  const gravado = await pg.evaluate(() => localStorage.getItem('corteRM')).catch(() => null);
+  await pg.reload(); await pg.waitForTimeout(2500);
+  const volta = await pg.evaluate(() => ['quebra', 'folga', 'barra', 'seguranca'].map(id => document.getElementById(id).value).join(',')).catch(e => e.message);
+  t.ok('os Ajustes ficam gravados', !!gravado && /"quebra":"15"/.test(gravado), String(gravado).slice(0, 300) + ' ' + erros.join(' | '));
+  t.ok('e voltam ao reabrir', volta === '15,9,12000,3', volta);
+  await ctx.close();
+});
+
+teste('leitor-obra-continuar', async (b, t) => {
+  // "continuar" uma obra salva mudava a lista (13+2 → 14 barras): a obra não
+  // guardava o desenho e voltava para a conta pelo eixo
+  if (!fs.existsSync(path.join(RAIZ, 'leitor_dwg'))) return;
+  const { ctx, pg, erros } = await leitorImporta(b, tesouraTeste('tesoura_obra'));
+  const r = await pg.evaluate(async () => { const esp = ms => new Promise(x => setTimeout(x, ms)), T = window.__leitorTeste;
+    if (!T) return { erro: 'sem gancho' };
+    localStorage.removeItem('corteRM_obras');
+    const lista = () => T.estado().LASTROWS.map(r => r.name + ':' + r.bars + ':' + (+r.metros).toFixed(1)).join(' ');
+    document.getElementById('obra').value = 'OBRA TESTE';
+    const antes = lista(); document.getElementById('saveObra').click(); await esp(200);
+    document.getElementById('trocarArq').click(); await esp(200);
+    const bt = document.querySelector('#historicoHome button[data-cont]'); if (!bt) return { erro: 'sem continuar' };
+    bt.click(); await esp(600);
+    return { antes, depois: lista(), secoes: (T.secoes().secoes || []).length }; }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  t.ok('continuar a obra dá a mesma lista', !r.erro && r.antes && r.antes === r.depois, J);
+  t.ok('e o detalhamento refaz com o desenho guardado', !r.erro && r.secoes === 1, J);
+  await ctx.close();
+});
+
+teste('leitor-banzo-um-numero', async (b, t) => {
+  // o banzo saía 18 barras na lista (com quebra) e 17 "de 6 m" no
+  // detalhamento -- fixo em 6 m mesmo com outra barra nos Ajustes. Agora as
+  // duas telas contam por encaixe, com plano de emenda, e a mesma barra
+  if (!fs.existsSync(path.join(RAIZ, 'leitor_dwg'))) return;
+  const { ctx, pg, erros } = await leitorImporta(b, tesouraTeste('tesoura_banzo'));
+  const r = await pg.evaluate(async () => { const esp = ms => new Promise(x => setTimeout(x, ms)), T = window.__leitorTeste;
+    if (!T) return { erro: 'sem gancho' };
+    const medir = () => { const s = T.secoes().secoes[0], br = s.banzosResumo, row = T.estado().LASTROWS.find(x => /40x100x40/.test(x.name));
+      const segs = (br.linhas || []).flatMap(l => l.segmentos || []);
+      return { lista: row && row.bars, det: br.compra.barras + (br.compra.seguranca || 0), barra: br.barra, menor: segs.length ? Math.min(...segs) : 0 }; };
+    const a = medir();
+    const e = document.getElementById('barra'); e.value = '12000'; e.dispatchEvent(new Event('input')); await esp(300);
+    const c = medir();
+    document.getElementById('detalhar').click(); await esp(400);
+    const txt = document.getElementById('printArea').innerText;
+    return { a, c, rotulo: (txt.match(/BARRAS DE BANZO[^\n]*/i) || [''])[0] }; }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  t.ok('lista e detalhamento com o mesmo número de barras de banzo', !r.erro && r.a.lista === r.a.det && r.a.lista === 19, J);
+  t.ok('com barra de 12 m os dois mudam juntos', !r.erro && r.c.barra === 12000 && r.c.lista === r.c.det && /12 m/i.test(r.rotulo), J);
+  t.ok('plano de emenda sem pedaço menor que 500 mm', !r.erro && r.a.menor >= 500, J);
+  await ctx.close();
+});
+
+teste('leitor-laser-k', async (b, t) => {
+  // a tira do laser do parceiro saía pela soma menos 1 espessura por dobra
+  // (149 mm no U 30x93x30 #2,00) e a Planificação dá 146 com K 0,44 e raio
+  // 1×t -- é a dobradeira que manda
+  if (!fs.existsSync(path.join(RAIZ, 'leitor_dwg'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'leitor_dwg' });
+  await semLogin(pg);
+  const r = await pg.evaluate(() => { const T = window.__leitorTeste; if (!T || !T.chapaPerfil) return { erro: 'sem gancho' };
+    const s = T.chapaPerfil('U 30x93x30 #2,00', 2, 'carbono'); return { flat: s.flat, formula: s.formula }; }).catch(e => ({ erro: e.message }));
+  t.ok('largura do laser = largura da Planificação (146 mm)', !r.erro && Math.abs(r.flat - 146.05) < 0.1, JSON.stringify(r) + ' ' + erros.join(' | '));
+  await ctx.close();
+});
+
+teste('leitor-cantoneira-polegada', async (b, t) => {
+  // "Cantoneira 2x3/16'' (dupla)" virava "UE 2x3x16": peso zero, aba de
+  // 3 mm no detalhamento e mil barras na compra
+  if (!fs.existsSync(path.join(FIX_LEITOR, 'caso5.dxf')) || !fs.existsSync(path.join(RAIZ, 'leitor_dwg'))) return;
+  const { ctx, pg, erros } = await leitorImporta(b, path.join(FIX_LEITOR, 'caso5.dxf'));
+  const r = await pg.evaluate(() => { const T = window.__leitorTeste; if (!T) return { erro: 'sem gancho' };
+    const s = T.estado(), f = s.FICHAS.find(x => /TESOURA 01/.test(x.nome)), sec = T.secoes().secoes.find(x => /TESOURA 01/.test(x.nomeFicha));
+    const row = s.LASTROWS.find(x => /2"x3\/16"/.test(x.name));
+    return { perfil: f && f.profiles[1], dupla: f && f.duplas[1], aba: sec && sec.aba, peso: row && Math.round(row.peso), kgm: row && row.kgm }; }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  t.ok('cantoneira em polegada lida como L 2"x3/16"', !r.erro && r.perfil === 'L 2"x3/16"' && r.dupla === true, J);
+  t.ok('aba de 50,8 mm no detalhamento e peso de tabela', !r.erro && Math.abs(r.aba - 50.8) < 0.01 && Math.abs(r.kgm - 3.62) < 0.02 && r.peso > 0, J);
+  await ctx.close();
+});
+
+teste('leitor-polegada-laminado', async (b, t) => {
+  // a cantoneira em polegada é laminada, comprada por barra: com o cadastro
+  // do Orçamento aberto ela tem de pegar o preço da barra sozinha
+  if (!fs.existsSync(path.join(FIX_LEITOR, 'caso5.dxf')) || !fs.existsSync(path.join(RAIZ, 'leitor_dwg'))) return;
+  const db = { densidade: 8000, telhas: [], perfis: [], fornecedores: [], categorias: [{ nome: 'Laminados', items: [
+    { desc: 'CANTONEIRA 1.1/2" X 3/16"', unidade: 'barra', valor: 200, comp: 6000 },
+    { desc: 'CANTONEIRA 2" X 3/16"', unidade: 'barra', valor: 300, comp: 6000 }] }] };
+  const antes = 'try{localStorage.setItem("rm_orc_db_v1",' + JSON.stringify(JSON.stringify(db)) + ')}catch(e){}';
+  const { ctx, pg, erros } = await leitorImporta(b, path.join(FIX_LEITOR, 'caso5.dxf'), { antes });
+  const r = await pg.evaluate(() => { const row = window.__leitorTeste.estado().LASTROWS.find(x => /2"x3\/16"/.test(x.name));
+    return row ? { lam: row.lam, bars: row.bars, custo: row.custo } : { erro: 'sem linha' }; }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  t.ok('L 2"x3/16" pega a barra de 2" x 3/16" do cadastro (e não a de 1.1/2")', !r.erro && /CANTONEIRA 2" X 3\/16"/.test(r.lam) && r.custo === r.bars * 300, J);
+  await ctx.close();
+});
+
+teste('leitor-perfil-improvavel', async (b, t) => {
+  // "Perfil 50x18050#3,75" (faltou um x no desenho) virava "U 18050x50",
+  // pesava 40.500 kg e saía CONFERIDO
+  if (!fs.existsSync(path.join(FIX_LEITOR, 'caso2.dxf')) || !fs.existsSync(path.join(RAIZ, 'leitor_dwg'))) return;
+  const { ctx, pg, erros } = await leitorImporta(b, path.join(FIX_LEITOR, 'caso2.dxf'));
+  const r = await pg.evaluate(() => { const linha = [...document.querySelectorAll('#perfilAudit tr')].find(tr => /18050/.test(tr.textContent));
+    return linha ? linha.innerText.replace(/\s+/g, ' ') : ''; }).catch(e => 'erro ' + e.message);
+  t.ok('medida improvável vai para REVISAR com a sugestão U 50x180x50 #3,75', /REVISAR/.test(r) && /U 50x180x50 #3,75/.test(r), r + ' ' + erros.join(' | '));
+  await ctx.close();
+});
+
+teste('leitor-dupla-x2', async (b, t) => {
+  // cantoneira dupla saía ×4 na compra: o detalhamento já dobrava as peças
+  // e a lista dobrava de novo
+  if (!fs.existsSync(path.join(RAIZ, 'leitor_dwg'))) return;
+  const bars = {};
+  for (const dupla of [false, true]) {
+    const f = trelicaTeste('trelica_dupla_' + dupla);
+    if (dupla) fs.writeFileSync(f, fs.readFileSync(f, 'latin1').replace('PU 30x93x30 #2,00', 'PU 30x93x30 #2,00 (dupla)'), 'latin1');
+    const { ctx, pg } = await leitorImporta(b, f);
+    bars[dupla] = await pg.evaluate(() => { const l = document.getElementById('result').innerText.split('\n').find(x => /^U 30x93x30/.test(x));
+      return l ? Number(l.split('\t')[2]) : null; }).catch(() => null);
+    await ctx.close();
+  }
+  // barras exatas = metros ÷ 6 − as 2 de segurança
+  const ex = m => Math.round(m / 6) - 2;
+  t.ok('interno duplo compra o dobro do simples, não o quádruplo', bars.false > 0 && Math.abs(ex(bars.true) - 2 * ex(bars.false)) <= 1, JSON.stringify(bars));
+});
+
+teste('leitor-casos-reais', async (b, t) => {
+  // Gabarito dos 5 desenhos reais (fixtures/leitor): peças, metros e compra
+  // de cada estrutura. Uma correção no motor que mude qualquer número aparece
+  // aqui -- se a mudança for de propósito, o gabarito é refeito com
+  // RM_GERA_GABARITO=1 e a diferença é conferida antes de publicar.
+  const gab = path.join(FIX_LEITOR, 'gabarito.json');
+  if (!fs.existsSync(path.join(RAIZ, 'leitor_dwg')) || !fs.existsSync(FIX_LEITOR)) return;
+  const casos = fs.readdirSync(FIX_LEITOR).filter(f => /^caso\d+\.dxf$/.test(f)).sort();
+  const esperado = fs.existsSync(gab) ? JSON.parse(fs.readFileSync(gab, 'utf8')) : {};
+  const obtido = {};
+  for (const c of casos) {
+    const { ctx, pg, erros } = await leitorImporta(b, path.join(FIX_LEITOR, c));
+    obtido[c] = await pg.evaluate(() => { const T = window.__leitorTeste, d = T.secoes(), s = T.estado();
+      return { estruturas: (d.secoes || []).map(x => ({ letra: x.letra, ficha: x.nomeFicha, qtd: x.qtdEstrut, pecas: x.np,
+          internoM: Math.round(x.tot) / 1000, banzoBarras: x.banzosResumo ? x.banzosResumo.compra.barras : null,
+          grupos: x.gr.map(g => g.tipo[0] + (g.interna || '') + (g.parte ? 'p' : '') + ':' + Math.round(g.corte) + 'x' + g.qtdTotal).join(' ') })),
+        lista: s.LASTROWS.map(r => r.name + ' | ' + r.bars + ' | ' + (+r.metros).toFixed(1) + ' | ' + Math.round(r.peso)) }; })
+      .catch(e => ({ erro: e.message }));
+    if (erros.length) obtido[c].erros = erros;
+    await ctx.close();
+  }
+  if (process.env.RM_GERA_GABARITO) { fs.writeFileSync(gab, JSON.stringify(obtido, null, 1)); t.ok('gabarito refeito (' + casos.length + ' casos)', true, ''); return; }
+  for (const c of casos) {
+    const e = esperado[c], o = obtido[c];
+    if (!e) { t.ok(c + ': sem gabarito', false, 'rode com RM_GERA_GABARITO=1'); continue; }
+    const dif = [];
+    (e.lista || []).forEach((l, i) => { if (o.lista && o.lista[i] !== l) dif.push('lista: ' + l + ' → ' + (o.lista ? o.lista[i] : '?')); });
+    if (o.lista && e.lista && o.lista.length !== e.lista.length) dif.push('lista com ' + o.lista.length + ' linhas, gabarito ' + e.lista.length);
+    (e.estruturas || []).forEach((x, i) => { const y = (o.estruturas || [])[i] || {};
+      ['letra', 'ficha', 'qtd', 'pecas', 'internoM', 'banzoBarras', 'grupos'].forEach(k => { if (x[k] !== y[k]) dif.push(x.letra + ' ' + k + ': ' + String(x[k]).slice(0, 80) + ' → ' + String(y[k]).slice(0, 80)); }); });
+    t.ok(c + ': igual ao gabarito', !o.erro && !o.erros && !dif.length, (o.erro || '') + (o.erros || []).join(' | ') + dif.slice(0, 6).join(' ; '));
+  }
+});
+
+teste('leitor-dwg-trocar-arquivo', async (b, t) => {
+  // abrir um segundo DWG na mesma página dava "null function or function
+  // signature mismatch": a biblioteca do DWG era criada uma vez só, e a
+  // leitura de um DWG da RM deixava o estado dela corrompido para a próxima.
+  // Agora cada DWG é lido por uma instância nova da biblioteca.
+  if (!fs.existsSync(path.join(RAIZ, 'leitor_dwg')) || !dwgPronto()) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'leitor_dwg' }, 'index.html', { dwg: true, espera: 6000 });
+  await semLogin(pg);
+  const le = async () => {
+    await pg.setInputFiles('#file', DWG_AMOSTRA);
+    await pg.waitForFunction(() => { const g = document.getElementById('unitGate'), s = document.getElementById('unitStatus'), l = document.getElementById('log');
+      return (g && !g.classList.contains('hide')) || (s && /^Autom/.test(s.textContent)) || (l && /✗ erro/.test(l.innerText)); }, null, { timeout: 30000 }).catch(() => {});
+    if (await pg.evaluate(() => !document.getElementById('unitGate').classList.contains('hide'))) await pg.click('[data-unit-choice="1"]');
+    await pg.waitForTimeout(1200);
+    return pg.evaluate(() => ({ seg: window.__leitorTeste.estado().SEG.length, inst: window.__leitorTeste.libInstancias ? window.__leitorTeste.libInstancias() : 0,
+      erro: ((document.getElementById('log') || {}).innerText || '').split('\n').filter(x => /✗/.test(x)).join(' | ') }));
+  };
+  const r1 = await le(); await pg.evaluate(() => { const s = document.getElementById('unitStatus'); if (s) s.textContent = ''; });
+  const r2 = await le();
+  const J = JSON.stringify({ r1, r2 }) + ' ' + erros.join(' | ');
+  t.ok('o primeiro DWG abre', r1.seg > 0 && !r1.erro, J);
+  t.ok('o segundo DWG abre na mesma página, sem erro', r2.seg > 0 && !r2.erro, J);
+  t.ok('cada DWG é lido por uma instância nova da biblioteca', r2.inst >= r1.inst + 1 && r1.inst >= 1, J);
+  await ctx.close();
+});
+
+teste('leitor-dwg-sem-internet', async (b, t) => {
+  // o leitor de DWG vem de fora (libredwg no jsdelivr). Sem ele no cache do
+  // service worker, abrir um DWG sem internet falhava mesmo com o sistema aberto.
+  const raiz = path.join(RAIZ, 'leitor_dwg'); if (!fs.existsSync(raiz)) return;
+  const html = fs.readFileSync(path.join(raiz, 'index.html'), 'utf8'), sw = fs.readFileSync(path.join(raiz, 'sw.js'), 'utf8');
+  const base = (html.match(/const BASE='([^']+)'/) || [])[1] || '';
+  const assets = (sw.match(/const ASSETS = (\[[^\]]*\])/) || [])[1] || '[]';
+  const faltam = ['/+esm', '/wasm/libredwg-web.js', '/wasm/libredwg-web.wasm'].filter(s => !assets.includes("'" + base + s + "'"));
+  t.ok('leitor guarda a biblioteca do DWG para usar sem internet', base && !faltam.length, 'base:' + base + ' faltam:' + faltam.join(', '));
+});
+
+teste('leitor-offline', async (b, t) => {
+  if (!fs.existsSync(path.join(RAIZ, 'leitor_dwg'))) return;
+  const { ctx, pg } = await abre(b, { 'sis.local': 'leitor_dwg' }, 'index.html', { semFirebase: true, espera: 11500 });
+  const vis = await pg.evaluate(() => getComputedStyle(document.getElementById('loginOffline')).display).catch(() => 'erro');
+  await pg.click('#loginOffline button').catch(() => {}); await pg.waitForTimeout(300);
+  const aberto = await pg.evaluate(() => !document.getElementById('loginScreen').classList.contains('hide')).catch(() => true);
+  t.ok('leitor sem internet oferece "usar sem internet"', vis === 'block' && !aberto, 'botão:' + vis + ' login aberto depois:' + aberto);
+  await ctx.close();
+});
+
+teste('recibos-afastados-em-grupo', async (b, t) => {
+  // afastado (INSS, cárcere...) aparecia misturado com quem está trabalhando
+  // na lista de Funcionários. Agora fica num grupo próprio, embaixo, logo
+  // acima dos desligados; com o filtro "Afastados" volta para a lista.
+  if (!fs.existsSync(path.join(RAIZ, 'recibos_rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'recibos_rm' });
+  const r = await pg.evaluate(() => {
+    const l = document.getElementById('loginScreen'); if (l) l.style.setProperty('display', 'none', 'important');
+    state.employees = [{ id: 'g1', nome: 'ANA TESTE ATIVA', status: 'ativo', salario: 1 },
+      { id: 'g2', nome: 'BRUNO TESTE AFASTADO', status: 'afast', afastMotivo: 'inss', salario: 1 },
+      { id: 'g3', nome: 'CAIO TESTE AFASTADO', status: 'afast', salario: 1 },
+      { id: 'g4', nome: 'DORA TESTE DESLIGADA', status: 'desligado', salario: 1 }];
+    const nomes = sel => [...document.querySelectorAll(sel)].map(x => x.innerText.replace(/\s+/g, ' ')).join(' | ');
+    renderEmps();
+    const ag = document.getElementById('empAfast'), ob = document.getElementById('empOcultos'), tt = document.getElementById('empTeste');
+    const o = { lista: nomes('#empBody tr'), grupo: ag ? nomes('#empAfast tbody tr') : '', cab: ag ? (ag.querySelector('.section-lab') || {}).textContent : '',
+      visivel: !!ag && ag.style.display !== 'none', antesDesl: !!ag && !!(ag.compareDocumentPosition(ob) & Node.DOCUMENT_POSITION_FOLLOWING),
+      depoisTeste: !!ag && !!(tt.compareDocumentPosition(ag) & Node.DOCUMENT_POSITION_FOLLOWING), cAfa: document.getElementById('cAfa').textContent };
+    const fs = document.getElementById('fStatus'); fs.value = 'afast'; renderEmps();
+    o.filtro = { lista: nomes('#empBody tr'), grupo: ag.style.display !== 'none' };
+    fs.value = 'all'; document.getElementById('fSearch').value = 'bruno'; renderEmps();
+    o.busca = { lista: nomes('#empBody tr'), grupo: nomes('#empAfast tbody tr') };
+    document.getElementById('fSearch').value = ''; renderEmps();
+    return o;
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  t.ok('lista principal só com quem está trabalhando', !r.erro && /Ana/i.test(r.lista) && !/Bruno|Caio/i.test(r.lista), J);
+  t.ok('afastados num grupo próprio "Afastados (2)", abaixo do Em teste e acima dos desligados', !r.erro && r.visivel && /Bruno/i.test(r.grupo) && /Caio/i.test(r.grupo) && /Afastados \(2\)/.test(r.cab) && r.antesDesl && r.depoisTeste && r.cAfa === '2', J);
+  t.ok('filtro "Afastados": eles na lista e o grupo some', !r.erro && /Bruno/i.test(r.filtro.lista) && !/Ana/i.test(r.filtro.lista) && !r.filtro.grupo, J);
+  t.ok('a busca vale para o grupo também', !r.erro && /Bruno/i.test(r.busca.grupo) && !/Caio/i.test(r.busca.grupo) && !erros.length, J);
+  await ctx.close();
+});
+
+teste('recibos-func-faixa-baixa', async (b, t) => {
+  // os números do alto da lista de Funcionários (cadastrados, ativos, em
+  // experiência, afastados, sem CPF) ocupavam ~100 px de altura; agora é uma
+  // faixa baixa, rótulo e número na mesma linha
+  if (!fs.existsSync(path.join(RAIZ, 'recibos_rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'recibos_rm' });
+  const r = await pg.evaluate(() => {
+    const l = document.getElementById('loginScreen'); if (l) l.style.setProperty('display', 'none', 'important');
+    const h = new Date(); h.setDate(h.getDate() - 5);
+    state.employees = [{ id: 'fx1', nome: 'ANA TESTE FAIXA', status: 'ativo', salario: 1, doc: '1' },
+      { id: 'fx2', nome: 'BRUNO TESTE FAIXA', status: 'ativo', salario: 1, doc: '2', dtCarteira: toISO(h) },
+      { id: 'fx3', nome: 'CAIO TESTE FAIXA', status: 'afast', salario: 1, doc: '3' }];
+    renderEmps();
+    const faixa = document.querySelector('#v-func .cards').getBoundingClientRect();
+    const cards = [...document.querySelectorAll('#v-func .cards .card')].filter(c => !c.hidden).map(c => {
+      const k = c.querySelector('.k').getBoundingClientRect(), v = c.querySelector('.v').getBoundingClientRect();
+      return { mesmaLinha: Math.abs((k.top + k.bottom) / 2 - (v.top + v.bottom) / 2) < 6, v: c.querySelector('.v').textContent.trim() };
+    });
+    return { altura: Math.round(faixa.height), cards, dica: (document.getElementById('cardExp') || {}).title || '' };
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  t.ok('faixa dos números com no máximo 60 px de altura', !r.erro && r.altura > 0 && r.altura <= 60, J);
+  t.ok('rótulo e número na mesma linha, números certos (3 · 2 · 1 · 1 · 0)', !r.erro && r.cards.length === 5 && r.cards.every(c => c.mesmaLinha) && r.cards.map(c => c.v).join() === '3,2,1,1,0', J);
+  t.ok('a legenda do "Em experiência" fica como dica', !r.erro && /15 \+ 75/.test(r.dica) && !erros.length, J);
+  await ctx.close();
+});
+
+teste('recibos-func-respiro', async (b, t) => {
+  // pendências, números e aviso de contrato estavam encostados um no outro;
+  // agora há um respiro pequeno entre eles, e o aviso de contrato é baixo
+  if (!fs.existsSync(path.join(RAIZ, 'recibos_rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'recibos_rm' });
+  const r = await pg.evaluate(async () => {
+    const l = document.getElementById('loginScreen'); if (l) l.style.setProperty('display', 'none', 'important');
+    const h = new Date(); h.setDate(h.getDate() - 13);
+    const n = new Date(); const md = String(n.getMonth() + 1).padStart(2, '0') + '-' + String(n.getDate()).padStart(2, '0');
+    state.employees = [{ id: 'rs1', nome: 'ANA TESTE RESPIRO', status: 'ativo', salario: 1, doc: '1', nascimento: '1990-' + md },
+      { id: 'rs2', nome: 'BRUNO TESTE RESPIRO', status: 'ativo', salario: 1, doc: '2', dtCarteira: toISO(h), funcao: 'Montador' }];
+    renderEmps(); await new Promise(x => setTimeout(x, 100));
+    const R = s => { const e = document.querySelector(s); return e && !e.hidden ? e.getBoundingClientRect() : null; };
+    const p = R('#pendPainel'), c = R('#v-func .cards'), a = R('#ctAvisos'), cab = R('#ctAvisos .ct-cab'), it = R('#ctAvisos .ct-item');
+    return p && c && a ? { g1: Math.round(c.top - p.bottom), g2: Math.round(a.top - c.bottom), cab: Math.round(cab.height), item: Math.round(it.height) } : { erro: 'faltou bloco', p: !!p, c: !!c, a: !!a };
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  t.ok('respiro de 8 a 20 px entre pendências, números e aviso', !r.erro && r.g1 >= 8 && r.g1 <= 20 && r.g2 >= 8 && r.g2 <= 20, J);
+  t.ok('aviso de contrato baixo: cabeçalho até 36 px, cada pessoa até 48 px', !r.erro && r.cab <= 36 && r.item <= 48 && !erros.length, J);
+  await ctx.close();
+});
+
+teste('recibos-previa-tema-escuro', async (b, t) => {
+  // no tema escuro a pré-visualização da Ficha de EPI saía com linhas pretas e
+  // a letra escura por cima: o quadro da prévia fica escuro (o tema recolore
+  // o estilo do elemento) e o papel não pintava o próprio fundo
+  if (!fs.existsSync(path.join(RAIZ, 'recibos_rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'recibos_rm' });
+  const r = await pg.evaluate(async () => {
+    const l = document.getElementById('loginScreen'); if (l) l.style.setProperty('display', 'none', 'important');
+    window.rmTema('escuro'); await new Promise(x => setTimeout(x, 300));
+    preVisualizarPDF('table{border-collapse:collapse}td{border:1px solid #ccc;padding:6px;color:#1d2127}',
+      '<div class="wrap"><div class="title">Ficha teste</div><table><tr><td>linha sem cor</td></tr></table></div>', 'Teste tema escuro', 'portrait');
+    await new Promise(x => setTimeout(x, 200));
+    const f = document.getElementById('prevFrame'), d = f.contentDocument;
+    const quadro = getComputedStyle(f).backgroundColor;
+    const fundo = getComputedStyle(d.documentElement).backgroundColor, corpo = getComputedStyle(d.body).backgroundColor;
+    window.rmTema('claro');
+    return { quadro, fundo, corpo };
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  const branco = c => /rgb\(255, 255, 255\)/.test(c || '');
+  t.ok('tema escuro ligado (o quadro da prévia fica escuro)', !r.erro && !branco(r.quadro), J);
+  t.ok('o papel da prévia continua branco no tema escuro', !r.erro && branco(r.fundo) && branco(r.corpo) && !erros.length, J);
+  await ctx.close();
+});
+
+teste('recibos-sal-assid-faixa-baixa', async (b, t) => {
+  // a faixa baixa dos números (a de Funcionários) também em Salários e
+  // Assiduidade: rótulo e a linha de baixo à esquerda, número à direita;
+  // a linha de baixo continua ("2 depósitos", "2 em aberto")
+  if (!fs.existsSync(path.join(RAIZ, 'recibos_rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'recibos_rm' });
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    const l = document.getElementById('loginScreen'); if (l) l.style.setProperty('display', 'none', 'important');
+    const E = (id, nome) => ({ id, nome, status: 'ativo', salario: 2000, doc: id, metodo: 'banco', dtInicio: '2024-01-10', emprestimos: [], historicoSalario: [], historicoFuncao: [], fichasEpi: [], folhaExtra: [] });
+    state.employees = [E('sb1', 'ANA TESTE FAIXA'), E('sb2', 'BRUNO TESTE FAIXA')];
+    const c = cicloDaVez(), campo = c.tipo === 'adiantamento' ? 'valAdiantamento' : 'valPagamento';
+    state.ciclos = {}; state.ciclos[cicloKey(c)] = { itens: { sb1: { [campo]: 1000 }, sb2: { [campo]: 1200 } } };
+    state.assiduidade = {};
+    const mede = sel => {
+      const faixa = document.querySelector(sel); const h = Math.round(faixa.getBoundingClientRect().height);
+      const cards = [...faixa.querySelectorAll('.card')].map(cd => {
+        const k = cd.querySelector('.k').getBoundingClientRect(), v = cd.querySelector('.v').getBoundingClientRect(), s = cd.querySelector('.s');
+        return { direita: v.left > k.right - 1, sub: s ? s.textContent.trim() : '', subVisivel: !!s && s.getBoundingClientRect().height > 0 };
+      });
+      return { h, cards };
+    };
+    document.querySelector('.vtab[data-v="sal"]').click(); await esp(250);
+    const sal = mede('#v-sal .ciclo-cards');
+    document.querySelector('.vtab[data-v="assid"]').click(); await esp(250);
+    const assid = mede('#v-assid > .cards');
+    return { sal, assid };
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  t.ok('Salários: faixa de no máximo 64 px, número à direita', !r.erro && r.sal.h <= 64 && r.sal.cards.length === 3 && r.sal.cards.every(c => c.direita), J);
+  t.ok('Salários: a linha de baixo continua à vista nos três ("2 depósitos"...)', !r.erro && r.sal.cards.every(c => c.sub && c.subVisivel) && /2 depósitos/.test(r.sal.cards[0].sub), J);
+  t.ok('Assiduidade: faixa de no máximo 64 px, número à direita, "2 em aberto" à vista', !r.erro && r.assid.h <= 64 && r.assid.cards.length === 4 && r.assid.cards.every(c => c.direita)
+    && r.assid.cards.some(c => /2 em aberto/.test(c.sub) && c.subVisivel) && !erros.length, J);
+  await ctx.close();
+});
+
+teste('corte-escada', async (b, t) => {
+  // a escada era montada à mão no SketchUp só para medir a diagonal do perfil
+  // lateral e do corrimão. Agora sai das medidas, em mm: degraus Z em chapa
+  // xadrez encostados na ponta um do outro, diagonal = n × √(pisada² +
+  // espelho²), o patamar um espelho acima do último degrau (o lance seguinte
+  // recua uma pisada sobre ele), o perfil nomeado cobrindo a lateral do
+  // degrau, corrimão em um lado ou nos dois, o 3D e a ficha do montador
+  if (!fs.existsSync(path.join(RAIZ, 'leitor_dwg'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'leitor_dwg' });
+  const r = await pg.evaluate(async () => {
+    const aba = document.querySelector('#abas .aba[data-aba="esc"]');
+    if (!aba || !window.RMEscada || !window.RMEscada.montador) return { erro: 'sem a Escada v2' };
+    aba.click(); await new Promise(x => setTimeout(x, 300));
+    const E = window.RMEscada;
+    const base = (o) => Object.assign({ degrau: { comp: 1200, pisada: 280, espelho: 175, abaF: 50, abaT: 50, esp: 3 }, perfil: { nome: 'U', alt: 200, aba: 50, esp: 3 },
+      corr: { nome: 'Tubo', diam: 38.1, alt: 900, lados: '2', prolong: 0 } }, o);
+    const um = E.calcula(base({ trechos: [{ tipo: 'lance', degraus: 16 }, { tipo: 'patamar', largura: 1200, comprimento: 1200 }] }));
+    const dois = E.calcula(base({ corr: { nome: 'Tubo', alt: 900, lados: '2', prolong: 300 }, trechos: [{ tipo: 'lance', degraus: 8 }, { tipo: 'patamar', largura: 1200, comprimento: 1000 }, { tipo: 'lance', degraus: 8 }, { tipo: 'patamar', largura: 1200, comprimento: 1200 }] }));
+    const esq = E.calcula(base({ corr: { nome: 'Tubo', lados: 'esq' }, trechos: [{ tipo: 'lance', degraus: 16 }] }));
+    const sem = E.calcula(base({ corr: { nome: 'Tubo', lados: '0' }, trechos: [{ tipo: 'lance', degraus: 16 }] }));
+    const baixo = E.calcula(base({ perfil: { nome: 'U', alt: 120 }, trechos: [{ tipo: 'lance', degraus: 16 }] }));
+    const longo = E.calcula(base({ trechos: [{ tipo: 'lance', degraus: 30 }] }));
+    const g = (r, k) => r.pecas.filter(p => p.grupo === k).map(p => [p.mm, p.qtd]);
+    const v1 = E.migra({ largura: 130, pisada: 28, espelho: 17.5, prolong: 30, perfilU: 'U 200', trechos: [{ tipo: 'lance', degraus: 10 }, { tipo: 'patamar', largura: 130, comprimento: 120 }] });
+    // a tela com a escada de 16 degraus + patamar, 1 lado só
+    E.define(base({ nome: 'teste', corr: { nome: 'Tubo', diam: 38.1, alt: 900, lados: 'dir', prolong: 0 }, trechos: [{ tipo: 'lance', degraus: 16 }, { tipo: 'patamar', largura: 1200, comprimento: 1200 }] }));
+    await new Promise(x => setTimeout(x, 200));
+    const pane = document.getElementById('pane-esc');
+    const v3 = pane.querySelector('#esV3 svg');
+    const tela = { on: pane.classList.contains('on'), v3: !!v3, faces: v3 ? v3.querySelectorAll('path').length : 0, xadrez: v3 ? v3.querySelectorAll('path.es-xz').length : 0,
+      tubos: v3 ? v3.querySelectorAll('path[fill="#c9d0d8"]').length : 0, listaTela: !!pane.querySelector('#esLista') || /Lista de corte/.test(pane.textContent),
+      desenho: !!pane.querySelector('#esDes svg polyline.es-lnb'),
+      // a cota do desenho mostra a maior medida de cada peça (a mesma da lista), e a ponta do patamar fechada
+      cotas: [...pane.querySelectorAll('#esDes svg text.es-ct')].map(x => x.textContent).join('|') + ' · ' + pane.querySelectorAll('#esDes .es-cota').length + ' · ' + pane.querySelectorAll('#esDes .es-fu').length, cobre: (document.getElementById('esCob') || {}).textContent || '' };
+    const sol = E.solido(E.estado());
+    const zs = [...new Set(sol.T.filter(x => x.k === 'c').map(x => Math.round(x.a[2])))];
+    const div = document.createElement('div'); div.innerHTML = E.montador();
+    tela.lista = div.querySelectorAll('.es-lista-wrap tbody tr').length;
+    const mk = [...div.querySelectorAll('table.es-mk tbody tr')].map(tr => [...tr.children].map(td => td.textContent.trim()));
+    const ev = []; const ouve = e => ev.push(e.detail); window.addEventListener('rm-chapas-add', ouve);
+    E.paraChapas(); window.removeEventListener('rm-chapas-add', ouve);
+    return {
+      tela, zs, mk: { n: mk.length, l1: mk[0], l16: mk[15], texto: /Ficha de montagem/.test(div.textContent) && /face de baixo/.test(div.textContent) && !!div.querySelector('svg.es-3d') && /lado direito/.test(div.textContent) },
+      um: { ang: Math.round(um.ang * 100) / 100, altura: um.altura, proj: um.proj, u: g(um, 'u'), c: g(um, 'c'), z: g(um, 'z'), p: g(um, 'p'), zdesc: um.pecas.find(p => p.grupo === 'z').desc + ' ' + um.pecas.find(p => p.grupo === 'z').cortes,
+        barras: E.barras(um.pecas.filter(p => p.grupo === 'u'), 6000).n, cortes: um.pecas.filter(p => p.grupo === 'u').map(p => p.cortes), cobre: um.cobre },
+      dois: { altura: dois.altura, u: g(dois, 'u'), c: g(dois, 'c'), z: g(dois, 'z'), meio: dois.pecas.find(p => p.grupo === 'u' && /Patamar 1/.test(p.onde)).cortes,
+        d9: dois.degraus[8] && [dois.degraus[8].topo, Math.round(dois.degraus[8].marca), dois.degraus[8].frente] },
+      esq: { c: g(esq, 'c'), txt: esq.pecas.filter(p => p.grupo === 'c').map(p => p.cortes).join() }, sem: g(sem, 'c'), baixo: baixo.cobre,
+      longo: E.barras(longo.pecas.filter(p => p.grupo === 'u'), 6000), v1: { d: v1.degrau, pat: v1.trechos[1], pr: v1.corr.prolong, nome: v1.perfil.nome },
+      ev: ev.map(d => [d.material, d.process, d.t, d.w, d.l, d.q])
+    };
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  const igual = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+  // "Lista de corte pode tirar": sai da tela e fica só na ficha do montador
+  t.ok('aba Escada com o 3D e o desenho; a lista de corte só na ficha do montador', !r.erro && r.tela.on && r.tela.v3 && r.tela.faces > 100 && r.tela.desenho && r.tela.lista >= 4 && !r.tela.listaTela, J);
+  t.ok('desenho: cota de cada peça pela maior medida (5660 e 1257) e o U que fecha o patamar', !r.erro && r.tela.cotas === '5.660 mm|1.257 mm · 2 · 1', J);
+  t.ok('degraus em chapa xadrez no 3D (um desenho por degrau e no patamar)', !r.erro && r.tela.xadrez >= 16, J);
+  // a peça do perfil sai pela maior medida, de ponta a ponta: o pé cortado
+  // no piso e a meia-esquadria da emenda deixam a borda de cima mais longa
+  // que a face de baixo (5283 pela face de baixo faltaria um pedaço)
+  t.ok('16 degraus Z 280 × 175: diagonal 5283 mm, ângulo 32°, patamar 1 espelho acima (2975), projeção 5680; peças de ponta a ponta 5660 e 1257', !r.erro && r.um.ang === 32.01 && r.um.altura === 2975 && r.um.proj === 5680 && igual(r.um.u, [[5660, 2], [1257, 2], [1200, 1]]), J);
+  t.ok('degraus Z 50×280×50 de 1200 mm em xadrez: 16 un., desenvolvimento 380; chapa do patamar', !r.erro && igual(r.um.z, [[1200, 16]]) && /Z 50×280×50/.test(r.um.zdesc) && /xadrez esp\. 3/.test(r.um.zdesc) && /desenvolvimento 380/.test(r.um.zdesc) && igual(r.um.p, [[1200, 1]]), J);
+  // corrimão (sem guarda-corpo) é o da parede: na altura da 5ª linha, de ponta a ponta
+  t.ok('corrimão acompanha o perfil, dos dois lados, em barras de 6 m (o resto da barra segue depois da dobra)', !r.erro && igual(r.um.c, [[5382, 2], [618, 2], [498, 2]]), J);
+  t.ok('corrimão de um lado só: 1 peça por trecho, só no lado escolhido; sem corrimão: nenhuma', !r.erro && igual(r.esq.c, [[5283, 1]]) && /esquerdo/.test(r.esq.txt) && igual(r.sem, []) && igual(r.zs, [1130]) && r.tela.tubos > 0, J);
+  t.ok('cortes: pé horizontal e meia-esquadria de 16° na emenda com o patamar', !r.erro && /pé: corte horizontal/.test(r.um.cortes[0]) && /meia-esquadria, 16° fora do esquadro/.test(r.um.cortes[0]) && /meia-esquadria/.test(r.um.cortes[1]), J);
+  t.ok('2 barras de 6 m não bastam: 3 barras de perfil', !r.erro && r.um.barras === 3, J);
+  t.ok('perfil cobre a lateral do degrau: 200 cobre (precisa 175), 120 não', !r.erro && r.um.cobre.ok && r.um.cobre.precisa === 175 && !r.baixo.ok && /cobre a lateral/i.test(r.tela.cobre), J);
+  t.ok('lance – patamar – lance – patamar: o lance de cima recua uma pisada no patamar (720 reto, 9 passos)', !r.erro && r.dois.altura === 3150 && igual(r.dois.u, [[3019, 2], [777, 2], [3029, 2], [1257, 2], [1200, 1]])
+    && (r.dois.meio.match(/meia-esquadria/g) || []).length === 2 && igual(r.dois.z, [[1200, 8], [1200, 8]]), J);
+  t.ok('degrau 9 (1º depois do patamar): topo 1750, marca a 2 passos (660) da ponta do perfil', !r.erro && igual(r.dois.d9, [1750, 660, 3240]), J);
+  t.ok('prolongamento do corrimão só nas pontas da escada; emenda onde a barra acaba', !r.erro && igual(r.dois.c, [[3040, 2], [720, 2], [2240, 2], [732, 2], [1416, 2]]), J);
+  t.ok('peça maior que a barra entra com emenda', !r.erro && r.longo.emendas === 2, J);
+  t.ok('ficha do montador: 16 marcas de 330 em 330 mm, alturas e o 3D', !r.erro && r.mk.texto && r.mk.n === 16 && igual(r.mk.l1, ['nº 1', '330 mm', '—', '175 mm', '0 mm'])
+    && igual(r.mk.l16, ['nº 16', '5.283 mm', '330 mm', '2.800 mm', '4.200 mm']), J);
+  t.ok('escada salva em cm (v1) vira mm', !r.erro && r.v1.d.comp === 1300 && r.v1.d.pisada === 280 && r.v1.d.espelho === 175 && r.v1.pat.comprimento === 1200 && r.v1.pr === 300 && r.v1.nome === 'U 200', J);
+  t.ok('degraus e patamar vão para o Cálculo de chapas em xadrez', !r.erro && igual(r.ev, [['xadrez_carbono', 'cutBend', '3', '380', '1200', 16], ['xadrez_carbono', 'cutBend', '3', '1200', '1200', 1], ['xadrez_carbono', 'cutBend', '3', '50', '1200', 2]]) && !erros.length, J);
+  await ctx.close();
+});
+
+teste('corte-escada-guarda-corpo', async (b, t) => {
+  // o guarda-corpo como a RM monta: 6 linhas de tubo 1" a cada 150 mm no
+  // prumo a partir do topo do perfil, corrimão 1 1/2" por dentro na altura
+  // da 5ª, postes 40x40 de 1,30 m por dentro da escada, encostados no perfil
+  // U e em pé sobre o meio do degrau (até 2 m entre eles) com barra maciça 1/2" de 4 cm no topo e o tubo 2" soldado
+  // em cima. Tubos em barras de 6 m, com a emenda onde a barra acaba. O lado
+  // da parede pode ter só o corrimão, preso na parede.
+  if (!fs.existsSync(path.join(RAIZ, 'leitor_dwg'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'leitor_dwg' });
+  const r = await pg.evaluate(async () => {
+    const aba = document.querySelector('#abas .aba[data-aba="esc"]');
+    if (!aba || !window.RMEscada) return { erro: 'sem a Escada' };
+    aba.click(); await new Promise(x => setTimeout(x, 300));
+    const E = window.RMEscada;
+    const tr = [{ tipo: 'lance', degraus: 16 }, { tipo: 'patamar', largura: 1200, comprimento: 1200 }];
+    const base = (o) => Object.assign({ degrau: { comp: 1200, pisada: 280, espelho: 175, abaF: 50, abaT: 50, esp: 3 }, perfil: { nome: 'U', alt: 200, aba: 50, esp: 3 },
+      corr: { nome: 'Tubo 1 1/2', diam: 38.1, alt: 900, prolong: 0 }, trechos: tr, barra: 6000,
+      gc: { linhas: { qtd: 6, nome: 'Tubo 1', d: 25.4 }, esp: 150, corr: { nome: 'Tubo 1 1/2', d: 38.1, linha: 5 }, topo: { nome: 'Tubo 2', d: 50.8 },
+        macica: { nome: 'Maciça 1/2', d: 12.7, alt: 40 }, poste: { nome: 'Quadrado 40', d: 40, alt: 1300, max: 2000 } } }, o);
+    const g = (r, k) => r.pecas.filter(p => p.grupo === k).map(p => [p.mm, p.qtd]);
+    const dois = E.calcula(base({ lados: { esq: { gc: true, corr: false }, dir: { gc: true, corr: false } } }));
+    const fotoE = base({ lados: { esq: { gc: true, corr: true }, dir: { gc: false, corr: true } } });
+    const foto = E.calcula(fotoE);
+    const antigo = E.calcula(base({ corr: { nome: 'Tubo', lados: '2' } }));
+    const sol = E.solido(fotoE), k = q => sol.T.filter(x => x.k === q);
+    const zs = q => [...new Set(k(q).map(x => Math.round(x.a[2] * 100) / 100))].sort((a, c) => a - c);
+    E.define(fotoE); await new Promise(x => setTimeout(x, 200));
+    const pane = document.getElementById('pane-esc');
+    const div = document.createElement('div'); div.innerHTML = E.montador();
+    const tela = { cks: pane.querySelectorAll('#esLados input[type=checkbox]').length, vem: pane.querySelector('[data-l="esq.corr"]').disabled,
+      gp: pane.querySelectorAll('#esDes .es-gp').length, linhas: pane.querySelectorAll('#esDes polyline.es-gs').length, topo: pane.querySelectorAll('#esDes polyline.es-gt').length,
+      em: pane.querySelectorAll('#esDes .es-em').length, bar: (div.querySelector('.es-bar') || {}).textContent || '', sup: /Corrimão na parede/.test(div.textContent) && /7 suportes por lado/.test(div.textContent),
+      ficha: div.querySelectorAll('table.es-gcv tbody tr').length,
+      fichaTxt: /Marcas no poste, a partir do topo do perfil: 175 · 351 · 526 · 701 · 876 · 1\.052 mm nos lances/.test(div.textContent) && /na altura da 5ª linha/.test(div.textContent)
+        && /Maciça 1\/2 de 50 mm centralizada/.test(div.textContent) && /encostados no perfil U e em pé sobre o meio do degrau/.test(div.textContent) && /pelo lado de fora dos postes/.test(div.textContent) && /o 7º tubo/.test(div.textContent) && /Emendas de barra/.test(div.textContent) };
+    pane.querySelector('[data-l="esq.gc"]').click(); await new Promise(x => setTimeout(x, 300));
+    const rs = E.calcula(E.estado()), semGc = { est: E.estado().lados.esq.gc, gl: rs.pecas.filter(p => p.grupo === 'gl').length, sp: (rs.pecas.find(p => p.grupo === 'sp') || {}).qtd };
+    return { tela, semGc,
+      dois: { gl: g(dois, 'gl'), gc1: g(dois, 'gc1'), gt: g(dois, 'gt'), gp: g(dois, 'gp'), gb: g(dois, 'gb'), c: g(dois, 'c'), cs: g(dois, 'sp'),
+        postes: dois.gc.postes.map(p => Math.round(p.x)), onde: dois.gc.postes[0].onde, base: dois.gc.postes.map(p => p.base), topo0: dois.gc.Btop[0][1], alturas: dois.gc.alturas },
+      descs: ['gl', 'gc1', 'gt', 'gp'].map(k => (dois.pecas.find(p => p.grupo === k) || {}).desc),
+      foto: { gl: g(foto, 'gl'), c: g(foto, 'c'), cs: g(foto, 'sp'), gc1: g(foto, 'gc1') },
+      antigo: { gl: g(antigo, 'gl'), c: g(antigo, 'c') },
+      sol: { gl: zs('gl'), gc1: zs('gc1'), gt: zs('gt'), gb: zs('gb'), c: zs('c'), cs: zs('sp'), em: k('em').length, gl6: k('gl').length > 0 && k('gl').every(x => x.d === 25.4), gt2: k('gt').every(x => x.d === 50.8),
+        pontas: [k('gt').filter(x => x.ini).length, k('gt').filter(x => x.fim).length, k('gl').filter(x => x.ini).length], pedacosGt: k('gt').length,
+        // poste em pedaços curtos (senão ele é pintado por cima da alma do perfil e aparece do lado de fora ao girar)
+        postes: [k('gp').every(x => Math.abs(x.b[1] - x.a[1]) <= 120.01), k('gp').filter(x => x.ini).length, k('gp').filter(x => x.fim).length, k('gp').length] }
+    };
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  const igual = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+  t.ok('postes em pé no meio do degrau (1º, 6º, 11º e 16º, até 2 m entre eles) e na ponta do patamar', !r.erro && igual(r.dois.postes, [140, 1540, 2940, 4340, 5660]) && r.dois.onde === 'meio do degrau nº 1'
+    && igual(r.dois.base, [175, 1050, 1925, 2800, 2975]), J);
+  // poste 1300 + maciça 50 + tubo 2" = 1,40 da base do poste ao topo do tubo; as 6 linhas vão por igual entre
+  // o topo do perfil e o tubo de cima (7 vãos iguais, o mais perto possível dos 150). Maciça de 40 salva antes vira 50.
+  t.ok('6 linhas por igual entre o topo do perfil e o tubo 2" (175 mm no lance); poste 1300 + maciça 50', !r.erro && igual(r.dois.alturas.map(Math.round), [175, 351, 526, 701, 876, 1052]) && Math.abs(r.dois.topo0 - 1462.9) < 0.01, J);
+  t.ok('dois lados: 6 linhas de 1" (cada uma dobra num ponto), corrimão 1 1/2" na 5ª, tubo 2", em barras de 6 m; 10 postes de 1300 e 10 maciças de 50', !r.erro
+    && igual(r.dois.gl, [[5107, 2], [893, 2], [336, 2], [5140, 2], [860, 2], [341, 2], [5174, 2], [826, 2], [346, 2], [5207, 2], [793, 2], [351, 2], [5240, 2], [760, 2], [357, 2], [5273, 2], [727, 2], [362, 2]])
+    && igual(r.dois.gc1, [[5240, 2], [760, 2], [357, 2]]) && igual(r.dois.gt, [[5307, 2], [693, 2], [367, 2]])
+    && igual(r.dois.gp, [[1300, 10]]) && igual(r.dois.gb, [[50, 10]]) && igual(r.dois.c, []) && igual(r.dois.cs, []), J);
+  // espessura da parede de cada tubo no nome (lista, barras e pedido): 1" 1 1/2" e 2" com 1,2; 40x40 com 2
+  t.ok('tubos com a espessura: 1,2 nos redondos e 2 no 40x40', !r.erro && igual(r.descs, ['Tubo 1 esp. 1,2', 'Tubo 1 1/2 esp. 1,2', 'Tubo 2 esp. 1,2', 'Quadrado 40 esp. 2']), J);
+  t.ok('como na foto: guarda-corpo à esquerda (com o corrimão dele), o da parede só com o corrimão preso na parede (7 suportes)', !r.erro && r.foto.gl.length === 18 && r.foto.gl.every(x => x[1] === 1)
+    && igual(r.foto.gc1, [[5240, 1], [760, 1], [357, 1]]) && igual(r.foto.c, [[5382, 1], [618, 1], [498, 1]]) && igual(r.foto.cs, [[70, 7]]), J);
+  t.ok('escada salva antes (só corrimão por lado) continua sem guarda-corpo', !r.erro && igual(r.antigo.gl, []) && igual(r.antigo.c, [[5382, 2], [618, 2], [498, 2]]), J);
+  t.ok('3D: postes por dentro encostados no perfil, linhas de 1" pelo lado de fora deles, tubo 2" no plano deles, corrimão mais para dentro', !r.erro && igual(r.sol.gl, [34.3]) && igual(r.sol.gt, [67]) && igual(r.sol.gb, [67])
+    && igual(r.sol.gc1, [136.05]) && igual(r.sol.c, [1130]) && igual(r.sol.cs, [1130, 1195, 1200]) && r.sol.em >= 9 && r.sol.gl6 && r.sol.gt2, J);
+  t.ok('tubo 2" inteiro no 3D: em pedaços só para pintar, com ponta só nas pontas e na emenda dos 6 m', !r.erro && r.sol.pedacosGt > 4 && JSON.stringify(r.sol.pontas) === '[2,2,12]', J);
+  t.ok('3D: poste em pedaços de até 120 mm, com ponta só embaixo e em cima', !r.erro && JSON.stringify(r.sol.postes) === '[true,5,5,55]', J);
+  t.ok('tela: o corrimão vem com o guarda-corpo; desenho com postes, 6 linhas + tubo de cima e emendas', !r.erro && r.tela.cks === 4 && r.tela.vem && r.tela.gp === 5
+    && r.tela.linhas === 7 && r.tela.topo === 1 && r.tela.em > 0 && /de Tubo 1 /.test(r.tela.bar) && r.tela.sup, J);
+  t.ok('ficha do montador: postes, marcas no poste, maciça e emendas', !r.erro && r.tela.ficha === 5 && r.tela.fichaTxt, J);
+  t.ok('desmarcar o guarda-corpo tira as linhas e deixa o corrimão na parede dos dois lados', !r.erro && r.semGc.est === false && r.semGc.gl === 0 && r.semGc.sp === 14 && !erros.length, J);
+  await ctx.close();
+});
+
+teste('corte-escada-corrimao-na-parede', async (b, t) => {
+  // "Preciso da opção de deixar apenas o tubo interno que fica ao lado da 5º
+  // tubo: às vezes não tem guarda-corpo por ter uma parede, e fixamos esse
+  // tubo diretamente na parede." Antes o lado sem guarda-corpo levava o
+  // corrimão numa altura própria, em suportes que subiam do degrau.
+  if (!fs.existsSync(path.join(RAIZ, 'leitor_dwg'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'leitor_dwg' });
+  const r = await pg.evaluate(async () => {
+    const aba = document.querySelector('#abas .aba[data-aba="esc"]');
+    if (!aba || !window.RMEscada) return { erro: 'sem a Escada' };
+    aba.click(); await new Promise(x => setTimeout(x, 300));
+    const E = window.RMEscada;
+    const e = { degrau: { comp: 1200, pisada: 280, espelho: 175, abaF: 50, abaT: 50, esp: 3 }, perfil: { nome: 'U', alt: 200, aba: 50, esp: 3 },
+      trechos: [{ tipo: 'lance', degraus: 16 }, { tipo: 'patamar', largura: 1200, comprimento: 1200 }], lados: { esq: { gc: false, corr: true }, dir: { gc: true, corr: false } } };
+    E.define(e); await new Promise(x => setTimeout(x, 300));
+    const st = E.estado(), R = E.calcula(st), S = E.solido(st), pane = document.getElementById('pane-esc');
+    const P = R.gc.parede, c = S.T.filter(x => x.k === 'c'), sp = S.T.filter(x => x.k === 'sp');
+    // a altura: a mesma linha do corrimão de dentro do guarda-corpo (a 5ª)
+    const meio = P.L[0], linha5 = R.gc.linhas[4] && R.gc.linhas[4][0];
+    const div = document.createElement('div'); div.innerHTML = E.montador();
+    return {
+      altura: [Math.round(P.altL), Math.round(R.gc.alturas[4])], z: [...new Set(c.map(x => Math.round(x.a[2])))], sups: P.sups.map(q => Math.round(q.d)),
+      supZ: [...new Set(sp.map(x => Math.round(x.a[2])))].sort((a, b) => a - b), pecas: R.pecas.filter(p => p.grupo === 'sp' || p.grupo === 'c').map(p => [p.grupo, p.mm, p.qtd]),
+      tubo: R.pecas.find(p => p.grupo === 'c').cortes, ped: E.pedido().filter(x => /Suporte/.test(x.desc)).map(x => [x.desc, x.qtd, x.un]),
+      tela: { cab: [...pane.querySelectorAll('#esLados b')].map(x => x.textContent).join('|'), dirCorr: pane.querySelector('[data-l="dir.corr"]').disabled && !pane.querySelector('[data-l="dir.corr"]').checked,
+        campos: ['corr.sup', 'corr.afast', 'corr.supNome'].every(k => pane.querySelector('[data-g="' + k + '"]')), alturaCampo: !!pane.querySelector('[data-g="corr.alt"]'),
+        suportesDesenho: pane.querySelectorAll('#esDes .es-sp').length, chapasNoPedido: !!pane.querySelector('#esPed #esChapas'), imprimirLista: !!pane.querySelector('#esImp') },
+      ficha: /Corrimão na parede/.test(div.textContent) && /7 suportes por lado/.test(div.textContent) && /a da 5ª linha do guarda-corpo, 876 mm/.test(div.textContent) && /150 · 1\.183 · 2\.216/.test(div.textContent)
+    };
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  const igual = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+  t.ok('tela: "Guarda-corpo" e "Corrimão na parede" por lado; no lado do guarda-corpo o da parede não se marca', !r.erro && r.tela.cab === 'Guarda-corpo|Corrimão na parede' && r.tela.dirCorr && r.tela.campos && !r.tela.alturaCampo, J);
+  t.ok('o corrimão da parede na altura da 5ª linha (876 mm do topo do perfil no lance), de ponta a ponta', !r.erro && igual(r.altura, [876, 876]) && /na parede, na altura da 5ª linha/.test(r.tubo)
+    && igual(r.pecas.filter(p => p[0] === 'c').map(p => p[1]), [5382, 618, 498]), J);
+  t.ok('7 suportes de parede: a 150 mm das pontas e o resto por igual (até 1200 entre eles); no pedido, em peças', !r.erro && igual(r.sups, [150, 1183, 2216, 3249, 4282, 5315, 6348])
+    && igual(r.pecas.filter(p => p[0] === 'sp'), [['sp', 70, 7]]) && igual(r.ped, [['Suporte de parede para corrimão (tubo Ø 38,1 mm)', 7, 'pç']]), J);
+  t.ok('3D: o tubo a 70 mm da parede (que encosta na alma do perfil) e cada suporte da parede até ele', !r.erro && igual(r.z, [70]) && igual(r.supZ, [0, 5, 70]), J);
+  t.ok('desenho com os suportes; ficha do montador com a altura e as posições; lista de corte fora da tela', !r.erro && r.tela.suportesDesenho === 7 && r.ficha && r.tela.chapasNoPedido && !r.tela.imprimirLista && !erros.length, J);
+  await ctx.close();
+});
+
+teste('corte-escada-ficha-uma-folha', async (b, t) => {
+  // "A montagem para fabricação segue esse padrão para o montador entender,
+  // simples ... incluir ao lado um 3D, que caiba tudo em uma única folha":
+  // nome e medidas do degrau em cima, vista de cima com os pisos numerados e
+  // as cotas, vista de lado com os mesmos números e a altura, e o 3D.
+  if (!fs.existsSync(path.join(RAIZ, 'leitor_dwg'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'leitor_dwg' });
+  const html = await pg.evaluate(async () => {
+    const aba = document.querySelector('#abas .aba[data-aba="esc"]');
+    if (!aba || !window.RMEscada || !window.RMEscada.folhaMontagem) return '';
+    aba.click(); await new Promise(x => setTimeout(x, 300));
+    window.RMEscada.define({ nome: 'Exemplo', degrau: { comp: 1200, pisada: 280, espelho: 172, abaF: 50, abaT: 50, esp: 3 }, perfil: { nome: 'U', alt: 200, aba: 50, esp: 3 },
+      trechos: [{ tipo: 'lance', degraus: 10 }, { tipo: 'patamar', largura: 1200, comprimento: 1200 }, { tipo: 'lance', degraus: 7 }], lados: { esq: { gc: false, corr: true }, dir: { gc: true, corr: false } } });
+    await new Promise(x => setTimeout(x, 300));
+    return window.RMEscada.folhaMontagem();
+  }).catch(e => 'ERRO ' + e.message);
+  const p2 = await ctx.newPage();
+  await p2.setContent('<!doctype html><html><head><meta charset="utf-8"><style>@page{size:A4 landscape;margin:8mm}body{margin:0}</style></head><body>' + html + '</body></html>');
+  const r = await p2.evaluate(() => {
+    const a = document.querySelector('article.esf'); if (!a) return { erro: 'sem a folha' };
+    const nums = sel => [...document.querySelectorAll(sel + ' text')].map(x => x.textContent).filter(x => /^\d\d$/.test(x));
+    return { tx: a.querySelector('.esf-tx').textContent.replace(/\s+/g, ' '), cima: nums('.esf-cima'), lado: nums('.esf-lado'),
+      cotas: [...document.querySelectorAll('.esf-cima text,.esf-lado text')].map(x => x.textContent).filter(x => /\./.test(x)),
+      chegada: /chegada/.test(document.querySelector('.esf-lado').textContent), tres: !!a.querySelector('svg.es-3d'), cabe: a.scrollHeight <= a.clientHeight + 1 && a.scrollWidth <= a.clientWidth + 1 };
+  }).catch(e => ({ erro: e.message }));
+  const pdf = await p2.pdf({ format: 'A4', landscape: true, margin: { top: '8mm', bottom: '8mm', left: '8mm', right: '8mm' } }).catch(() => null);
+  r.paginas = pdf ? (pdf.toString('latin1').match(/\/Type\s*\/Page[^s]/g) || []).length : 0;
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  const seq = Array.from({ length: 18 }, (_, i) => String(i + 1).padStart(2, '0'));
+  t.ok('em cima: nome, nº de degraus + patamar, altura e base do degrau', !r.erro && /ESCADA Exemplo/.test(r.tx) && /nº de degraus: 17 \+ patamar/.test(r.tx) && /altura degrau: 172 mm/.test(r.tx) && /base degrau: 280 mm/.test(r.tx)
+    && /Corrimão na parede: lado esquerdo/.test(r.tx), J);
+  t.ok('vista de cima e de lado com os mesmos pisos 01 a 18 (o patamar é o 11)', !r.erro && JSON.stringify(r.cima) === JSON.stringify(seq) && JSON.stringify(r.lado) === JSON.stringify(seq), J);
+  t.ok('cotas: comprimento 5.960 e largura 1.200 na vista de cima; altura 3.268 até a chegada', !r.erro && JSON.stringify(r.cotas) === JSON.stringify(['5.960', '1.200', '3.268']) && r.chegada, J);
+  t.ok('3D ao lado e tudo numa folha A4 deitada', !r.erro && r.tres && r.cabe && r.paginas === 1 && !erros.length, J);
+  // pelo caminho de verdade: o botão manda a PÁGINA INTEIRA para o PDF (com o
+  // impresso comum, que reserva 16 mm embaixo para o pé). A folha de 194 mm
+  // passava da página e os desenhos pulavam para a segunda: a primeira saía
+  // só com os títulos ("No pdf não aparece nada").
+  const doc = await pg.evaluate(async () => {
+    let h = null; window.rmDesktop = { salvarPDF: async (x) => { h = x; return { ok: true }; } };
+    document.getElementById('esMont').click(); await new Promise(x => setTimeout(x, 900)); return h;
+  }).catch(() => null);
+  const p3 = await ctx.newPage();
+  await p3.setContent(doc || '<p>sem documento</p>');
+  const pdf3 = await p3.pdf({ preferCSSPageSize: true, printBackground: true }).catch(() => null);
+  await p3.emulateMedia({ media: 'print' });
+  const real = await p3.evaluate(() => { const a = document.querySelector('article.esf'); if (!a) return { erro: 'sem a folha no documento' };
+    return { svgs: [...a.querySelectorAll('.esf-corpo svg')].map(x => Math.round(x.getBoundingClientRect().height)), fim: Math.round(a.getBoundingClientRect().bottom), doc: document.documentElement.scrollHeight }; }).catch(e => ({ erro: e.message }));
+  real.paginas = pdf3 ? (pdf3.toString('latin1').match(/\/Type\s*\/Page[^s]/g) || []).length : 0;
+  t.ok('pelo botão (a página inteira, com o pé da papelaria): uma folha só, com os três desenhos nela', !real.erro && real.paginas === 1 && real.svgs.length === 3 && real.svgs.every(h => h > 300), JSON.stringify(real));
+  await ctx.close();
+});
+
+teste('corte-escada-perfil-patamar', async (b, t) => {
+  // o perfil lateral vai com a abertura virada para os degraus (as abas
+  // entram sobre eles), e o patamar é uma chapa só: no 3D ele aparecia
+  // dividido em faixas, como o perfil, pelos pedaços da ordem de pintura
+  if (!fs.existsSync(path.join(RAIZ, 'leitor_dwg'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'leitor_dwg' });
+  const r = await pg.evaluate(async () => {
+    const aba = document.querySelector('#abas .aba[data-aba="esc"]');
+    if (!aba || !window.RMEscada) return { erro: 'sem a Escada' };
+    aba.click(); await new Promise(x => setTimeout(x, 300));
+    const E = window.RMEscada;
+    const e = { degrau: { comp: 1200, pisada: 280, espelho: 175, abaF: 50, abaT: 50, esp: 3 }, perfil: { nome: 'U', alt: 200, aba: 50, esp: 3 },
+      corr: { nome: 'Tubo', lados: '0' }, trechos: [{ tipo: 'lance', degraus: 16 }, { tipo: 'patamar', largura: 1200, comprimento: 1200 }] };
+    const R = E.calcula(e), S = E.solido(e), B = R.gc.B;
+    const yEm = x => { for (let i = 0; i < B.length - 1; i++) { const a = B[i], c = B[i + 1]; if (x <= c[0] + 1e-6 || i === B.length - 2) { const u = c[0] > a[0] ? (x - a[0]) / (c[0] - a[0]) : 0; return a[1] + (c[1] - a[1]) * Math.max(0, Math.min(1, u)); } } };
+    const tracos = f => f.bordas ? f.bordas.map(i => [f.pts[i], f.pts[(i + 1) % 4]]) : f.pts.map((p, i) => [p, f.pts[(i + 1) % 4]]);
+    // perfil do lado esquerdo: a alma por fora (z -3 a 0), as abas para dentro (até z 47)
+    const ue = S.F.filter(f => f.c === 'u' && f.pts.every(p => p[2] < 600)), zs = ue.flatMap(f => f.pts.map(p => p[2]));
+    // traços de través na alma de fora: só nas pontas de cada peça (pé, as duas da emenda, topo)
+    const alma = ue.filter(f => f.pts.every(p => Math.abs(p[2] + 3) < 1e-6));
+    const naLinha = p => Math.abs(p[1] - yEm(p[0])) < 0.5;
+    const traves = alma.flatMap(tracos).filter(([p, q]) => naLinha(p) !== naLinha(q)).length;
+    // patamar: nenhum traço de través no meio da chapa (x entre as pontas)
+    const pat = R.trechos.find(t => t.tipo === 'patamar');
+    const topo = S.F.filter(f => f.c === 'x' && f.pts.every(p => Math.abs(p[1] - pat.topo) < 1e-6));
+    const meio = topo.flatMap(tracos).filter(([p, q]) => Math.abs(p[0] - q[0]) < 1e-6 && p[0] > pat.px0 + 1 && p[0] < pat.px1 - 1).length;
+    // a grade de relevos é a da chapa inteira: o passo de 40 mm não quebra entre os pedaços
+    const xs = [...new Set(topo.flatMap(f => (f.deco.txt.match(/M([-\d.]+) /g) || []).map(m => Math.round(Number(m.slice(1, -1)) + 8.5))))].sort((a, c) => a - c);
+    const passos = [...new Set(xs.slice(1).map((x, i) => x - xs[i]))];
+    // a ponta do patamar fecha com o perfil U, entre os laterais
+    const fecho = R.pecas.filter(p => p.grupo === 'u' && /Fechamento do patamar 1/.test(p.onde)).map(p => [p.mm, p.qtd]);
+    const almaFim = S.F.filter(f => f.c === 'u' && f.pts.every(p => Math.abs(p[0] - pat.px1) < 1e-6)).map(f => [Math.min(...f.pts.map(p => p[2])), Math.max(...f.pts.map(p => p[2]))]);
+    E.define(e); await new Promise(x => setTimeout(x, 200));
+    const div = document.createElement('div'); div.innerHTML = E.montador();
+    return { zmin: Math.min(...zs), zmax: Math.max(...zs), traves, pedacos: topo.length, meio, passos, fecho, almaFim, ficha: /abertura virada para os degraus/.test(div.textContent) };
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  t.ok('perfil com a abertura para os degraus: alma por fora, abas para dentro', !r.erro && r.zmin === -3 && r.zmax === 47, J);
+  t.ok('perfil sem divisão no 3D: traço de través só nas pontas das peças', !r.erro && r.traves === 4, J);
+  t.ok('patamar é uma chapa só: sem traço no meio e relevo contínuo', !r.erro && r.pedacos > 1 && r.meio === 0 && JSON.stringify(r.passos) === '[40]', J);
+  t.ok('ponta do patamar fechada com o perfil U de 1200 entre os laterais', !r.erro && JSON.stringify(r.fecho) === '[[1200,1]]' && r.almaFim.some(z => z[0] === 0 && z[1] === 1200), J);
+  t.ok('ficha do montador avisa a posição do perfil', !r.erro && r.ficha && !erros.length, J);
+  await ctx.close();
+});
+
+teste('corte-escada-pedido', async (b, t) => {
+  // a chapa do patamar tem dobra de 50 para baixo e 50 para cima, mas a RM
+  // manda cortar as dobras à parte e solda; a chapa xadrez padrão tem 1200:
+  // patamar 1300 x 1300 = chapa 1200 x 1300 + 2 extensões de 100 x 1300.
+  // E o pedido de compra sai da escada: degraus, patamar, tubos (em barras).
+  if (!fs.existsSync(path.join(RAIZ, 'leitor_dwg'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'leitor_dwg' });
+  const r = await pg.evaluate(async () => {
+    const aba = document.querySelector('#abas .aba[data-aba="esc"]');
+    if (!aba || !window.RMEscada || !window.RMEscada.pedido) return { erro: 'sem o pedido de compra' };
+    aba.click(); await new Promise(x => setTimeout(x, 300));
+    const E = window.RMEscada;
+    const base = (pt) => ({ nome: 'teste', degrau: { comp: 1300, pisada: 280, espelho: 175, abaF: 50, abaT: 50, esp: 3 }, perfil: { nome: 'U', alt: 200, aba: 50, esp: 3 },
+      lados: { esq: { gc: true, corr: false }, dir: { gc: true, corr: false } }, patamar: { abaF: 50, abaT: 50, chapa: 1200 },
+      trechos: [{ tipo: 'lance', degraus: 16 }, { tipo: 'patamar', largura: pt, comprimento: pt }] });
+    const pz = (R) => R.pecas.filter(p => p.grupo === 'p' || p.grupo === 'pe').map(p => [p.grupo, Math.round(p.w), Math.round(p.l), p.qtd]);
+    const g13 = pz(E.calcula(base(1300))), g12 = pz(E.calcula(base(1200)));
+    const S = E.solido(base(1200)), pat = E.calcula(base(1200)).trechos[1];
+    const dobra = S.F.filter(f => f.c === 'z' && f.pts.every(p => Math.abs(p[0] - pat.px0) < 1e-6)).some(f => Math.min(...f.pts.map(p => p[1])) === pat.topo - 50);
+    E.define(Object.assign(base(1300), { pedido: { v: 2, fornecedor: 'FORNECEDOR TESTE', numero: '77', sec: { degraus: true, patamar: true, tubos: true, perfil: false }, extras: [{ desc: 'Chumbador teste', med: '3/8', qtd: 8, un: 'pç' }] } }));
+    await new Promise(x => setTimeout(x, 200));
+    const it = E.pedido();
+    // o perfil U vem no pedido por padrão, e um pedido salvo antes (sem v) passa a trazê-lo
+    const salvo = E.estado();
+    E.define(Object.assign(base(1300), {})); const novo = E.estado().pedido.sec.perfil, temPerfil = E.pedido().some(x => x.sec === 'Perfil lateral');
+    E.define(Object.assign(base(1300), { pedido: { fornecedor: 'X', sec: { degraus: true, patamar: true, tubos: true, perfil: false } } })); const antigo = E.estado().pedido.sec.perfil;
+    E.define(salvo); await new Promise(x => setTimeout(x, 200));
+    const pane = document.getElementById('pane-esc');
+    const linhas = () => [...pane.querySelectorAll('#esPedTab tbody tr')].map(tr => tr.textContent);
+    const antes = linhas().some(x => /Perfil lateral/.test(x));
+    pane.querySelector('[data-ps="perfil"]').click(); await new Promise(x => setTimeout(x, 100));
+    const depois = linhas().some(x => /Perfil lateral/.test(x));
+    pane.querySelector('#esPedAdd').click(); await new Promise(x => setTimeout(x, 100));
+    const ex = pane.querySelectorAll('#esPedEx .es-px').length;
+    const div = document.createElement('div'); div.innerHTML = E.pedidoHTML();
+    return { g13, g12, dobra, antes, depois, ex, novo, temPerfil, antigo,
+      secs: [...new Set(it.map(x => x.sec))], deg: it.filter(x => x.sec === 'Degraus').map(x => [x.med, x.qtd]),
+      pat: it.filter(x => x.sec === 'Patamar').map(x => [x.med, x.qtd]), tubos: it.filter(x => x.sec === 'Tubos e barras').map(x => [x.desc, x.un]),
+      outros: it.filter(x => x.sec === 'Outros').map(x => [x.desc, x.qtd]),
+      pdf: /Pedido de compra/.test(div.textContent) && /FORNECEDOR TESTE/.test(div.textContent) && /100 × 1.300 mm/.test(div.textContent) && /Chumbador teste/.test(div.textContent) };
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  const igual = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+  t.ok('patamar 1300 x 1300: chapa 1200 x 1300 + 2 extensões de 100 x 1300', !r.erro && igual(r.g13, [['p', 1200, 1300, 1], ['pe', 100, 1300, 2]]), J);
+  t.ok('patamar 1200 x 1200: chapa 1200 x 1200 + 2 dobras de 50 x 1200', !r.erro && igual(r.g12, [['p', 1200, 1200, 1], ['pe', 50, 1200, 2]]), J);
+  t.ok('3D: o patamar mostra a dobra de 50 para baixo na frente', !r.erro && r.dobra, J);
+  t.ok('pedido: degraus, patamar (chapa + extensões), tubos em barras e itens a mais', !r.erro && igual(r.secs, ['Degraus', 'Patamar', 'Tubos e barras', 'Outros'])
+    && igual(r.deg, [['1.300 mm', 16]]) && igual(r.pat, [['1.200 × 1.300 mm', 1], ['100 × 1.300 mm', 2]]) && r.tubos.length >= 4 && r.tubos.every(x => x[1] === 'barra')
+    && igual(r.outros, [['Chumbador teste', 8]]), J);
+  t.ok('tela: marcar o perfil lateral põe ele no pedido; + Item abre uma linha', !r.erro && !r.antes && r.depois && r.ex === 2, J);
+  t.ok('perfil U no pedido por padrão (também em pedido salvo antes)', !r.erro && r.novo === true && r.temPerfil && r.antigo === true, J);
+  t.ok('PDF do pedido com fornecedor, extensões e itens a mais', !r.erro && r.pdf && !erros.length, J);
+  await ctx.close();
+});
+
+teste('corte-escada-paineis-e-virada', async (b, t) => {
+  // "Essa opção de guarda corpo também precisa ter na aba escada" (fotos da
+  // RM): um painel por trecho -- linhas retas, no nível no patamar, com poste
+  // nas duas pontas e passando do poste com a ponta livre --, tubo de cima e
+  // corrimão com as dobras curvadas, e escada em L ou em U (o patamar vira)
+  if (!fs.existsSync(path.join(RAIZ, 'leitor_dwg'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'leitor_dwg' });
+  const r = await pg.evaluate(async () => {
+    const aba = document.querySelector('#abas .aba[data-aba="esc"]');
+    if (!aba || !window.RMEscada) return { erro: 'sem a Escada' };
+    aba.click(); await new Promise(x => setTimeout(x, 300));
+    const E = window.RMEscada, esp = ms => new Promise(x => setTimeout(x, ms));
+    const gc0 = { linhas: { qtd: 6, nome: 'Tubo 1', d: 25.4 }, esp: 150, corr: { nome: 'Tubo 1 1/2', d: 38.1, linha: 5 }, topo: { nome: 'Tubo 2', d: 50.8 },
+      macica: { nome: 'Maciça 1/2', d: 12.7, alt: 50 }, poste: { nome: 'Quadrado 40', d: 40, alt: 1300, max: 2000 } };
+    const base = (o) => Object.assign({ degrau: { comp: 1200, pisada: 280, espelho: 175, abaF: 50, abaT: 50, esp: 3 }, perfil: { nome: 'U', alt: 200, aba: 50, esp: 3 },
+      corr: { nome: 'Tubo 1 1/2', diam: 38.1, prolong: 0 }, barra: 6000, lados: { esq: { gc: true, corr: false }, dir: { gc: true, corr: false } }, gc: gc0 }, o);
+    const g = (R, k) => R.pecas.filter(p => p.grupo === k).map(p => [p.mm, p.qtd, p.onde]);
+    const cortes = (R, k) => R.pecas.filter(p => p.grupo === k).map(p => p.cortes).join(' | ');
+    const tr = v => [{ tipo: 'lance', degraus: 8 }, { tipo: 'patamar', largura: v === 'esq180' ? 2550 : 1200, comprimento: 1200, vira: v }, { tipo: 'lance', degraus: 8 }];
+    const P = E.calcula(base({ trechos: tr(''), gc: Object.assign({}, gc0, { modelo: 'paineis', dobra: 'curva', passa: 50, raio: 120 }) }));
+    const C = E.calcula(base({ trechos: tr('') }));
+    const U = E.calcula(base({ trechos: tr('esq180') })), L = E.calcula(base({ trechos: tr('dir90') }));
+    const pecasLado = (R, sd) => R.pecas.filter(p => p.grupo === 'u').filter(p => p.qtd === 1).map(p => p.mm);
+    // 3D da U: os degraus do 2º lance voltam ao lado do 1º (z de -1350 a -150): o 1º dele junto do patamar (x 1960 a 2240), o último na altura do pé (x 0)
+    const SU = E.solido(base({ trechos: tr('esq180') })), d9 = SU.F.filter(f => f.c === 'x' && f.pts.every(q => Math.abs(q[1] - 1750) < 1e-6));
+    const zs = d9.flatMap(f => f.pts.map(q => q[2])), xs = d9.flatMap(f => f.pts.map(q => q[0]));
+    const d16 = SU.F.filter(f => f.c === 'x' && f.pts.every(q => Math.abs(q[1] - 2975) < 1e-6)).flatMap(f => f.pts.map(q => q[0]));
+    const aviso = E.calcula(base({ trechos: [{ tipo: 'lance', degraus: 8 }, { tipo: 'patamar', largura: 1500, comprimento: 1200, vira: 'dir180' }, { tipo: 'lance', degraus: 8 }] })).avisos.join(' ');
+    // tela: escolher "U esquerda" num patamar de 1200 sobe a largura (2 degraus + vão)
+    E.define(base({ trechos: [{ tipo: 'lance', degraus: 8 }, { tipo: 'patamar', largura: 1200, comprimento: 1200 }, { tipo: 'lance', degraus: 8 }] })); await esp(250);
+    const pane = document.getElementById('pane-esc'), sel = pane.querySelector('#esTr [data-i="1"] select[data-k="vira"]');
+    sel.value = 'esq180'; sel.dispatchEvent(new Event('input', { bubbles: true })); await esp(350);
+    const est = E.estado().trechos[1], txt = (pane.querySelector('#esDes svg text.es-cm') || {}).textContent || '';
+    const folha = document.createElement('div'); folha.innerHTML = E.folhaMontagem();
+    const cima = [...folha.querySelectorAll('.esf-cima text')].map(x => x.textContent), mont = document.createElement('div'); mont.innerHTML = E.montador();
+    // opções do guarda-corpo na tela
+    const opc = ['gc.modelo', 'gc.dobra', 'gc.passa', 'gc.raio'].every(k => pane.querySelector('[data-g="' + k + '"]'));
+    return {
+      P: { gl: g(P, 'gl'), glc: cortes(P, 'gl'), gt: g(P, 'gt'), gtc: cortes(P, 'gt'), postes: P.gc.postes.map(q => [Math.round(q.x), q.onde]) },
+      C: { gl: cortes(C, 'gl') },
+      U: { planta: [U.planta.x1 - U.planta.x0, U.planta.z1 - U.planta.z0, U.planta.z0], lado: pecasLado(U), u: cortes(U, 'u'), gt: cortes(U, 'gt'), pe: cortes(U, 'pe'), av: U.avisos,
+        z9: [Math.min(...zs), Math.max(...zs)], x9: [Math.min(...xs), Math.max(...xs)], x16: Math.min(...d16), ver: U.ver },
+      L: { planta: [L.planta.x1 - L.planta.x0, L.planta.z1 - L.planta.z0], lado: pecasLado(L), cantos: [L.lados.esq.cantos.length, L.lados.dir.cantos.length], pe: L.lados.dir.trechos[1].pe },
+      aviso, tela: { larg: est.largura, vira: est.vira, txt, cima, opc, mont: /em U, volta pela esquerda/.test(mont.textContent) && /150 mm<\/b> de vão|150 mm de vão/.test(mont.innerHTML.replace(/<b>/g, '')) && /Marca \(esq\.\)/.test(mont.textContent) }
+    };
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  const igual = (a, c) => JSON.stringify(a) === JSON.stringify(c);
+  t.ok('painel por trecho: linhas retas de cada lance e do patamar, passando 50 mm do poste (ponta livre), sem meia-esquadria', !r.erro
+    && igual(r.P.gl, [[2458, 12, 'Lance 1'], [1300, 12, 'Patamar 1'], [2458, 12, 'Lance 2']]) && /ponta livre: passa 50 mm do poste/.test(r.P.glc) && !/meia-esquadria/.test(r.P.glc) && /meia-esquadria/.test(r.C.gl), J);
+  t.ok('painel por trecho: poste nas duas pontas do patamar, além dos do lance', !r.erro && igual(r.P.postes.map(q => q[0]), [140, 2100, 2260, 3420, 3580, 5540]) && r.P.postes[2][1] === 'começo do patamar 1', J);
+  t.ok('dobras curvadas: o tubo de cima segue inteiro pelas 2 dobras (raio 120), cortado só onde a barra acaba', !r.erro && r.P.gt[0][0] === 6000 && r.P.gt[0][2] === 'Lance 1 → Patamar 1 → Lance 2'
+    && /2 dobra\(s\) curvada\(s\), raio 120 mm/.test(r.P.gtc) && !/meia-esquadria/.test(r.P.gtc), J);
+  t.ok('escada em U: o 2º lance volta ao lado do 1º, com 150 de vão (planta 3440 × 2550)', !r.erro && igual(r.U.planta, [3440, 2550, -1350]) && igual(r.U.z9, [-1350, -150])
+    && igual(r.U.x9, [1960, 2240]) && r.U.x16 === 0 && !r.U.av.length, J);
+  t.ok('U: o lado de fora dá a volta no patamar em 3 peças com canto a 45° em planta; o de dentro fecha o vão (150) e o 2º lance começa com o pé no patamar', !r.erro
+    && igual(r.U.lado.slice().sort((a, c) => a - c), [150, 923, 1260, 2556, 3019, 3087, 3087, 3097]) && (r.U.u.match(/45° em planta/g) || []).length === 4
+    && /apoiado no patamar/.test(r.U.u) && /dobra: meia-esquadria 45°/.test(r.U.gt) && /onde chega o lance/.test(r.U.pe) && /onde sai o lance/.test(r.U.pe) && r.U.ver === 'dir', J);
+  t.ok('escada em L: planta 3440 × 3440, um canto no lado de fora, o de dentro com o pé no patamar', !r.erro && igual(r.L.planta, [3440, 3440]) && igual(r.L.cantos, [1, 0]) && r.L.pe === true
+    && igual(r.L.lado.slice().sort((a, c) => a - c), [923, 1260, 3019, 3087, 3087, 3097]), J);
+  t.ok('patamar estreito para virar em U: a largura sobe e avisa', !r.erro && /largura aumentada para 2\.400 mm/.test(r.aviso), J);
+  t.ok('tela: escolher "U esquerda" sobe a largura para 2 degraus + vão; desenho do lado de fora, planta na folha e marcas por lado na ficha', !r.erro && r.tela.vira === 'esq180' && r.tela.larg === 2550
+    && /lado direito, desenvolvido/.test(r.tela.txt) && r.tela.cima.includes('3.440') && r.tela.cima.includes('2.550') && r.tela.opc && r.tela.mont && !erros.length, J);
+  const SC = process.env.PREVIA_DIR;
+  if (SC) {
+    const casos = { U: tr2('esq180'), L: tr2('dir90'), P: [{ tipo: 'patamar', largura: 1200, comprimento: 1200 }, { tipo: 'lance', degraus: 12 }] };
+    function tr2(v) { return [{ tipo: 'lance', degraus: 8 }, { tipo: 'patamar', largura: v === 'esq180' ? 2550 : 1200, comprimento: 1200, vira: v }, { tipo: 'lance', degraus: 8 }]; }
+    for (const [k, tr] of Object.entries(casos)) {
+      await pg.setViewportSize({ width: 1400, height: 1000 });
+      const h = await pg.evaluate(async ({ tr, k }) => { const E = window.RMEscada;
+        E.define({ nome: 'Exemplo ' + k, degrau: { comp: 1200, pisada: 280, espelho: 175, abaF: 50, abaT: 50, esp: 3 }, perfil: { nome: 'Perfil U', alt: 200, aba: 50, esp: 3 },
+          lados: { esq: { gc: true, corr: false }, dir: { gc: true, corr: false } }, trechos: tr,
+          gc: Object.assign(E.estado().gc, k === 'P' ? { modelo: 'paineis', dobra: 'curva' } : { modelo: 'continuo', dobra: 'esquadria' }) });
+        await new Promise(x => setTimeout(x, 400)); return { folha: E.folhaMontagem(), mont: E.montador() }; }, { tr, k });
+      await pg.evaluate(() => { const l = document.getElementById('loginScreen'); if (l) l.style.display = 'none'; });
+      const cards = await pg.$$('#pane-esc .es-card');
+      for (const [i, nm] of [[1, 'trechos'], [4, '3d'], [5, 'perfil']]) if (cards[i]) await cards[i].screenshot({ path: SC + '/tela_' + k + '_' + nm + '.png' });
+      const p2 = await ctx.newPage(); await p2.setViewportSize({ width: 1150, height: 800 });
+      await p2.setContent('<!doctype html><html><head><meta charset="utf-8"></head><body style="margin:0;background:#fff">' + h.folha + '</body></html>');
+      await p2.screenshot({ path: SC + '/folha_' + k + '.png', fullPage: true }); await p2.close();
+    }
+  }
+  await ctx.close();
+});
+
+teste('recibos-desligado', async (b, t) => {
+  // desligado / demissão ficava oculto para sempre, sem como excluir de vez
+  if (!fs.existsSync(path.join(RAIZ, 'recibos_rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'recibos_rm' });
+  const r = await pg.evaluate(() => new Promise(res => {
+    const l = document.getElementById('loginScreen'); if (l) l.style.setProperty('display', 'none', 'important');
+    window.isAdminUser = () => true;
+    state.employees = [{ id: 'a1', nome: 'ATIVO TESTE', status: 'ativo', salario: 1 },
+      { id: 'd1', nome: 'DESLIGADO TESTE', status: 'desligado', salario: 1 }, { id: 'd2', nome: 'DEMISSAO TESTE', status: 'demissao', salario: 1 }];
+    if (!desligadosAbertos()) toggleDesligados(); else renderEmps();
+    const bts = document.querySelectorAll('#empOcultos [data-delforever]').length;
+    document.querySelector('#empOcultos [data-delforever="d1"]').click();
+    setTimeout(() => {
+      const inp = [...document.querySelectorAll('input')].filter(i => i.offsetParent && document.activeElement === i)[0];
+      if (inp) { inp.value = 'desligado teste'; inp.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); }
+      setTimeout(() => res({ bts, sumiu: !state.employees.some(e => e.id === 'd1'), ficou: state.employees.some(e => e.id === 'd2') && state.employees.some(e => e.id === 'a1') }), 300);
+    }, 300);
+  })).catch(e => ({ erro: e.message }));
+  t.ok('desligados têm "excluir definitivamente" e ele apaga só aquele', r.bts === 2 && r.sumiu && r.ficou && !erros.length, JSON.stringify(r) + ' ' + erros.join(' | '));
+  await ctx.close();
+});
+
+teste('recibos-pendencias', async (b, t) => {
+  // cada pendência morava na sua aba (conferência em Salários, parcela em
+  // Empréstimos, férias em 13º e Férias, aniversário em Aniversariantes) e só
+  // via quem entrasse na aba certa no dia certo. A tela de entrada junta o que
+  // pede atenção, com as contas das próprias abas -- e sem gravar nada.
+  if (!fs.existsSync(path.join(RAIZ, 'recibos_rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'recibos_rm' });
+  const r = await pg.evaluate(() => {
+    const l = document.getElementById('loginScreen'); if (l) l.style.setProperty('display', 'none', 'important');
+    const iso = n => { const d = new Date(); d.setDate(d.getDate() + n); return toISO(d); };
+    const md = n => iso(n).slice(5);
+    const E = (id, nome, extra) => Object.assign({ id, nome, status: 'ativo', docTipo: 'CPF', doc: '000.000.000-00', metodo: 'banco', salario: 2000,
+      dtInicio: '', dtCarteira: '', nascimento: '1990-01-01', valPagamento: 0, // sem data de início: nada de férias por acaso valAdiantamento: 0,
+      emprestimos: [], historicoSalario: [], historicoFuncao: [], fichasEpi: [], folhaExtra: [] }, extra || {});
+    const c = cicloDaVez(), data = cicloDataReal(c);
+    const ds = (iso0, n) => { const d = new Date(iso0 + 'T12:00:00'); d.setDate(d.getDate() + n); return toISO(d); };
+    state.employees = [
+      E('a1', 'ANIVERSARIO HOJE TESTE', { nascimento: '1991-' + md(0) }),
+      E('a2', 'EMPRESTIMO TESTE', { emprestimos: [{ id: 'm1', desc: 'Empréstimo', desde: c.tipo,
+        parcelas: [{ valor: 100, vencimento: ds(data, -40), pago: false }, { valor: 100, vencimento: data, pago: false }, { valor: 100, vencimento: ds(data, 60), pago: false }] }] }),
+      E('a3', 'EXPERIENCIA TESTE', { dtCarteira: iso(-13), dtInicio: iso(-13) }),
+      E('a4', 'FERIAS TESTE', {})];
+    // carteira de "FERIAS TESTE" escolhida para um período vencer em 10 a 80 dias, pela conta da própria aba
+    const fe = state.employees[3];
+    for (let n = 380; n < 800; n += 5) { fe.dtCarteira = iso(-n); fe.dtInicio = fe.dtCarteira;
+      const ok = ferLinhasEmp().some(x => x.e.id === 'a4' && x.per.some(p => !p.atual && p.rest > 0 && ferDias(iso(0), p.limite) >= 10 && ferDias(iso(0), p.limite) <= 80));
+      if (ok) break; }
+    const campo = c.tipo === 'adiantamento' ? 'valAdiantamento' : 'valPagamento', itens = {};
+    state.employees.forEach(e => { itens[e.id] = { [campo]: 1000 }; });
+    state.ciclos = {}; state.ciclos[cicloKey(c)] = { itens };
+    state.movimentos = {};
+    renderEmps();
+    const box = document.getElementById('pendPainel');
+    const lista = () => box.querySelector('.pend-lista'), aberta = () => !!lista() && getComputedStyle(lista()).display !== 'none';
+    // abre recolhido: só a contagem; a lista abre no toque
+    const recolhido = { lista: aberta(), cab: (box.querySelector('.pend-cab') || {}).innerText || '' };
+    box.querySelector('.pend-cab').click();
+    const o = { recolhido, abriu: aberta(), visivel: !!box && !box.hidden, itens: [...box.querySelectorAll('.pend-it')].map(x => ({ k: x.dataset.pend, cls: x.className, txt: x.innerText.replace(/\s+/g, ' ') })) };
+    o.semMexer = state.employees.every(e => !e.valPagamento && !e.valAdiantamento); // o painel não carrega o ciclo por cima do cadastro
+    const bt = box.querySelector('[data-pend="conf"] [data-pend-ir]'); if (bt) bt.click();
+    o.foiSal = document.getElementById('v-sal').classList.contains('on');
+    // sem nada a resolver, o painel some
+    state.employees = [E('z1', 'NADA PENDENTE TESTE', { nascimento: '1990-' + md(20) })]; state.ciclos = {};
+    const c2 = cicloDaVez(); state.ciclos[cicloKey(c2)] = { itens: {}, fechadoEm: Date.now() };
+    document.querySelector('.vtab[data-v="func"]').click();
+    o.vazio = box.hidden; o.sobrou = box.hidden ? '' : box.innerText.replace(/\s+/g, ' ');
+    return o;
+  }).catch(e => ({ erro: e.message }));
+  const it = k => (r.itens || []).find(x => x.k === k) || { txt: '', cls: '' };
+  t.ok('conferência do ciclo da vez: quantos faltam conferir', !r.erro && r.visivel && /4 de 4 sem conferir/.test(it('conf').txt), JSON.stringify(r));
+  t.ok('empréstimo: parcelas do ciclo, com a atrasada apontada (e a do mês que vem de fora)', !r.erro && /2 parcelas de empréstimo/.test(it('empr').txt) && /1 atrasada: Emprestimo Teste/i.test(it('empr').txt) && /\burg\b/.test(it('empr').cls), JSON.stringify(it('empr')));
+  t.ok('contrato de experiência a vencer', !r.erro && /Experiencia Teste/i.test(it('exp').txt) && /falta 1 dia/.test(it('exp').txt), JSON.stringify(it('exp')));
+  t.ok('férias vencendo, pela conta do Controle de férias', !r.erro && /Férias/.test(it('ferias').txt) && /Ferias Teste/i.test(it('ferias').txt), JSON.stringify(it('ferias')));
+  t.ok('aniversário de hoje', !r.erro && /Aniversário hoje: Aniversario Hoje Teste/i.test(it('aniv').txt), JSON.stringify(it('aniv')));
+  t.ok('urgentes primeiro; o painel não mexe nos valores do cadastro', !r.erro && /\burg\b/.test((r.itens || [])[0].cls) && /\binfo\b/.test((r.itens || []).slice(-1)[0].cls) && r.semMexer, JSON.stringify(r.itens) + ' semMexer=' + r.semMexer);
+  t.ok('abre recolhido, com a contagem e as urgentes; um toque mostra a lista', !r.erro && r.recolhido && !r.recolhido.lista && /Pendências/.test(r.recolhido.cab) && /\b5\b/.test(r.recolhido.cab) && r.abriu
+    // quantas são urgentes depende do dia (a conferência fica urgente perto da data do ciclo): a conta vem da própria lista
+    && (n => n > 0 && new RegExp('\\b' + n + ' urgentes?\\b').test(r.recolhido.cab))((r.itens || []).filter(x => /\burg\b/.test(x.cls)).length), JSON.stringify({ recolhido: r.recolhido, abriu: r.abriu, itens: r.itens }));
+  t.ok('o botão leva à aba; sem pendência o painel some', !r.erro && r.foiSal && r.vazio && !erros.length, JSON.stringify({ foiSal: r.foiSal, vazio: r.vazio, sobrou: r.sobrou }) + ' ' + erros.join(' | '));
+  await ctx.close();
+});
+
+teste('obras-notas-celular', async (b, t) => {
+  // no celular a tabela de notas passava da tela sem deixar arrastar: as
+  // notas ficavam cortadas. Cada nota tem de caber inteira na largura.
+  if (!fs.existsSync(path.join(RAIZ, 'controle_obras'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'controle_obras' }, 'index.html', { celular: true });
+  const r = await pg.evaluate(() => {
+    const l = document.getElementById('loginScreen'); if (l) l.style.setProperty('display', 'none', 'important');
+    S.obras = [{ id: 'o1', nome: 'Obra teste', cliente: 'Cliente teste', data: '', valor: 1000, notaAcordada: 0, status: 'andamento', parcelas: [], obs: '', _open: true,
+      fornecedores: [1, 2].map(i => ({ id: 'f' + i, nome: 'FORNECEDOR DE TESTE LTDA', valor: 100 * i, numeroNF: '20' + i, dataNF: '1' + i + '/09/2026', chave: '43260828654965000117550010000021' + i + '11000000000' })) }];
+    render();
+    const det = [...document.querySelectorAll('button')].find(x => /Detalhe/.test(x.textContent)); if (det) det.click();
+    const tb = document.querySelector('.ob2-notas'); if (!tb) return { erro: 'sem a lista de notas' };
+    tb.classList.add('todas'); tb.querySelectorAll('.ob2-nf').forEach(n => n.classList.add('chave-aberta'));
+    const c = tb.closest('.obra'); if (c) c.classList.add('open');
+    const q = tb.getBoundingClientRect();
+    const fora = [...tb.querySelectorAll('input,button')].filter(e => { const r = e.getBoundingClientRect(); return r.width && r.right > innerWidth + 1; }).length;
+    return { pagina: document.documentElement.scrollWidth, tela: innerWidth, sobra: tb.scrollWidth - tb.clientWidth, direita: Math.round(q.right), fora };
+  }).catch(e => ({ erro: e.message }));
+  t.ok('notas cabem na tela do celular', !r.erro && r.pagina <= r.tela && r.sobra <= 1 && r.fora === 0 && !erros.length, JSON.stringify(r) + ' ' + erros.join(' | '));
+  await ctx.close();
+});
+
+teste('obras-chave-digitacao', async (b, t) => {
+  // a chave da NF-e é digitada à mão (sem leitor): até 44 números, em grupos
+  // de 4 como no DANFE, com contador de quantos faltam; o último número é o
+  // dígito verificador -- confere na hora e lê UF, mês, NF, série e CNPJ
+  if (!fs.existsSync(path.join(RAIZ, 'controle_obras'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'controle_obras' });
+  const r = await pg.evaluate(async () => {
+    const l = document.getElementById('loginScreen'); if (l) l.style.setProperty('display', 'none', 'important');
+    S.obras = [{ id: 'o1', nome: 'Obra teste', cliente: 'Cliente teste', data: '', valor: 1000, notaAcordada: 0, status: 'andamento', parcelas: [], obs: '', _open: true,
+      fornecedores: [{ id: 'f1', nome: 'FORNECEDOR TESTE', valor: 100, numeroNF: '', dataNF: '10/10/2026', chave: '' }] }];
+    VIEW = 'detalhe'; render(); obAlternaChave('o1', 'f1');
+    const el = document.getElementById('chvin_f1'), ct = () => document.getElementById('chvct_f1').textContent.replace(/\s+/g, ' ').trim();
+    const digita = (v) => { el.value = v; el.setSelectionRange(v.length, v.length); el.dispatchEvent(new Event('input', { bubbles: true })); };
+    const o = {};
+    digita('4226abc1011'); o.parcial = [el.value, ct()];
+    const chave = '42261011222333000181550010000123451123456789';
+    digita(chave + '99999'); o.cheia = [el.value, el.value.replace(/ /g, '').length, ct(), S.obras[0].fornecedores[0].chave, S.obras[0].fornecedores[0].numeroNF, document.getElementById('nfnum_f1').value];
+    o.chip = document.querySelector('#nfrow_f1 .ob2-chip').textContent.trim() + '|' + document.querySelector('#nfrow_f1 .ob2-chip').classList.contains('ok');
+    digita(chave.slice(0, 43) + '0'); o.errada = ct();
+    // colar a URL do QR Code: a chave sai dela
+    el.value = ''; const dt = new DataTransfer(); dt.setData('text', 'https://www.sefaz.rs.gov.br/NFCE?p=' + chave + '|2|1');
+    el.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true })); o.colada = el.value.replace(/ /g, '');
+    // número da NF diferente do da chave: avisa
+    S.obras[0].fornecedores[0].numeroNF = '999'; render(); o.dif = document.getElementById('chvct_f1').textContent;
+    o.max = el.getAttribute('maxlength'); o.teclado = el.getAttribute('inputmode');
+    return o;
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  const igual = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+  t.ok('só números, em grupos de 4, com quantos faltam', !r.erro && igual(r.parcial, ['4226 1011', 'Faltam 36 de 44']) && r.max === '54' && r.teclado === 'numeric', J);
+  t.ok('para em 44 e confere o dígito: UF, mês, NF, série e CNPJ; preenche o nº da NF vazio', !r.erro && r.cheia[0] === '4226 1011 2223 3300 0181 5500 1000 0123 4511 2345 6789' && r.cheia[1] === 44
+    && /Chave conferida · SC · 10\/2026 · NF 12345 · série 1 · CNPJ 11\.222\.333\/0001-81/.test(r.cheia[2]) && r.cheia[3] === '42261011222333000181550010000123451123456789' && r.cheia[4] === '12345' && r.cheia[5] === '12345', J);
+  t.ok('o botão da chave vira "Chave" na hora', !r.erro && r.chip === 'Chave|true', J);
+  t.ok('dígito errado avisa que algum número foi digitado errado', !r.erro && /não confere/.test(r.errada), J);
+  t.ok('colar a URL do QR Code tira a chave dela', !r.erro && r.colada === '42261011222333000181550010000123451123456789', J);
+  t.ok('nº da NF diferente do da chave aparece no aviso', !r.erro && /nº da NF no campo \(999\) não é o da chave/.test(r.dif) && !erros.length, J);
+  await ctx.close();
+});
+
+teste('obras-tab-com-nuvem', async (b, t) => {
+  // "está pulando no tab do excluir para o nome da obra": cada gravação volta
+  // da nuvem e a tela se redesenha. O redesenho esperava só enquanto o cursor
+  // estava numa caixa; ao chegar pelo Tab num botão (cor, lixeira), a tela se
+  // refazia, o botão sumia e o Tab seguinte recomeçava no nome da obra.
+  if (!fs.existsSync(path.join(RAIZ, 'controle_obras'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'controle_obras' });
+  await semLogin(pg);
+  await pg.evaluate(() => {
+    S.obras = [{ id: 'o1', nome: 'OBRA TESTE', cliente: '', data: '01/08/2025', valor: 7000, notaAcordada: 0, status: 'andamento', obs: '', fornecedores: [],
+      parcelas: [0, 1, 2].map(i => ({ id: 'p' + i, desc: 'PARCELA ' + i, data: '01/0' + (i + 1) + '/2026', valor: 1000, forma: 'banco', temp: 'quente', recebida: i < 2 })) }];
+    setView('painel'); openDetalhe('o1');
+  }).catch(() => {});
+  await pg.waitForTimeout(300);
+  await pg.click('text=/parcelas recebidas/').catch(() => {});
+  await pg.click('input[value="PARCELA 1"]').catch(() => {});
+  await pg.keyboard.type('X');
+  await pg.evaluate(() => renderSafe());   // chegou atualização da nuvem enquanto digitava
+  const foco = () => pg.evaluate(() => { const a = document.activeElement; return a === document.body ? 'BODY' : a.tagName === 'INPUT' && a.type === 'text' ? a.value : (a.getAttribute('aria-label') || a.title || a.value || a.tagName); });
+  const passos = [];
+  for (let i = 0; i < 12; i++) { await pg.keyboard.press('Tab'); await pg.waitForTimeout(60); passos.push(await foco()); }
+  // botão clicado com o mouse não segura a atualização da nuvem
+  await pg.click('.ob2-p[data-p="p2"] button[aria-label="Azul"]').catch(() => {});
+  const mouse = await pg.evaluate(async () => {
+    // o clique soltou o redesenho que esperava; o botão (refeito) fica com o foco, como no clique de verdade
+    const bt = document.querySelector('.ob2-p[data-p="p2"] button[aria-label="Azul"]'); if (bt) bt.focus();
+    const a = document.activeElement; if (!a || a.tagName !== 'BUTTON') return 'sem foco no botão';
+    S.obras[0].nome = 'OBRA NUVEM'; renderSafe(); await new Promise(x => setTimeout(x, 50));
+    return [...document.querySelectorAll('input')].some(x => x.value === 'OBRA NUVEM') ? 'redesenhou' : 'segurou';
+  }).catch(e => 'erro ' + e.message);
+  const J = JSON.stringify({ passos, mouse }) + ' ' + erros.join(' | ');
+  const iLixo = passos.indexOf('Excluir parcela');
+  t.ok('o Tab passa pela cor e pela lixeira e segue para a parcela de baixo, sem voltar ao nome da obra',
+    iLixo > 0 && passos.slice(0, iLixo).includes('Azul') && passos.slice(iLixo + 1).includes('PARCELA 2') && !passos.includes('BODY') && !passos.includes('OBRA TESTE'), J);
+  t.ok('botão clicado com o mouse não segura a atualização da nuvem', mouse === 'redesenhou' && !erros.length, J);
+  await ctx.close();
+});
+
+/* nota fictícia (chave do teste de digitação) para o "Puxar DANFE" */
+const DANFE_CHAVE = '42261011222333000181550010000123451123456789';
+const DANFE_XML = '<?xml version="1.0" encoding="UTF-8"?><nfeProc xmlns="http://www.portalfiscal.inf.br/nfe"><NFe><infNFe Id="NFe' + DANFE_CHAVE + '" versao="4.00">'
+  + '<ide><cUF>42</cUF><nNF>12345</nNF><serie>1</serie><dhEmi>2026-10-08T10:30:00-03:00</dhEmi></ide>'
+  + '<emit><CNPJ>11222333000181</CNPJ><xNome>FORNECEDOR FICTICIO LTDA</xNome></emit>'
+  + '<dest><xNome>CLIENTE FICTICIO</xNome></dest><total><ICMSTot><vNF>1234.56</vNF></ICMSTot></total></infNFe></NFe></nfeProc>';
+
+teste('obras-danfe-entra-na-nota', async (b, t) => {
+  // pedido: o "Puxar DANFE" levava ao site, o arquivo ia para Downloads e era
+  // preciso anexar à mão. No programa o site abre numa janela dele e o que
+  // for baixado lá chega com a chave: a nota é achada pela chave e o PDF vira
+  // o anexo; o XML ainda preenche valor, data, nº e fornecedor vazios.
+  if (!fs.existsSync(path.join(RAIZ, 'controle_obras'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'controle_obras' }, 'index.html', { antes: () => {
+    window.__danfe = { abriu: [], cb: null };
+    window.rmDesktop = { danfeAbrir: (c, u) => { window.__danfe.abriu.push([c, u]); return Promise.resolve({ ok: true }); },
+      aoDanfeBaixado: (cb) => { window.__danfe.cb = cb; } };
+  } });
+  const r = await pg.evaluate(async (a) => {
+    const l = document.getElementById('loginScreen'); if (l) l.style.setProperty('display', 'none', 'important');
+    const nota = (id, o) => Object.assign({ id, nome: '', valor: 0, numeroNF: '', dataNF: '', chave: '' }, o);
+    S.obras = [
+      { id: 'o1', nome: 'Obra A', cliente: 'Cliente teste', data: '', valor: 1000, notaAcordada: 0, status: 'andamento', parcelas: [], obs: '', fornecedores: [nota('f0', { nome: 'OUTRO', valor: 50, chave: '' })] },
+      { id: 'o2', nome: 'Obra B', cliente: 'Cliente teste', data: '', valor: 1000, notaAcordada: 0, status: 'andamento', parcelas: [], obs: '', fornecedores: [nota('f1', { chave: a.chave })] }];
+    render();
+    const f = () => S.obras[1].fornecedores[0], o = {};
+    let abriuNav = 0; window.open = () => { abriuNav++; return null; };
+    puxarDanfe('o2', 'f1');
+    o.abriu = JSON.stringify(window.__danfe.abriu); o.nav = abriuNav; o.ouvindo = typeof window.__danfe.cb === 'function';
+    const b64 = (s) => btoa(String.fromCharCode(...new TextEncoder().encode(s)));
+    // XML pelo programa: preenche o que está vazio e vira o anexo
+    window.__danfe.cb({ ok: true, chave: a.chave, nome: 'NFe.xml', tipo: 'application/xml', dados: 'data:application/xml;base64,' + b64(a.xml) });
+    o.xml = { nome: f().nome, valor: f().valor, nf: f().numeroNF, data: f().dataNF, anexo: f().anexo && f().anexo.nome };
+    // PDF pela Central (mensagem do pai): troca o anexo e não mexe nos dados
+    window.postMessage({ rm: 'danfe:arquivo', ok: true, chave: a.chave, nome: 'DANFE.pdf', tipo: 'application/pdf', dados: 'data:application/pdf;base64,JVBERi0xLjQK' }, '*');
+    await new Promise(x => setTimeout(x, 150));
+    o.pdf = { anexo: f().anexo && f().anexo.nome, tipo: f().anexo && f().anexo.tipo, valor: f().valor };
+    // o XML depois do PDF não tira o PDF; valor digitado diferente vira aviso
+    f().valor = 999;
+    window.__danfe.cb({ ok: true, chave: a.chave, nome: 'NFe2.xml', tipo: 'application/xml', dados: 'data:application/xml;base64,' + b64(a.xml) });
+    o.depois = { anexo: f().anexo.nome, valor: f().valor, toast: (document.getElementById('toast') || document.body).textContent };
+    // chave que não é de nota nenhuma: nada muda
+    const antes = JSON.stringify(S.obras);
+    window.__danfe.cb({ ok: true, chave: '35261011222333000181550010000999991000000000', nome: 'x.pdf', tipo: 'application/pdf', dados: 'data:application/pdf;base64,JVBERi0xLjQK' });
+    o.semNota = JSON.stringify(S.obras) === antes;
+    // anexar o XML à mão também preenche
+    const g = S.obras[0].fornecedores[0];
+    attachAnexoFile('o1', 'f0', new File([a.xml.replace(a.chave, a.chave.slice(0, 43) + '0')], 'nota.xml', { type: 'text/xml' }));
+    await new Promise(x => setTimeout(x, 300));
+    o.mao = { valor: g.valor, nf: g.numeroNF, data: g.dataNF, nome: g.nome };
+    return o;
+  }, { chave: DANFE_CHAVE, xml: DANFE_XML }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  t.ok('no programa o Puxar DANFE abre a janela dele com a chave (não o navegador)', !r.erro && r.abriu === JSON.stringify([[DANFE_CHAVE, 'https://meudanfe.com.br/']]) && r.nav === 0 && r.ouvindo, J);
+  t.ok('XML baixado entra na nota certa e preenche valor, data, nº e fornecedor', !r.erro && r.xml.nome === 'FORNECEDOR FICTICIO LTDA' && r.xml.valor === 1234.56 && r.xml.nf === '12345' && r.xml.data === '08/10/2026' && r.xml.anexo === 'NFe.xml', J);
+  t.ok('PDF baixado vira o anexo da nota', !r.erro && r.pdf.anexo === 'DANFE.pdf' && r.pdf.tipo === 'application/pdf' && r.pdf.valor === 1234.56, J);
+  t.ok('XML depois do PDF não tira o PDF e não troca o valor digitado (avisa)', !r.erro && r.depois.anexo === 'DANFE.pdf' && r.depois.valor === 999, J);
+  t.ok('chave que não é de nenhuma nota não mexe em nada', !r.erro && r.semNota, J);
+  t.ok('anexar o XML à mão também preenche os dados', !r.erro && r.mao.valor === 50 && r.mao.nf === '12345' && r.mao.data === '08/10/2026' && r.mao.nome === 'OUTRO' && !erros.length, J);
+  await ctx.close();
+});
+
+teste('central-danfe-ponte', async (b, t) => {
+  // a Central leva o pedido do sistema (no iframe) ao programa e devolve o
+  // arquivo baixado para o mesmo sistema; mensagem de fora dos sistemas não
+  // abre nada, e programa sem a ponte não responde (o sistema usa o navegador)
+  if (!fs.existsSync(path.join(FB, 'firebase-app-compat.js'))) return;
+  const roda = async (comPonte) => {
+    const ctx = await b.newContext({ viewport: { width: 1400, height: 900 } }); const pg = await ctx.newPage(); const erros = [];
+    pg.on('pageerror', e => erros.push(String(e.message).slice(0, 160)));
+    await pg.route('**/*', rq => {
+      const u = new URL(rq.request().url());
+      const mm = u.pathname.match(/firebasejs\/[^/]+\/(firebase-[a-z-]+\.js)$/);
+      if (mm && fs.existsSync(path.join(FB, mm[1]))) return rq.fulfill({ status: 200, contentType: 'text/javascript', body: fs.readFileSync(path.join(FB, mm[1])) });
+      if (u.protocol === 'file:' || u.protocol === 'about:') return rq.continue();
+      return rq.abort();
+    });
+    await pg.addInitScript((com) => {
+      window.__d = { abriu: [], cb: null };
+      window.rmDesktop = { versaoCentral: async () => ({}), sistemasBaixados: async () => ({}) };
+      if (com) Object.assign(window.rmDesktop, { danfeAbrir: (c, u) => { window.__d.abriu.push([c, u]); return Promise.resolve({}); }, aoDanfeBaixado: (cb) => { window.__d.cb = cb; } });
+    }, comPonte);
+    await pg.goto('file://' + path.join(RAIZ, 'central_rm', 'index.html')).catch(() => {});
+    await pg.waitForTimeout(2000);
+    const r = await pg.evaluate(async (chave) => {
+      const espera = (ms) => new Promise(x => setTimeout(x, ms));
+      // fora dos sistemas: ignorado
+      window.postMessage({ rm: 'danfe', chave: 'X', url: 'https://x/' }, '*'); await espera(100);
+      const fora = window.__d.abriu.length;
+      const cam = document.createElement('div'); cam.className = 'iframe-layer'; document.body.appendChild(cam);
+      const fr = document.createElement('iframe');
+      fr.srcdoc = '<script>window.__rec=[];addEventListener("message",e=>__rec.push(e.data));parent.postMessage({rm:"danfe?"},"*");<\/script>';
+      cam.appendChild(fr); await espera(400);
+      fr.contentWindow.parent.postMessage({ rm: 'danfe', chave, url: 'https://meudanfe.com.br/' }, '*');
+      fr.contentWindow.eval('parent.postMessage({rm:"danfe",chave:"' + chave + '",url:"https://meudanfe.com.br/"},"*")'); await espera(200);
+      if (window.__d.cb) window.__d.cb({ ok: true, chave, nome: 'DANFE.pdf', tipo: 'application/pdf', dados: 'data:application/pdf;base64,JVBERi0xLjQK' });
+      await espera(200);
+      return { fora, abriu: window.__d.abriu, rec: fr.contentWindow.__rec };
+    }, DANFE_CHAVE).catch(e => ({ erro: e.message }));
+    r.erros = erros; await ctx.close(); return r;
+  };
+  const com = await roda(true), sem = await roda(false);
+  const J = JSON.stringify({ com, sem }).slice(0, 1500);
+  t.ok('mensagem que não vem de um sistema aberto não abre nada', !com.erro && com.fora === 0, J);
+  t.ok('o sistema pergunta e o programa com a ponte responde; o pedido abre a janela com a chave', !com.erro && com.rec.some(m => m && m.rm === 'danfe:sim')
+    && JSON.stringify(com.abriu) === JSON.stringify([[DANFE_CHAVE, 'https://meudanfe.com.br/']]), J);
+  t.ok('o arquivo baixado volta para o sistema que pediu', !com.erro && com.rec.some(m => m && m.rm === 'danfe:arquivo' && m.chave === DANFE_CHAVE && m.nome === 'DANFE.pdf' && /^data:application\/pdf/.test(m.dados)), J);
+  t.ok('programa sem a ponte não responde (o sistema abre o site no navegador)', !sem.erro && !sem.rec.some(m => m && /^danfe/.test(m.rm || '')) && !com.erros.length && !sem.erros.length, J);
+});
+
+teste('backup-ao-fechar-o-programa', async (b, t) => {
+  // electron/saida.js sem o Electron: a janela só fecha depois da cópia; tela
+  // antiga que não responde não prende o fechamento
+  const arq = path.join(RAIZ, 'central_rm', 'electron', 'saida.js');
+  if (!fs.existsSync(arq)) { t.ok('electron/saida.js existe', false, arq); return; }
+  delete require.cache[require.resolve(arq)];
+  const S = require(arq), EE = require('events');
+  const monta = (responde) => {
+    const ipc = new EE(), j = new EE(); const ev = { fechou: 0, envio: [] };
+    j.webContents = { isDestroyed: () => false, isLoading: () => false, send: (c) => { ev.envio.push(c); if (responde) { setTimeout(() => ipc.emit('rm:backup-saida-ouvi'), 20); setTimeout(() => ipc.emit('rm:backup-saida-feito'), 120); } } };
+    j.close = () => { ev.fechou++; const e = { padrao: false, preventDefault() { this.padrao = true; } }; j.emit('close', e); ev.segunda = e.padrao; };
+    S.instala({ app: { isPackaged: true }, ipcMain: Object.assign(ipc, { once: ipc.once.bind(ipc), removeAllListeners: ipc.removeAllListeners.bind(ipc) }), janela: j });
+    return { j, ev };
+  };
+  const esp = ms => new Promise(x => setTimeout(x, ms));
+  const a = monta(true); const e1 = { padrao: false, preventDefault() { this.padrao = true; } }; a.j.emit('close', e1);
+  const segurou = e1.padrao, pediu = a.ev.envio.join(), antes = a.ev.fechou; await esp(250);
+  t.ok('fechar segura a janela, pede a cópia à página e fecha quando ela termina', segurou && pediu === 'rm:backup-saida' && antes === 0 && a.ev.fechou === 1 && a.ev.segunda === false, JSON.stringify(a.ev));
+  const v = monta(false); v.j.emit('close', { preventDefault() {} }); await esp(S.PRAZO_OUVIR + 200);
+  t.ok('tela que não responde: fecha sozinho no prazo curto', v.ev.fechou === 1, JSON.stringify(v.ev));
+});
+
+teste('backup-pagina-ao-fechar-e-atrasado', async (b, t) => {
+  // a página da Central dentro do programa: ao fechar guarda a cópia,
+  // dispensa quando a última tem menos
+  // de 5 minutos, e ao voltar a internet recupera a cópia atrasada sozinha
+  if (!fs.existsSync(path.join(FB, 'firebase-app-compat.js'))) return;
+  const ctx = await b.newContext({ viewport: { width: 1400, height: 900 } }); const pg = await ctx.newPage(); const erros = [];
+  pg.on('pageerror', e => erros.push(String(e.message).slice(0, 160)));
+  await pg.route('**/*', rq => {
+    const u = new URL(rq.request().url());
+    const mm = u.pathname.match(/firebasejs\/[^/]+\/(firebase-[a-z-]+\.js)$/);
+    if (mm && fs.existsSync(path.join(FB, mm[1]))) return rq.fulfill({ status: 200, contentType: 'text/javascript', body: fs.readFileSync(path.join(FB, mm[1])) });
+    if (u.protocol === 'file:' || u.protocol === 'about:') return rq.continue();
+    return rq.abort();
+  });
+  await pg.addInitScript(() => {
+    window.__bk = { gravou: [], ultimo: new Date(Date.now() - 3 * 3600e3).toISOString(), aoFechar: null };
+    window.rmDesktop = { versaoCentral: async () => ({}), sistemasBaixados: async () => ({}),
+      backupEstado: async () => ({ ultimoEm: window.__bk.ultimo, arquivos: [], bytes: 0, pasta: 'P' }),
+      backupGravar: async (d) => { window.__bk.gravou.push(JSON.parse(d.dados).nos); window.__bk.ultimo = new Date().toISOString(); return { ok: true }; },
+      backupFalhou: async () => {}, aoFecharPrograma: (cb) => { window.__bk.aoFechar = cb; } };
+  });
+  await pg.goto('file://' + path.join(RAIZ, 'central_rm', 'index.html')).catch(() => {});
+  await pg.waitForTimeout(2500);
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    if (!window.__bk.aoFechar) return { erro: 'a página não se inscreveu para o fechamento' };
+    firebase.database = () => ({ ref: (n) => ({ once: async () => ({ val: () => ({ teste: n }) }) }) });
+    await window.__bk.aoFechar();
+    const fechar = window.__bk.gravou.slice(), aviso = !!document.getElementById('aviso-copia-saida');
+    await window.__bk.aoFechar();   // a de agora é recente: dispensa
+    const recente = window.__bk.gravou.length;
+    window.__bk.ultimo = new Date(Date.now() - 3 * 3600e3).toISOString(); window.__bk.gravou = [];
+    await backupRotina(false); window.__bk.gravou = [];   // liga o relógio e os ouvintes
+    window.__bk.ultimo = new Date(Date.now() - 3 * 3600e3).toISOString();
+    window.dispatchEvent(new Event('online')); await esp(600);
+    return { fechar, aviso, recente, online: window.__bk.gravou.length };
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r).slice(0, 900) + ' ' + erros.join(' | ');
+  const nos = (r.fechar && r.fechar[0]) || [];
+  t.ok('ao fechar o programa guarda a cópia, com aviso na tela', !r.erro && r.fechar.length === 1 && r.aviso, J);
+  t.ok('a cópia leva os dados dos sistemas (e não o que é pessoal de cada um)', ['recibos', 'contas_pagar', 'cheques', 'maquinas_rm'].every(n => nos.includes(n)) && !nos.includes('users'), J);
+  t.ok('cópia com menos de 5 minutos dispensa a do fechamento', !r.erro && r.recente === 1, J);
+  t.ok('ao voltar a internet a cópia atrasada roda sozinha', !r.erro && r.online === 1, J);
+  await ctx.close();
+});
+
+teste('central-erros-de-todos-os-aparelhos', async (b, t) => {
+  // o diagnóstico guardava só os erros do aparelho onde a Central estava
+  // aberta: erro no computador de outra pessoa nunca chegava a quem
+  // administra. Agora cada aparelho manda para a nuvem (sem dado de tela) e o
+  // selo do administrador soma os de todos.
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'central_rm' });
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    const banco = {}, ouvintes = [];
+    const avisa = () => ouvintes.forEach(cb => cb({ val: () => JSON.parse(JSON.stringify(banco)) }));
+    firebase.auth = () => ({ currentUser: { uid: 'u1', email: 'teste@exemplo.com' }, onAuthStateChanged() {} });
+    firebase.database = () => ({ ref: (p) => {
+      const id = String(p).split('/')[1];
+      return { transaction: (fn) => { banco[id] = fn(banco[id] ? JSON.parse(JSON.stringify(banco[id])) : null); avisa(); return Promise.resolve({}); },
+        orderByChild: () => ({ limitToLast: () => ({ on: (ev, cb) => { ouvintes.push(cb); cb({ val: () => JSON.parse(JSON.stringify(banco)) }); } }) }) };
+    } });
+    window.isAdminUser = () => true;
+    const badge = () => (document.getElementById('nb-acomp') || {}).textContent || '';
+    window.__rmOuvirErros();
+    const antes = badge();
+    window.dispatchEvent(new ErrorEvent('error', { message: 'Falha de teste neste aparelho', filename: 'http://sis.local/index.html' }));
+    await esp(50);
+    const enviado = Object.values(banco)[0] || null;
+    // outro aparelho manda um erro diferente
+    banco.outro = { chave: 'Contas a Pagar|Erro em outro computador|index.html', sistema: 'Contas a Pagar', msg: 'Erro em outro computador', onde: 'index.html', n: 3, primeiro: Date.now() - 5000, ultimo: Date.now(), ver: 'v56' };
+    avisa(); await esp(50);
+    const depois = badge();
+    let rel = ''; const ab = window.open; window.open = () => ({ document: { open() {}, write(h) { rel += h; }, close() {} }, focus() {}, print() {} });
+    try { relatorioMelhorias(); } catch (e) {} window.open = ab;
+    return { antes, depois, enviado, temOutro: /Erro em outro computador/.test(rel) || /Erro em outro computador/.test(JSON.stringify(RM_PERSIST.ler('erros', {}))) };
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r).slice(0, 1200) + ' ' + erros.join(' | ');
+  const env = r.enviado || {};
+  t.ok('o erro deste aparelho vai para a nuvem só com mensagem, onde e contagem (sem e-mail nem dado de tela)', !r.erro && env.msg === 'Falha de teste neste aparelho' && env.n === 1 && env.ultimo > 0
+    && !JSON.stringify(env).includes('exemplo.com'), J);
+  t.ok('o administrador vê no selo e no diagnóstico o erro que aconteceu em outro aparelho', !r.erro && Number(r.depois) >= 2 && r.temOutro, J);
+  await ctx.close();
+});
+
+teste('central-caepi-baixa-sozinha', async (b, t) => {
+  // a base de CA do MTE só saía clicando no botão do site e escolhendo o
+  // arquivo na Central. Agora o programa abre a página escondida, aperta
+  // "Base de dados do sistema CAEPI (Download)" (um __doPostBack) e guarda o
+  // arquivo -- sem o Electron aqui: janela e sessão de mentira
+  const arq = path.join(RAIZ, 'central_rm', 'electron', 'caepi-baixa.js');
+  if (!fs.existsSync(arq)) { t.ok('electron/caepi-baixa.js existe', false, arq); return; }
+  delete require.cache[require.resolve(arq)];
+  const C = require(arq), os = require('os'), EE = require('events');
+  const pasta = fs.mkdtempSync(path.join(os.tmpdir(), 'rm-caepi-'));
+  const roda = async (resposta, estado) => {
+    const ses = new EE(); let url = '', cfg = {}; const handlers = {};
+    class Janela { constructor(o) { this.o = o; this.webContents = new EE(); this.webContents.executeJavaScript = async () => {
+        if (resposta === 'botao') setTimeout(() => { const item = new EE(); item.getFilename = () => 'RelatorioCA_20261019_080000.csv.gz';
+          item.setSavePath = (p) => { item.alvo = p; }; ses.emit('will-download', {}, item);
+          setTimeout(() => { if (estado === 'completed') fs.writeFileSync(item.alvo, 'gz de teste'); item.emit('done', {}, estado); }, 10); }, 10);
+        return resposta; };
+      this.destruida = false; } loadURL(u) { url = u; setTimeout(() => this.webContents.emit('did-finish-load'), 5); } isDestroyed() { return this.destruida; } destroy() { this.destruida = true; } }
+    C.instala({ ipcMain: { handle: (c, f) => { handlers[c] = f; } }, BrowserWindow: Janela, session: { fromPartition: () => ses }, app: { getPath: () => pasta }, fs, path,
+      lerConfig: () => cfg, gravarConfig: (c) => { cfg = c; } });
+    const r = await handlers['rm:caepi-baixar']();
+    return { r, url, cfg };
+  };
+  const ok = await roda('botao', 'completed');
+  t.ok('abre a página do MTE, aperta o botão e guarda o arquivo na pasta do programa', ok.url === 'https://caepi.trabalho.gov.br/internet/ConsultaCAInternet.aspx' && ok.r.ok
+    && /caepi[\\/]RelatorioCA_20261019_080000\.csv\.gz$/.test(ok.r.arquivo) && fs.existsSync(ok.r.arquivo) && ok.cfg.url === ok.r.arquivo && !!ok.cfg.baixadoEm, JSON.stringify(ok));
+  const sem = await roda('nada', 'completed');
+  t.ok('sem o botão na página: avisa que o site pode ter mudado e anota a falha', !sem.r.ok && /não achei o botão/.test(sem.r.erro) && !!sem.cfg.erroBaixa && !sem.cfg.baixadoEm, JSON.stringify(sem));
+  // o script que roda dentro da página: numa cópia do botão de verdade (link com __doPostBack)
+  const ctx = await b.newContext(), pg = await ctx.newPage();
+  await pg.setContent('<a id="ctl00_PlaceHolderConteudo_LinkButton1" href="javascript:__doPostBack(\'ctl00$PlaceHolderConteudo$LinkButton1\',\'\')">Base de dados do sistema CAEPI (Download)</a>'
+    + '<script>window.__pb=[];function __doPostBack(a,b){window.__pb.push(a);}</script>');
+  const clic = await pg.evaluate(C.CLICA), pb = await pg.evaluate(() => window.__pb);
+  await pg.setContent('<p>outra página</p><script>window.__pb=[];function __doPostBack(a,b){window.__pb.push(a);}</script>');
+  const reserva = await pg.evaluate(C.CLICA), pb2 = await pg.evaluate(() => window.__pb);
+  await ctx.close();
+  t.ok('na página do MTE o script acha o botão pelo texto e dispara o postback dele', clic === 'botao' && JSON.stringify(pb) === '["ctl00$PlaceHolderConteudo$LinkButton1"]'
+    && reserva === 'postback' && JSON.stringify(pb2) === '["ctl00$PlaceHolderConteudo$LinkButton1"]', JSON.stringify({ clic, pb, reserva, pb2 }));
+});
+
+teste('central-caepi-rotina-semanal', async (b, t) => {
+  // a Central baixa e confere sozinha quando a base tem 7 dias ou mais, e
+  // não baixa de novo antes disso
+  if (!fs.existsSync(path.join(FB, 'firebase-app-compat.js'))) return;
+  const ctx = await b.newContext({ viewport: { width: 1400, height: 900 } }); const pg = await ctx.newPage(); const erros = [];
+  pg.on('pageerror', e => erros.push(String(e.message).slice(0, 160)));
+  await pg.route('**/*', rq => {
+    const u = new URL(rq.request().url()); const mm = u.pathname.match(/firebasejs\/[^/]+\/(firebase-[a-z-]+\.js)$/);
+    if (mm && fs.existsSync(path.join(FB, mm[1]))) return rq.fulfill({ status: 200, contentType: 'text/javascript', body: fs.readFileSync(path.join(FB, mm[1])) });
+    if (u.protocol === 'file:' || u.protocol === 'about:') return rq.continue(); return rq.abort();
+  });
+  await pg.addInitScript(() => {
+    window.__ca = { baixou: 0, testou: [], baixadoEm: new Date(Date.now() - 8 * 864e5).toISOString() };
+    window.rmDesktop = { versaoCentral: async () => ({}), sistemasBaixados: async () => ({}),
+      caepiConfig: async () => ({ url: '', baixadoEm: window.__ca.baixadoEm }),
+      caepiBaixar: async () => { window.__ca.baixou++; window.__ca.baixadoEm = new Date().toISOString(); return { ok: true, arquivo: 'C:/RM/caepi/RelatorioCA_teste.csv.gz' }; },
+      caepiTestar: async (a) => { window.__ca.testou.push(a); return { ok: true, linhas: 124000, registros: { '12345': { validade: '01/01/2030', situacao: 'VÁLIDO', equipamento: 'LUVA' } } }; } };
+  });
+  await pg.goto('file://' + path.join(RAIZ, 'central_rm', 'index.html')).catch(() => {});
+  await pg.waitForTimeout(2500);
+  const r = await pg.evaluate(async () => {
+    const gravou = [];
+    firebase.database = () => ({ ref: (p) => ({ once: async () => ({ val: () => (p === 'recibos/cfg/epi/epis' ? [{ nome: 'Luva de teste', ca: '12345' }] : null) }),
+      set: async (v) => { gravou.push([p, v && v.cas && Object.keys(v.cas)]); } }) });
+    await caepiRotina();
+    const primeira = { baixou: window.__ca.baixou, testou: window.__ca.testou.map(x => [x.url, x.apenas]), gravou: gravou.slice() };
+    await caepiRotina();   // agora a base é de hoje: não baixa de novo
+    return { primeira, depois: window.__ca.baixou };
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  t.ok('base com 8 dias: baixa, confere o catálogo no arquivo baixado e publica na Folha', !r.erro && r.primeira.baixou === 1
+    && JSON.stringify(r.primeira.testou) === '[["C:/RM/caepi/RelatorioCA_teste.csv.gz",["12345"]]]' && JSON.stringify(r.primeira.gravou) === '[["caepi_consulta",["12345"]]]', J);
+  t.ok('base de hoje: não baixa de novo', !r.erro && r.depois === 1, J);
+  await ctx.close();
+});
+
+teste('central-danfe-janela', async (b, t) => {
+  // electron/danfe.js sem o Electron: o download da janela vai para Downloads
+  // sem sobrescrever, e volta para a Central com a chave pedida
+  const arq = path.join(RAIZ, 'central_rm', 'electron', 'danfe.js');
+  if (!fs.existsSync(arq)) { t.ok('electron/danfe.js existe', false, arq); return; }
+  delete require.cache[require.resolve(arq)];
+  const D = require(arq);
+  const os = require('os'), EE = require('events');
+  const pasta = fs.mkdtempSync(path.join(os.tmpdir(), 'rm-danfe-'));
+  fs.writeFileSync(path.join(pasta, 'DANFE.pdf'), 'antigo');
+  const enviados = [], handlers = {}, janelas = []; let area = '';
+  const ses = new EE();
+  class Janela extends EE {
+    constructor(o) { super(); this.o = o; this.url = ''; janelas.push(this);
+      this.webContents = Object.assign(new EE(), { setWindowOpenHandler: (f) => { this.abreNova = f; }, executeJavaScript: (s) => { this.script = s; return Promise.resolve(); } }); }
+    loadURL(u) { this.url = u; } isDestroyed() { return false; } show() {} focus() {}
+  }
+  const principal = { isDestroyed: () => false, webContents: { send: (c, i) => enviados.push([c, i]) } };
+  D.instala({ ipcMain: { handle: (c, f) => { handlers[c] = f; } }, BrowserWindow: Janela, session: { fromPartition: (p) => { ses.part = p; return ses; } },
+    clipboard: { writeText: (x) => { area = x; } }, app: { getPath: () => pasta }, fs, path, principal: () => principal });
+  const ab = handlers['rm:danfe-abrir'] && handlers['rm:danfe-abrir']({}, { chave: '4226 1011 2223 3300 0181 5500 1000 0123 4511 2345 6789', url: 'javascript:alert(1)' });
+  const w = janelas[0];
+  t.ok('abre a janela numa sessão só dela, isolada, no site padrão, com a chave copiada', !!ab && w && w.url === D.PADRAO && w.o.webPreferences.partition === D.PARTICAO
+    && w.o.webPreferences.contextIsolation && !w.o.webPreferences.nodeIntegration && ses.part === D.PARTICAO && area === DANFE_CHAVE, JSON.stringify({ url: w && w.url, area }));
+  const baixa = (nome, conteudo, estado) => new Promise((ok) => {
+    const item = new EE(); item.getFilename = () => nome; item.getMimeType = () => 'application/octet-stream';
+    item.setSavePath = (p) => { item.alvo = p; };
+    ses.emit('will-download', {}, item);
+    if (estado === 'completed') fs.writeFileSync(item.alvo, conteudo);
+    item.emit('done', {}, estado); ok(item.alvo);
+  });
+  const alvo = await baixa('DANFE.pdf', '%PDF-1.4 teste', 'completed');
+  const ult = () => (enviados[enviados.length - 1] || [])[1] || {};
+  const i1 = ult();
+  t.ok('o PDF vai para Downloads sem sobrescrever e volta com a chave', path.basename(alvo) === 'DANFE (1).pdf' && fs.readFileSync(path.join(pasta, 'DANFE.pdf'), 'utf8') === 'antigo'
+    && enviados[0][0] === 'rm:danfe-baixado' && i1.ok && i1.chave === DANFE_CHAVE && i1.tipo === 'application/pdf'
+    && i1.dados === 'data:application/pdf;base64,' + Buffer.from('%PDF-1.4 teste').toString('base64'), JSON.stringify(i1).slice(0, 300));
+  await baixa('nota.xml', '<x/>', 'completed');
+  t.ok('XML vai como XML', ult().tipo === 'application/xml' && ult().ok, JSON.stringify(ult()).slice(0, 200));
+  await baixa('grande.pdf', Buffer.alloc(D.LIMITE + 1), 'completed');
+  t.ok('arquivo de mais de 8 MB não vai (fica só em Downloads)', !ult().ok && ult().erro === 'grande' && !ult().dados, JSON.stringify(ult()).slice(0, 200));
+  await baixa('x.pdf', '', 'cancelled');
+  t.ok('download cancelado avisa', !ult().ok && ult().erro === 'cancelled', JSON.stringify(ult()));
+  const nova = w.abreNova && w.abreNova({ url: 'https://x/' });
+  t.ok('janela que o site abrir fica na mesma sessão (o download dela também volta)', nova && nova.action === 'allow' && nova.overrideBrowserWindowOptions.webPreferences.partition === D.PARTICAO, JSON.stringify(nova));
+  handlers['rm:danfe-abrir']({}, { chave: 'abc', url: 'https://meudanfe.com.br/' });
+  t.ok('pedir de novo reaproveita a janela', janelas.length === 1 && area === 'ABC', String(janelas.length));
+  fs.rmSync(pasta, { recursive: true, force: true });
+});
+
+teste('obras-totais-por-obra', async (b, t) => {
+  // o "Falta emitir" do alto dizia R$ 185.000 e o "Falta em nota" do rodapé
+  // R$ 205.000: o alto fazia a conta pelo total, e a nota emitida a mais numa
+  // obra descontava o que falta nas outras. A Central fazia a mesma conta.
+  if (!fs.existsSync(path.join(RAIZ, 'controle_obras'))) return;
+  const obras = {
+    o1: { id: 'o1', nome: 'Obra com sobra', valor: 100, notaAcordada: 100, status: 'andamento',
+      parcelas: [{ id: 'p1', desc: 'Única', valor: 150, recebida: true, data: '01/01/2026' }], fornecedores: [{ id: 'f1', nome: 'Fornecedor teste', valor: 150 }] },
+    o2: { id: 'o2', nome: 'Obra sem nada', valor: 100, notaAcordada: 100, status: 'andamento', parcelas: [], fornecedores: [] } };
+  const valor = txt => txt == null ? null : Number(String(txt).replace(/[^\d,]/g, '').replace(',', '.'));
+  {
+    const { ctx, pg, erros } = await abre(b, { 'sis.local': 'controle_obras' });
+    const r = await pg.evaluate(obras => {
+      const l = document.getElementById('loginScreen'); if (l) l.style.setProperty('display', 'none', 'important');
+      S.obras = Object.values(JSON.parse(JSON.stringify(obras))); setView('painel');
+      const kpi = rot => { const k = [...document.querySelectorAll('#kpis .kpi')].find(x => x.querySelector('.lab').textContent.trim().toLowerCase() === rot); return k ? k.querySelector('.val').textContent : null; };
+      const pe = rot => { const i = [...document.querySelectorAll('.pfoot .it')].find(x => x.querySelector('span').textContent.trim().toLowerCase() === rot); return i ? i.querySelector('b').textContent : null; };
+      return { kpiNF: kpi('falta emitir'), kpiRec: kpi('a receber'), peNF: pe('falta em nota'), peRec: pe('a receber') };
+    }, obras).catch(e => ({ erro: e.message }));
+    const v = k => valor(r[k]);
+    t.ok('Obras: "Falta emitir" do alto igual ao rodapé, somado obra por obra', !r.erro && v('kpiNF') === 100 && v('peNF') === 100, JSON.stringify(r));
+    t.ok('Obras: "A receber" do alto igual ao rodapé, somado obra por obra', !r.erro && v('kpiRec') === 100 && v('peRec') === 100 && !erros.length, JSON.stringify(r) + ' ' + erros.join(' | '));
+    await ctx.close();
+  }
+  {
+    const { ctx, pg, erros } = await abre(b, { 'sis.local': 'central_rm' });
+    const r = await pg.evaluate(obras => typeof window.__obrasStatsTeste === 'function' ? window.__obrasStatsTeste(obras) : { erro: 'sem __obrasStatsTeste' }, obras).catch(e => ({ erro: e.message }));
+    t.ok('Central: falta de nota e a receber das obras somados obra por obra', !r.erro && Math.abs(r.faltaNF - 100) < 0.01 && Math.abs(r.aReceber - 100) < 0.01 && !erros.length,
+      JSON.stringify({ erro: r.erro, faltaNF: r.faltaNF, aReceber: r.aReceber }) + ' ' + erros.join(' | '));
+    await ctx.close();
+  }
+});
+
+teste('obras-parcela-atrasada-a-vista', async (b, t) => {
+  // a obra mostrava só a última parcela; a 3ª, vencida havia duas semanas e
+  // não recebida, ia junto com as "anteriores" e sumia da tela. E o painel
+  // ordenava por vencimento sem mostrar data nenhuma.
+  if (!fs.existsSync(path.join(RAIZ, 'controle_obras'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'controle_obras' });
+  const r = await pg.evaluate(() => {
+    const l = document.getElementById('loginScreen'); if (l) l.style.setProperty('display', 'none', 'important');
+    const dia = n => { const d = new Date(); d.setDate(d.getDate() + n); return String(d.getDate()).padStart(2, '0') + '/' + String(d.getMonth() + 1).padStart(2, '0') + '/' + d.getFullYear(); };
+    const P = (id, n, rec) => ({ id, desc: id, data: dia(n), valor: 100, recebida: rec });
+    S.obras = [
+      { id: 'o1', nome: 'Obra atrasada', valor: 400, notaAcordada: 0, status: 'andamento', fornecedores: [], parcelas: [P('p1', -60, true), P('p2', -30, true), P('p3', -14, false), P('p4', 30, false)] },
+      { id: 'o2', nome: 'Obra em dia', valor: 100, notaAcordada: 0, status: 'andamento', fornecedores: [], parcelas: [P('q1', 6, false)] }];
+    setView('painel');
+    const chip = id => { const row = [...document.querySelectorAll('.prow')].find(x => x.textContent.includes(id)); return row ? [...row.querySelectorAll('.chip')].map(c => c.className + ':' + c.textContent.replace(/\s+/g, ' ').trim()) : null; };
+    const o = { painelAtrasada: chip('Obra atrasada'), painelEmDia: chip('Obra em dia'), venceQ1: dia(6).slice(0, 5) };
+    openDetalhe('o1');
+    const vis = id => { const e = document.querySelector('#card_o1 .ob2-p[data-p="' + id + '"]'); return !!e && getComputedStyle(e).display !== 'none'; };
+    o.p1 = vis('p1'); o.p3 = vis('p3'); o.p4 = vis('p4');
+    const mais = document.querySelector('#card_o1 [data-mais="parcelas"]'); o.mais = mais ? mais.textContent.trim() : null;
+    const rec = document.querySelector('#card_o1 .ob2-p[data-p="p3"] .ob2-rec'); o.selo = rec ? rec.className + ':' + rec.textContent.trim() : null;
+    o.pillAntes = (document.getElementById('pills_o1') || {}).textContent || '';
+    setP('o1', 'p3', 'recebida', true);
+    o.pillDepois = (document.getElementById('pills_o1') || {}).textContent || '';
+    return o;
+  }).catch(e => ({ erro: e.message }));
+  const late = (r.painelAtrasada || []).find(c => /\blate\b/.test(c)) || '';
+  t.ok('painel: obra com parcela vencida mostra "Atrasada há 14 dias" e o valor', !r.erro && /Atrasada/i.test(late) && /há 14 dias/.test(late) && /100,00/.test(late), JSON.stringify(r.painelAtrasada || r));
+  t.ok('painel: obra em dia mostra quando vence a próxima parcela', !r.erro && (r.painelEmDia || []).some(c => /Vence/i.test(c) && c.includes(r.venceQ1)) && !(r.painelEmDia || []).some(c => /\blate\b/.test(c)), JSON.stringify(r.painelEmDia || r));
+  t.ok('obra aberta: parcela vencida e não recebida fica à vista, marcada "Atrasada"', !r.erro && r.p3 && r.p4 && !r.p1 && /atrasada/.test(r.selo || '') && /Atrasada/.test(r.selo || ''), JSON.stringify(r));
+  t.ok('obra aberta: só as recebidas se recolhem ("Mostrar 2 parcelas recebidas")', !r.erro && /2 parcelas recebidas/.test(r.mais || ''), r.mais);
+  t.ok('ao marcar como recebida, o aviso de atraso sai do cabeçalho da obra', !r.erro && /Atrasada/i.test(r.pillAntes) && !/Atrasada/i.test(r.pillDepois) && !erros.length, JSON.stringify({ antes: r.pillAntes, depois: r.pillDepois }) + ' ' + erros.join(' | '));
+  await ctx.close();
+});
+
+teste('timbrado', async (b, t) => {
+  // PADRAO_RM.md (Papel): todo sistema que mostra o timbrado no papel usa o
+  // modelo de duas colunas (razão social e CNPJ | endereço e cidade). Antes
+  // uns traziam o nome fantasia, outros a razão social, e o telefone repetia
+  // o que o rodapé já diz.
+  for (const r of repos()) {
+    const { ctx, pg } = await abre(b, { 'sis.local': r });
+    await pg.setViewportSize({ width: 703, height: 1050 }); // A4 menos as margens de 12 mm
+    await pg.emulateMedia({ media: 'print' });
+    const res = await pg.evaluate((fn) => {
+      const confere = eval(fn);
+      const l = document.getElementById('loginScreen'); if (l) l.style.setProperty('display', 'none', 'important');
+      const cnpjs = [...document.querySelectorAll('body *')].filter(e => e.getBoundingClientRect().width > 0 &&
+        [...e.childNodes].some(n => n.nodeType === 3 && /CNPJ 28\.654/.test(n.textContent)));
+      const erros = [];
+      cnpjs.forEach(c => { let h = c; while (h && !h.querySelector('img,svg')) h = h.parentElement;
+        confere(h || c.parentElement).forEach(e => erros.push(e)); });
+      return erros.slice(0, 3);
+    }, CONFERE_TIMBRE).catch(e => ['avaliação: ' + e.message]);
+    t.ok(r, !res.length, res.join(' | '));
+    await ctx.close();
+  }
+});
+
+teste('timbrado-recibos', async (b, t) => {
+  // os PDFs do Recibos não passam pela tela: monta cada timbrado e confere
+  if (!fs.existsSync(path.join(RAIZ, 'recibos_rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'recibos_rm' });
+  await pg.setViewportSize({ width: 794, height: 1123 });
+  await pg.emulateMedia({ media: 'print' });
+  const r = await pg.evaluate((fn) => {
+    const confere = eval(fn);
+    const l = document.getElementById('loginScreen'); if (l) l.style.setProperty('display', 'none', 'important');
+    window.print = () => {};
+    const out = {}, anota = (k, e) => { if (e.length) out[k] = e; };
+    // relatório: vai para uma janela à parte, com o CSS dele, na folha A4 (703 px úteis)
+    const d = document.createElement('div'); d.style.cssText = 'position:fixed;left:0;top:0;width:703px;background:#fff;z-index:99999';
+    d.innerHTML = '<style>' + relPdfCSS('#D53309', '#1d2127', '#585758').replace(/body\{[^}]*\}/, '').replace(/\*\{[^}]*\}/, '') + '</style><div class="wrap">' + relPdfHead(state.cfg, 'Folha de Pagamento') + '</div>';
+    document.body.appendChild(d);
+    const er = confere(d); if (!d.querySelector('.tb2-tipo')) er.push('sem o tipo do documento'); anota('relatorio', er); d.remove();
+    // os outros saem na pré-visualização: confere a folha como ela está
+    const set = (id, v) => { const e = document.getElementById(id); if (e) e.value = v; };
+    const folha = () => document.querySelector('#printScroll .folha');
+    const confereFolha = k => { const f = folha(); const e = f ? confere(f) : ['sem folha']; if (f && !f.querySelector('.tb2-tipo')) e.push('sem o tipo do documento'); anota(k, e); };
+    document.getElementById('printOv').classList.add('open');
+    set('ceNome', 'TESTE'); set('ceCpf', '000.000.000-00'); ceGerar(); confereFolha('solicitacao');
+    set('adNome', 'TESTE'); set('adCpf', '000.000.000-00'); set('adMotivo', 'Teste'); adGerar(); confereFolha('advertencia');
+    admFicha(); confereFolha('admissao');
+    return out;
+  }, CONFERE_TIMBRE).catch(e => ({ erro: e.message }));
+  t.ok('relatório, solicitação, advertência e admissão no timbrado padrão', !Object.keys(r).length && !erros.length, JSON.stringify(r) + ' ' + erros.join(' | '));
+  await ctx.close();
+});
+
+teste('recibos-pf-papel', async (b, t) => {
+  // a aba PF montava a ficha de ponto, o relatório e o resumo da contabilidade
+  // com cabeçalho próprio (logo e título, sem os dados da empresa), faixa
+  // escura na tabela e sem o rodapé da papelaria. Monta os três com um
+  // funcionário fictício, no papel (A4, sem margem: a folha é a página).
+  if (!fs.existsSync(path.join(RAIZ, 'recibos_rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'recibos_rm' });
+  await pg.setViewportSize({ width: 794, height: 1123 });
+  await pg.emulateMedia({ media: 'print' });
+  const r = await pg.evaluate((fn) => {
+    const confere = eval(fn);
+    const l = document.getElementById('loginScreen'); if (l) l.style.setProperty('display', 'none', 'important');
+    const e = { id: 'teste-pf', nome: 'TESTE', funcao: 'Teste', dtInicio: '2026-07-28', status: 'ativo' };
+    state.employees.push(e);
+    const docs = [['ficha', 'folha pf-folha', pfFichaHTML(e, '2026-10')],
+      ['relatorio', 'folha pf-relatorio', pfRelatorioHTML(e, '2026-10')],
+      ['resumo', 'folha pf-relatorio pf-folha-resumo', pfResumoContabilHTML([e], '2026-10')]];
+    const sc = document.getElementById('printScroll'); document.getElementById('printOv').classList.add('open');
+    const out = {};
+    for (const [k, cls, h] of docs) {
+      sc.innerHTML = ''; const f = document.createElement('div'); f.className = cls; f.innerHTML = h; sc.appendChild(f);
+      const er = [];
+      confere(f.querySelector('.head') || f).forEach(x => er.push(x));
+      if (!f.querySelector('.tb2-tipo')) er.push('sem o tipo do documento');
+      if (!f.querySelector('.foot .lin')) er.push('sem o rodapé da papelaria');
+      const th = f.querySelector('th'), c = th ? getComputedStyle(th).backgroundColor.match(/[\d.]+/g).map(Number) : [255, 255, 255];
+      if ((c[0] + c[1] + c[2]) / 3 < 200) er.push('cabeçalho da tabela escuro (' + getComputedStyle(th).backgroundColor + ')');
+      if (k !== 'resumo') { // o mês cheio (31 linhas) numa folha só, com o rodapé
+        const topo = f.getBoundingClientRect().top;
+        const fim = Math.max(...[...f.querySelectorAll('*')].map(x => x.getBoundingClientRect().bottom)) - topo
+          + parseFloat(getComputedStyle(f).paddingBottom);
+        if (fim > 1123) er.push('passa de uma folha (' + Math.round(fim) + ' px de 1123)');
+      }
+      if (er.length) out[k] = er;
+    }
+    return out;
+  }, CONFERE_TIMBRE).catch(e => ({ erro: e.message }));
+  t.ok('ficha, relatório e resumo do PF no timbrado padrão, com rodapé e numa folha', !Object.keys(r).length && !erros.length, JSON.stringify(r) + ' ' + erros.join(' | '));
+  await ctx.close();
+});
+
+teste('almocos-pdf-glifo', async (b, t) => {
+  // a Satoshi recortada do PDF não tem × º ª “ ”...: o jsPDF largava o resto
+  // da linha e "Falta×6" saía "Falta", sem a contagem
+  if (!fs.existsSync(path.join(RAIZ, 'almo-os'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'almo-os' });
+  const r = await pg.evaluate(() => {
+    const escrito = [];
+    const doc = { getFontList: () => ({}), addFileToVFS() {}, addFont() {}, setFont() {}, getTextWidth() { return 1; },
+      text(x) { escrito.push(x); } };
+    rmFontePDF(doc);
+    doc.text('Falta×6 · KM 42 nº 6151 · “ok”', 0, 0); doc.text(['1ª via', '2×'], 0, 0);
+    return escrito;
+  }).catch(e => ({ erro: e.message }));
+  const ok = Array.isArray(r) && r[0] === 'Faltax6 · KM 42 no 6151 · "ok"' && r[1][0] === '1a via' && r[1][1] === '2x';
+  t.ok('texto do PDF sem símbolo que a fonte não tem', ok && !erros.length, JSON.stringify(r) + ' ' + erros.join(' | '));
+  await ctx.close();
+});
+
+teste('almocos-dia-esquecido', async (b, t) => {
+  // dia útil que passou em branco na grade só era notado no fim do mês, no
+  // relatório, quando ninguém lembra mais quem almoçou. Agora avisa: o dia em
+  // que ninguém foi marcado, e quem ficou sem marcação num dia marcado. Quem
+  // nunca é marcado no mês (não usa o refeitório) não entra na conta.
+  if (!fs.existsSync(path.join(RAIZ, 'almo-os'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'almo-os' });
+  const r = await pg.evaluate(() => {
+    document.querySelectorAll('#loginScreen,.login').forEach(e => e.style.setProperty('display', 'none', 'important'));
+    const h = new Date(); const mk = isoMonth(new Date(h.getFullYear(), h.getMonth() - 1, 1)); // mês passado: todo dia já passou
+    DB.funcionarios = [{ id: 'f0', nome: 'FULANO TESTE' }, { id: 'f1', nome: 'CICLANO TESTE' }, { id: 'f2', nome: 'BELTRANO NAO USA' }];
+    DB.mesAtual = mk; delete DB.meses[mk]; const M = ensureMonth(mk); const dias = activeDays();
+    const A = dias[0], B = dias[1];
+    ['f0', 'f1'].forEach(id => { M.marc[id] = {}; dias.forEach(d => { if (d !== A && !(id === 'f1' && d === B)) M.marc[id][d] = 'PEGOU'; }); });
+    render();
+    const o = { lista: (typeof diasEsquecidos === 'function' ? diasEsquecidos() : []).map(x => ({ d: x.d, ninguem: x.ninguem, faltam: x.faltam.map(f => f.id) })), A, B };
+    const bn = document.getElementById('vazioBanner'); o.banner = bn ? bn.innerText.replace(/\s+/g, ' ') : ''; o.visivel = !!bn && bn.style.display !== 'none';
+    const ver = bn && bn.querySelectorAll('.desl-btn.primary')[0]; if (ver) ver.click();
+    const th = document.querySelector('#grid th[data-date="' + A + '"]'); o.piscou = !!th && th.classList.contains('alvo');
+    const fer = bn && [...bn.querySelectorAll('.desl-btn')].find(x => /feriado/i.test(x.textContent)); if (fer) fer.click();
+    o.depoisFeriado = (typeof diasEsquecidos === 'function' ? diasEsquecidos() : []).map(x => x.d);
+    M.marc.f1[B] = 'PEGOU'; render();
+    o.fim = (typeof diasEsquecidos === 'function' ? diasEsquecidos() : []).length; o.fimVisivel = !!bn && bn.style.display !== 'none';
+    return o;
+  }).catch(e => ({ erro: e.message }));
+  const L = r.lista || [];
+  const a = L.find(x => x.d === r.A), bb = L.find(x => x.d === r.B);
+  t.ok('dia em que ninguém foi marcado aparece como "ninguém foi marcado"', !r.erro && !!a && a.ninguem && r.visivel && /ninguém foi marcado/.test(r.banner), JSON.stringify(r));
+  t.ok('dia com uma pessoa em branco aponta quem; quem não usa o refeitório não entra', !r.erro && !!bb && !bb.ninguem && bb.faltam.join() === 'f1' && /Ciclano Teste/i.test(r.banner) && !/Beltrano/i.test(r.banner.replace(/ninguém.*?Ver dia/, '')), JSON.stringify(L) + ' ' + r.banner);
+  t.ok('"Ver dia" leva à coluna e ela pisca', !r.erro && r.piscou, JSON.stringify(r));
+  t.ok('"Foi feriado" tira o dia do aviso; marcando o que falta, o aviso some', !r.erro && JSON.stringify(r.depoisFeriado) === JSON.stringify([r.B]) && r.fim === 0 && !r.fimVisivel && !erros.length, JSON.stringify(r) + ' ' + erros.join(' | '));
+  await ctx.close();
+});
+
+teste('almocos-fechar-mes', async (b, t) => {
+  // depois de mandar o relatório à contabilidade, um toque a mais na grade
+  // (ou um lote mal apontado) mudava um mês já pago. Fechado, o mês trava
+  // marcação, linha, coluna, lote e dias; e guarda o valor por dia dele.
+  if (!fs.existsSync(path.join(RAIZ, 'almo-os'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'almo-os' });
+  const r = await pg.evaluate(async () => {
+    document.querySelectorAll('#loginScreen,.login').forEach(e => e.style.setProperty('display', 'none', 'important'));
+    window.confirm = () => true;
+    const espera = ms => new Promise(res => setTimeout(res, ms));
+    const confirma = async () => { await espera(30); const bt = [...document.querySelectorAll('.modal.open .btn.primary')].find(x => /Confirmar/.test(x.textContent)); if (bt) bt.click(); await espera(30); return !!bt; };
+    const h = new Date(); const mk = isoMonth(new Date(h.getFullYear(), h.getMonth() - 1, 1));
+    DB.funcionarios = [{ id: 'f0', nome: 'FULANO TESTE' }]; DB.valorDia = 20;
+    DB.mesAtual = mk; delete DB.meses[mk]; const M = ensureMonth(mk); const dias = activeDays();
+    M.marc.f0 = {}; dias.forEach(d => { M.marc.f0[d] = 'PEGOU'; }); delete M.marc.f0[dias[0]];
+    render(); brush = 'PEGOU';
+    const o = {};
+    const bt = document.getElementById('btnFechar'); o.temBotao = !!bt;
+    if (bt) bt.click(); o.confirmou = await confirma();
+    o.fechado = JSON.parse(JSON.stringify(M.fechado || null));
+    o.rotulo = bt ? bt.textContent.trim() : '';
+    const fb = document.getElementById('fechadoBanner'); o.banner = fb && fb.style.display !== 'none' ? fb.innerText.replace(/\s+/g, ' ') : '';
+    brush = 'FALTA'; // pincel diferente do que está na grade: se passar, a marcação muda
+    const cel = document.querySelectorAll('#grid tbody tr')[0].querySelectorAll('.cell')[0]; cel.click(); await espera(30);
+    o.celula = M.marc.f0[dias[0]] || '';
+    paintCol(dias[1]); o.coluna = M.marc.f0[dias[1]];
+    paintRow(DB.funcionarios[0]); o.linhaVazia = M.marc.f0[dias[0]] || '';
+    openBatch(); o.loteAbriu = document.getElementById('mBatch').classList.contains('open');
+    const antes = calc(DB.funcionarios[0]).valor;
+    DB.valorDia = 30; render();
+    o.valorGuardado = calc(DB.funcionarios[0]).valor === antes; o.campo = document.getElementById('valorDia').value;
+    reabrirMesUI(); o.reabriu = await confirma();
+    brush = 'PEGOU';
+    o.depois = M.fechado || null;
+    document.querySelectorAll('#grid tbody tr')[0].querySelectorAll('.cell')[0].click(); await espera(30);
+    o.celulaDepois = M.marc.f0[dias[0]] || '';
+    o.valorAtual = calc(DB.funcionarios[0]).valor;
+    return o;
+  }).catch(e => ({ erro: e.message }));
+  t.ok('botão Fechar fecha o mês com data, quem e valor do dia', !r.erro && r.temBotao && r.confirmou && r.fechado && /^\d{4}-\d{2}-\d{2}$/.test(r.fechado.em) && r.fechado.valorDia === 20 && /Fechado/.test(r.rotulo) && /fechado em/i.test(r.banner), JSON.stringify(r));
+  t.ok('mês fechado não aceita marcação, linha, coluna nem lote', !r.erro && r.celula === '' && r.coluna === 'PEGOU' && r.linhaVazia === '' && !r.loteAbriu, JSON.stringify(r));
+  t.ok('mês fechado guarda o valor por dia do fechamento', !r.erro && r.valorGuardado && r.campo === '20', JSON.stringify(r));
+  t.ok('reabrir destrava o mês e passa a usar o valor atual', !r.erro && r.reabriu && !r.depois && r.celulaDepois === 'PEGOU' && !erros.length, JSON.stringify(r) + ' ' + erros.join(' | '));
+  await ctx.close();
+});
+
+teste('orcamento-largura', async (b, t) => {
+  // largura útil do grupo inteiro de telhas (a do fabricante), de uma vez;
+  // cumeeira e acessório (sem área) ficam como estão
+  if (!fs.existsSync(path.join(RAIZ, 'orcamento-rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'orcamento-rm' });
+  const r = await pg.evaluate(() => {
+    const l = document.getElementById('loginScreen'); if (l) l.style.setProperty('display', 'none', 'important');
+    window.confirm = () => true;
+    S.telhas = [{ id: 'a1', cat: 'G1', desc: 'TP-40 A', preco: 40, larguraUtilMm: 1000 }, { id: 'a2', cat: 'G1', desc: 'TP-40 B', preco: 45, larguraUtilMm: 980 },
+      { id: 'a3', cat: 'G1', desc: 'Cumeeira', preco: 30, larguraUtilMm: 0 }, { id: 'b1', cat: 'G2', desc: 'Outra', preco: 50, larguraUtilMm: 1000 }];
+    S.linhasTelha = [{ lid: 'x', telhaId: 'a2', comp: 10, qtd: 1, larguraUtilMm: 980 }];
+    openDB('telhas');
+    const inp = document.querySelector('#dbTelhaBody .cat-larg input');
+    const antes = inp.placeholder;
+    inp.value = '1020'; inp.dispatchEvent(new Event('change'));
+    return { antes, larg: S.telhas.map(t => t.larguraUtilMm), linha: S.linhasTelha[0].larguraUtilMm,
+      titulo: document.querySelector('#dbTelhaBody .cat-larg input').value };
+  }).catch(e => ({ erro: e.message }));
+  t.ok('largura útil aplicada ao grupo todo', !r.erro && r.antes === 'várias' && JSON.stringify(r.larg) === '[1020,1020,0,1000]' && r.linha === 1020 && r.titulo === '1020' && !erros.length, JSON.stringify(r) + ' ' + erros.join(' | '));
+  await ctx.close();
+});
+
+teste('nome-pdf', async (b, t) => {
+  // o nome do arquivo vem do documento (rmNomePDF), no app e no navegador
+  if (!fs.existsSync(path.join(RAIZ, 'orcamento-rm'))) return;
+  const antes = () => { window.__nomes = []; window.rmDesktop = { salvarPDF() {}, abrirPDF(html, nome) { window.__nomes.push(nome); return Promise.resolve({ ok: true }); } }; };
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'orcamento-rm' }, 'index.html', { antes });
+  const r = await pg.evaluate(async () => {
+    const l = document.getElementById('loginScreen'); if (l) l.style.setProperty('display', 'none', 'important');
+    window.confirm = () => true;
+    const set = (id, v) => { const e = document.getElementById(id); e.value = v; e.dispatchEvent(new Event('input', { bubbles: true })); };
+    set('q_cliente', 'REFRICOMP - PORTAS'); set('q_data', '28/09/2026'); set('q_validade', '15 dias');
+    const tituloAntes = document.title;
+    window.dispatchEvent(new Event('beforeprint')); const tituloImpr = document.title;
+    window.dispatchEvent(new Event('afterprint'));
+    orcImprimir(); await new Promise(r => setTimeout(r, 600));
+    document.getElementById('orcPrintMode').value = 'interno'; orcImprimir(); await new Promise(r => setTimeout(r, 600));
+    return { nomes: window.__nomes, tituloImpr, voltou: document.title === tituloAntes };
+  }).catch(e => ({ erro: e.message }));
+  const ok = !r.erro && r.nomes[0] === 'Orçamento REFRICOMP - PORTAS 28-09-2026' && r.nomes[1] === 'Orçamento interno REFRICOMP - PORTAS 28-09-2026'
+    && r.tituloImpr === 'Orçamento REFRICOMP - PORTAS 28-09-2026' && r.voltou;
+  t.ok('orçamento: PDF com o nome do cliente e a data', ok && !erros.length, JSON.stringify(r) + ' ' + erros.join(' | '));
+  await ctx.close();
+});
+
+teste('nome-pdf-recibos', async (b, t) => {
+  if (!fs.existsSync(path.join(RAIZ, 'recibos_rm'))) return;
+  const antes = () => { window.__nomes = []; window.rmDesktop = { salvarPDF() {}, abrirPDF(html, nome) { window.__nomes.push(nome); return Promise.resolve({ ok: true }); } }; };
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'recibos_rm' }, 'index.html', { antes });
+  const r = await pg.evaluate(async () => {
+    const l = document.getElementById('loginScreen'); if (l) l.style.setProperty('display', 'none', 'important');
+    const espera = () => new Promise(r => setTimeout(r, 300));
+    const set = (id, v) => { const e = document.getElementById(id); if (e) e.value = v; };
+    set('adNome', 'JOSE TESTE DA SILVA'); set('adCpf', '000.000.000-00'); set('adMotivo', 'Teste'); adGerar();
+    document.getElementById('printNow').click(); await espera();
+    infoImpressao('Pagamento · setembro/2026 · 1 recibo(s) · 1 folha(s)', ['Recibo', 'Pagamento', 'Jose Teste da Silva', mesArq(8, 2026)]);
+    document.getElementById('printNow').click(); await espera();
+    // barra mudada sem nome proprio: nao herda o nome do documento anterior
+    document.getElementById('printInfo').textContent = 'Outro documento';
+    document.getElementById('printNow').click(); await espera();
+    return window.__nomes;
+  }).catch(e => ({ erro: e.message }));
+  const hoje = new Date(), d = String(hoje.getDate()).padStart(2, '0') + '-' + String(hoje.getMonth() + 1).padStart(2, '0') + '-' + hoje.getFullYear();
+  const ok = Array.isArray(r) && r[0] === 'Advertência Jose Teste da Silva ' + d && r[1] === 'Recibo Pagamento Jose Teste da Silva 09-2026' && r[2] === 'Outro documento ' + d;
+  t.ok('recibos: PDF com tipo, nome e data', ok && !erros.length, JSON.stringify(r) + ' ' + erros.join(' | '));
+  await ctx.close();
+});
+
+teste('obras-pdf', async (b, t) => {
+  // o relatório do Controle de Obras sai em PDF, no papel padrão, com o nome
+  // do documento (antes: página HTML baixada, com visual próprio)
+  if (!fs.existsSync(path.join(RAIZ, 'controle_obras'))) return;
+  const antes = () => { window.__docs = []; window.rmDesktop = { salvarPDF() {}, abrirPDF(h, n) { window.__docs.push([n, h]); return Promise.resolve({ ok: true }); } }; };
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'controle_obras' }, 'index.html', { antes });
+  const r = await pg.evaluate(async () => {
+    const l = document.getElementById('loginScreen'); if (l) l.style.setProperty('display', 'none', 'important');
+    S.obras = [{ id: 'o1', nome: 'Galpão Teste — Cliente', cliente: 'Cliente', valor: 1000, notaAcordada: 500, parcelas: [{ desc: 'Entrada', data: '2026-09-01', valor: 300, recebida: true }],
+      fornecedores: [{ id: 'f1', nome: 'Fornecedor Teste', numeroNF: '123', dataNF: '2026-09-02', valor: 200 }], status: 'andamento' }]; render();
+    relObra('o1'); await new Promise(r => setTimeout(r, 300)); relTodas(); await new Promise(r => setTimeout(r, 300));
+    return window.__docs.map(([n, h]) => ({ n, cab: /class="cab"/.test(h) && /CNPJ 28\.654/.test(h), pe: /class="pe"/.test(h), a4: /@page\{size:A4/.test(h), nf: h.includes('Fornecedor Teste') && h.includes('Entrada') }));
+  }).catch(e => ({ erro: e.message }));
+  const hoje = new Date(), d = String(hoje.getDate()).padStart(2, '0') + '-' + String(hoje.getMonth() + 1).padStart(2, '0') + '-' + hoje.getFullYear();
+  const ok = Array.isArray(r) && r.length === 2 && r.every(x => x.cab && x.pe && x.a4 && x.nf)
+    && r[0].n === 'Relatorio de Obra Galpao Teste - Cliente ' + d && r[1].n === 'Relatorio Geral de Obras ' + d;
+  t.ok('obras: relatório em PDF no papel padrão', ok && !erros.length, JSON.stringify(r) + ' ' + erros.join(' | '));
+  await ctx.close();
+});
+
+teste('obras-pdf-celular', async (b, t) => {
+  // no telefone o botão ⤴ do card mandava imprimir por um quadro escondido,
+  // que o celular ignora: nada acontecia. Agora gera o arquivo PDF e o
+  // "Enviar" abre a folha de compartilhamento (WhatsApp, e-mail…)
+  if (!fs.existsSync(path.join(RAIZ, 'controle_obras'))) return;
+  const antes = () => {
+    window.__enviados = []; window.__imprimiu = 0;
+    Object.defineProperty(navigator, 'canShare', { configurable: true, value: d => !!(d && d.files && d.files.length) });
+    Object.defineProperty(navigator, 'share', { configurable: true, value: d => { window.__enviados.push(d); return Promise.resolve(); } });
+    const p = HTMLIFrameElement.prototype, cw = Object.getOwnPropertyDescriptor(p, 'contentWindow');
+    Object.defineProperty(p, 'contentWindow', { configurable: true, get() { const w = cw.get.call(this); try { if (w) w.print = () => { window.__imprimiu++; }; } catch (e) {} return w; } });
+  };
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'controle_obras' }, 'index.html', { antes, tela: { width: 390, height: 844 } });
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    const l = document.getElementById('loginScreen'); if (l) l.style.setProperty('display', 'none', 'important');
+    const parcelas = Array.from({ length: 70 }, (_, i) => ({ desc: 'Parcela ' + (i + 1), data: '2026-09-01', valor: 100, recebida: i % 2 === 0 }));
+    S.obras = [{ id: 'o1', nome: 'Galpão Teste', cliente: 'Cliente', valor: 2100000, notaAcordada: 500, parcelas, _open: true,
+      fornecedores: [{ id: 'f1', nome: 'Fornecedor Teste', numeroNF: '123', dataNF: '2026-09-02', valor: 200 }], status: 'andamento' }]; render(); await esp(200);
+    const bt = document.querySelector('.pbtn.rep'); if (!bt) return { erro: 'sem o botão ⤴' };
+    bt.click(); await esp(100);
+    const op = document.getElementById('relOpPdf'); if (!op) return { erro: 'o ⤴ não oferece o PDF' }; op.click();
+    let env = null; for (let i = 0; i < 100 && !(env = document.getElementById('relEnviar')); i++) await esp(150);
+    if (!env) return { erro: 'não apareceu o Enviar', imprimiu: window.__imprimiu };
+    for (let i = 0; i < 100 && env.disabled; i++) await esp(150);
+    env.click(); await esp(300);
+    const d = window.__enviados[0]; if (!d) return { erro: 'não abriu o compartilhar', imprimiu: window.__imprimiu };
+    const f = d.files[0], txt = await f.text();
+    return { nome: f.name, tipo: f.type, pdf: txt.startsWith('%PDF'), paginas: (txt.match(/\/Type \/Page\b(?!s)/g) || []).length, kb: Math.round(f.size / 1024), imprimiu: window.__imprimiu };
+  }).catch(e => ({ erro: e.message }));
+  const hoje = new Date(), d = String(hoje.getDate()).padStart(2, '0') + '-' + String(hoje.getMonth() + 1).padStart(2, '0') + '-' + hoje.getFullYear();
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  t.ok('celular: ⤴ gera o arquivo PDF e abre o compartilhar', !r.erro && r.pdf && r.tipo === 'application/pdf' && !r.imprimiu, J);
+  t.ok('celular: nome "Relatorio de Obra Galpao Teste ' + d + '.pdf"', r.nome === 'Relatorio de Obra Galpao Teste ' + d + '.pdf', J);
+  t.ok('celular: obra longa sai em mais de uma folha, arquivo leve', r.paginas >= 2 && r.kb < 2500, J);
+  await ctx.close();
+});
+
+teste('premoldados-laje-pe', async (b, t) => {
+  // lajes alveolares PE16..PE50 (tabela de fornecedor em kN/m² -> kg/m²,
+  // 1 kN/m² = 100 kg/m², a mesma conta dos 25 kN/m³ = 2500 kg/m³ do
+  // concreto): as 12 entram como referência padrão com nome só PE/H, sem o
+  // nome do fornecedor; escolher uma preenche o peso e a espessura, e duas
+  // de mesmo peso não se confundem
+  if (!fs.existsSync(path.join(RAIZ, 'calculo_pre_moldados'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'calculo_pre_moldados' });
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    document.querySelectorAll('#loginScreen').forEach(e => e.classList.add('hide'));
+    const refs = (dados.referencias && dados.referencias.laje) || [];
+    const tab = {};
+    refs.forEach(x => { tab[x.nome] = [x.pesoM2, x.espessura || 0]; });
+    // o que ficou salvo na nuvem com o nome antigo não volta
+    const velho = normalizar({ referencias: { laje: [{ id: 'tatu_pe16', nome: 'PE16 TATU (sem capa)', pesoM2: 250, padrao: true }] } });
+    const voltou = ((velho.referencias || {}).laje || []).filter(x => /\btatu/i.test(x.nome + ' ' + x.id)).map(x => x.nome);
+    const fonte = await (await fetch('index.html')).text();
+    const s = document.getElementById('fTipo'); s.value = 'laje'; s.dispatchEvent(new Event('change')); await esp(150);
+    const sel = document.getElementById('fRefPeso'), pe30 = refs.find(x => x.nome === 'PE30 (sem capa)');
+    const base = { tab, voltou, fornecedor: (fonte.match(/\btatu\b/gi) || []).length };
+    if (!pe30) return base;
+    sel.value = pe30.id; sel.dispatchEvent(new Event('change')); await esp(50);
+    document.getElementById('fDimB').dispatchEvent(new Event('input')); await esp(50);
+    return Object.assign(base, { peso: document.getElementById('fDimB').value, espessura: document.getElementById('fDimA').value, escolhida: sel.options[sel.selectedIndex].textContent });
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r).slice(0, 1400);
+  const esperado = { 16: [250, 350, 4], 20: [275, 400, 5], 25: [330, 455, 5], 30: [400, 525, 5], 40: [460, 585, 5], 50: [550, 675, 5] };
+  const faltam = [];
+  for (const [h, [sem, com, capa]] of Object.entries(esperado)) {
+    const a = (r.tab || {})['PE' + h + ' (sem capa)'], c = (r.tab || {})['PE' + h + ' + capa ' + capa + ' cm'];
+    if (!a || a[0] !== sem || Math.abs(a[1] - h / 100) > 1e-9) faltam.push('PE' + h + ' sem capa');
+    if (!c || c[0] !== com || Math.abs(c[1] - (+h + capa) / 100) > 1e-9) faltam.push('PE' + h + ' + capa');
+  }
+  t.ok('as 12 lajes PE em kg/m², com a espessura', !r.erro && !faltam.length, faltam.join(', ') + ' ' + J);
+  t.ok('nome só PE ou H: sem o fornecedor no sistema, nem no que estava salvo',
+    !r.erro && r.fornecedor === 0 && !r.voltou.length && Object.keys(r.tab).every(n => /^(PE|H)\d/.test(n)), J);
+  // as H de antes: H16 e H20 + capa têm par na tabela e passam a pesar como
+  // ela; H26 + capa e H15 não têm e ficam como estavam (decisão do usuário)
+  const H = { 'H16 (sem capa)': 250, 'H20 + capa 5 cm': 400, 'H26 + capa 5 cm': 370, 'H15 (sem capa)': 237 };
+  t.ok('referências H: H16 = 250 e H20 + capa = 400 pela tabela; H26 e H15 mantidas', Object.entries(H).every(([n, p]) => r.tab && r.tab[n] && r.tab[n][0] === p), J);
+  t.ok('escolher PE30 sem capa: 400 kg/m², 0,30 m, e não vira a PE20 + capa (mesmo peso)',
+    r.peso === '400' && r.espessura === '0,30' && /PE30 \(sem capa\)/.test(r.escolhida || ''), J);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
+teste('recibos-simula-rescisao', async (b, t) => {
+  // simulador de rescisão: a conta da contabilidade (salário 3.300,
+  // contratação 15/12/2025, saída 30/09/2026, sem justa causa, aviso
+  // indenizado) dá bruto 13.383,33. Verbas pelo salário REAL e pela data de
+  // CONTRATAÇÃO; FGTS e INSS pelo salário da CARTEIRA e o FGTS só desde a
+  // assinatura da carteira
+  if (!fs.existsSync(path.join(RAIZ, 'recibos_rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'recibos_rm' }, 'index.html', { relogio: '2026-09-30T12:00:00-03:00', fuso: 'America/Sao_Paulo' });
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    const l = document.getElementById('loginScreen'); if (l) l.style.setProperty('display', 'none', 'important');
+    if (typeof rescSimula !== 'function') return { erro: 'sem o simulador' };
+    const base = { tipo: 'sjc', aviso: 'indenizado', admissao: '2025-12-15', saida: '2026-09-30', salario: 3300, salCarteira: 3300,
+      a13: 9, aFer: 10, dVenc: 0, dDobro: 0, a13p: 1, aFerP: 1, diasAviso: 30, fgtsSaldo: 2283.6, descontos: [] };
+    const sjc = rescSimula(base);
+    const pedido = rescSimula(Object.assign({}, base, { tipo: 'pedido', aviso: 'descontado', a13p: 0, aFerP: 0 }));
+    const justa = rescSimula(Object.assign({}, base, { tipo: 'justa', dVenc: 30 }));
+    const acordo = rescSimula(Object.assign({}, base, { tipo: 'acordo' }));
+    const cart = rescSimula(Object.assign({}, base, { salCarteira: 2000 }));
+    // sugestões a partir do cadastro: contratação x carteira
+    state.employees = [{ id: 'rs1', nome: 'RUI TESTE SAIDA', status: 'ativo', salario: 3300, dtInicio: '2025-12-15', dtCarteira: '2026-03-01', valAdiantamento: 1650, plano: 69.21 }];
+    const sug = rescSugere(state.employees[0], '2026-09-30', 'sjc', 'indenizado');
+    // a tela
+    document.querySelector('.vtab[data-v="resc"]').click(); await esp(200);
+    document.getElementById('btnRescSim').click(); await esp(200);
+    const s = document.getElementById('rsEmp'); s.value = 'rs1'; s.dispatchEvent(new Event('change')); await esp(100);
+    const sd = document.getElementById('rsSaida'); sd.value = '2026-09-30'; sd.dispatchEvent(new Event('change')); await esp(100);
+    const tela = document.getElementById('rsResultado').textContent.replace(/\s+/g, ' ');
+    document.getElementById('rsRecibo').click(); await esp(100);
+    return { sjc, pedido, justa, acordo, cart, sug, tela, valorRecibo: document.getElementById('rescValor').value, empRecibo: document.getElementById('rescEmp').value };
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r).slice(0, 1500), v = (x, k) => x && x.verbas && (x.verbas.find(i => i.k === k) || {}).valor;
+  t.ok('sem justa causa: bruto 13.383,33 como o da contabilidade', !r.erro && Math.abs(r.sjc.bruto - 13383.33) < 0.011, J);
+  t.ok('FGTS: 8% da rescisão (748,00) + multa de 40% sobre saldo + rescisão', !r.erro && Math.abs(r.sjc.fgts.rescisorio - 748) < 0.01 && Math.abs(r.sjc.fgts.multa - 1212.64) < 0.01, J);
+  t.ok('INSS pela tabela 2026: 284,60 sobre 3.300', !r.erro && Math.abs(r.sjc.inss - 284.60) < 0.01, J);
+  t.ok('pedido de demissão: sem aviso nem multa, desconta o aviso não cumprido', !r.erro && !v(r.pedido, 'aviso') && r.pedido.fgts.multa === 0 && r.pedido.descontos.some(d => d.k === 'avisoDesc' && Math.abs(d.valor - 3300) < 0.01), J);
+  t.ok('justa causa: só saldo e férias vencidas', !r.erro && !v(r.justa, 'dec') && !v(r.justa, 'ferProp') && Math.abs(v(r.justa, 'ferVenc') - 3300) < 0.01 && r.justa.fgts.multa === 0, J);
+  t.ok('acordo: metade do aviso e multa de 20%', !r.erro && Math.abs(v(r.acordo, 'aviso') - 1650) < 0.01 && Math.abs(r.acordo.fgts.multaPct - 0.2) < 1e-9, J);
+  t.ok('salário da carteira muda FGTS e INSS, não as verbas', !r.erro && Math.abs(r.cart.bruto - 13383.33) < 0.011 && r.cart.fgts.rescisorio < r.sjc.fgts.rescisorio && r.cart.inss < r.sjc.inss, J);
+  t.ok('sugestão: avos pela contratação (13º 9, férias 10, aviso 30), FGTS só desde a carteira',
+    !r.erro && r.sug.a13 === 9 && r.sug.aFer === 10 && r.sug.diasAviso === 30 && r.sug.a13p === 1 && r.sug.aFerP === 1 && r.sug.fgtsEstimado > 0 && r.sug.fgtsEstimado < 1700, J);
+  t.ok('tela: mostra o total bruto e leva o líquido ao recibo', !r.erro && /13\.383,33/.test(r.tela) && r.empRecibo === 'rs1' && /\d/.test(r.valorRecibo),
+    JSON.stringify({ tela: (r.tela || '').slice(0, 700), valor: r.valorRecibo, emp: r.empRecibo }));
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
+teste('recibos-recibo-emprestimo-parcela', async (b, t) => {
+  // o recibo pegava os EMPRÉSTIMOS do cadastro como se fossem as parcelas do
+  // mês: saía o valor total, "parcela undefined/undefined" e até empréstimo
+  // já quitado. Tem de sair só a parcela lançada no mês, com número/total
+  if (!fs.existsSync(path.join(RAIZ, 'recibos_rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'recibos_rm' }, 'index.html', { relogio: '2026-09-30T12:00:00-03:00', fuso: 'America/Sao_Paulo' });
+  const r = await pg.evaluate(() => {
+    const l = document.getElementById('loginScreen'); if (l) l.style.setProperty('display', 'none', 'important');
+    const emp = { id: 're1', nome: 'ZECA TESTE EMPRESTIMO', status: 'ativo', salario: 3000, valAdiantamento: 1500, valPagamento: 1000,
+      emprestimos: [
+        { id: 'q1', desc: 'Quitado', desde: 'pagamento', valor: 1000, parcelas: [{ valor: 500, pago: true }, { valor: 500, pago: true }] },
+        { id: 'c1', desc: 'Conserto', desde: 'pagamento', valor: 2500, parcelas: [{ valor: 500, pago: true }, { valor: 500, lancar: true }, { valor: 500 }, { valor: 500 }, { valor: 500 }] }] };
+    state.employees = [emp];
+    const vivo = (linhasDemonstrativo(emp) || { linhas: [] }).linhas.filter(x => /empr/i.test(x.l)).map(x => x.l + ' = ' + x.v);
+    // 2ª via: as parcelas guardadas no fechamento continuam mandando
+    const arq = (linhasDemonstrativo({ ...emp, emprestimos: [{ desc: 'Conserto', numero: 3, total: 5, valor: 500 }] }) || { linhas: [] }).linhas.filter(x => /empr/i.test(x.l)).map(x => x.l + ' = ' + x.v);
+    return { vivo, arq };
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  t.ok('só a parcela do mês: 2/5 de R$ 500 (nem o total, nem o quitado)', !r.erro && r.vivo.length === 1 && /parcela 2\/5/.test(r.vivo[0]) && /= 500$/.test(r.vivo[0]), J);
+  t.ok('nada de "undefined" no recibo', !r.erro && !r.vivo.concat(r.arq).some(x => /undefined/.test(x)), J);
+  t.ok('2ª via usa a parcela guardada no fechamento', !r.erro && r.arq.length === 1 && /parcela 3\/5/.test(r.arq[0]), J);
+  t.ok('sem erro na página', !erros.length, J);
+  await ctx.close();
+});
+
+teste('recibos-lancamento-lista-presa', async (b, t) => {
+  // a descrição do lançamento da folha usava o <datalist> do navegador: a
+  // lista abria fora do modal, preta, longe do campo. Tem de abrir presa
+  // embaixo do campo, dentro do modal, e escolher preenche a descrição
+  if (!fs.existsSync(path.join(RAIZ, 'recibos_rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'recibos_rm' }, 'index.html', { relogio: '2026-09-30T12:00:00-03:00', fuso: 'America/Sao_Paulo' });
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    const l = document.getElementById('loginScreen'); if (l) l.style.setProperty('display', 'none', 'important');
+    state.employees = [{ id: 'lf1', nome: 'ANA TESTE LANCAMENTO', status: 'ativo', salario: 2500, valPagamento: 1200 }];
+    abrirFolhaExtra('lf1'); await esp(100);
+    document.getElementById('folhaAdd').click(); await esp(50);
+    const inp = document.querySelector('#folhaModal .fdesc');
+    const nativo = !!document.querySelector('#folhaModal datalist') || !!(inp && inp.getAttribute('list'));
+    inp.focus(); inp.dispatchEvent(new Event('focus')); await esp(80);
+    const box = inp.parentElement.querySelector('.sugg.open');
+    const dentro = !!(box && box.closest('#folhaModal'));
+    const itens = box ? [...box.querySelectorAll('.it')].map(x => x.textContent.trim()) : [];
+    inp.value = 'mont'; inp.dispatchEvent(new Event('input')); await esp(50);
+    const filtro = [...inp.parentElement.querySelectorAll('.sugg .it')].map(x => x.textContent.trim());
+    const it = inp.parentElement.querySelector('.sugg .it'); if (it) it.dispatchEvent(new MouseEvent('mousedown', { bubbles: true })); await esp(50);
+    return { nativo, dentro, itens, filtro, valor: inp.value, tmp: folhaTmp[0] && folhaTmp[0].desc };
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  t.ok('sem o datalist do navegador', !r.erro && !r.nativo, J);
+  t.ok('a lista abre presa ao campo, dentro do modal, com as sugestões', !r.erro && r.dentro && r.itens.includes('Montagem') && r.itens.includes('Acerto'), J);
+  t.ok('digitar filtra e escolher preenche a descrição', !r.erro && r.filtro.join() === 'Montagem' && r.valor === 'Montagem' && r.tmp === 'Montagem', J);
+  t.ok('sem erro na página', !erros.length, J);
+  await ctx.close();
+});
+
+teste('recibos-segunda-via-com-demonstrativo', async (b, t) => {
+  // a 2ª via só procurava o detalhe no FECHAMENTO; com o mês ainda aberto
+  // (sem fechamento) saía só o valor, sem demonstrativo -- embora o
+  // relatório mostrasse os descontos, porque o histórico já tem o detalhe
+  if (!fs.existsSync(path.join(RAIZ, 'recibos_rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'recibos_rm' }, 'index.html', { relogio: '2026-10-02T12:00:00-03:00', fuso: 'America/Sao_Paulo' });
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    const l = document.getElementById('loginScreen'); if (l) l.style.setProperty('display', 'none', 'important');
+    state.cfg.detalharRecibo = true;
+    state.employees = [{ id: 'sv1', nome: 'BETO TESTE SEGUNDA VIA', docTipo: 'CPF', doc: '000.000.000-00', status: 'ativo', salario: 5000 }];
+    state.fechamentos = {};
+    state.historico = { '2026-09-pagamento': { ano: 2026, mes: 9, tipo: 'pagamento', data: '2026-10-01', itens: [
+      { id: 'sv1', nome: 'BETO TESTE SEGUNDA VIA', doc: '000.000.000-00', valor: 2981.4, metodo: 'banco', salario: 5000,
+        valAdiantamento: 2000, he: 300, plano: 80, inss: 238.6, almoco: 400, valPagamento: 2981.4 }] } };
+    state.movimentos = { mv1: { id: 'mv1', competencia: '2026-09', tipo: 'pagamento', pessoaTipo: 'funcionario', pessoaId: 'sv1',
+      nome: 'BETO TESTE SEGUNDA VIA', valorPrevisto: 2981.4, status: 'pago', dataPagamento: '2026-10-01' } };
+    verReciboDoMov('mv1'); await esp(300);
+    const txt = (document.getElementById('printScroll') || {}).innerText || '';
+    return { txt: txt.replace(/\s+/g, ' ').slice(0, 900) };
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  t.ok('2ª via sem fechamento sai com o demonstrativo do histórico', !r.erro && /Horas extras/.test(r.txt) && /Plano de sa/.test(r.txt) && /INSS/.test(r.txt) && /Almo/.test(r.txt) && /L.quido recebido/.test(r.txt), J);
+  t.ok('e continua marcada como 2ª via, com o valor do recibo', !r.erro && /2ª via/.test(r.txt) && /2\.981,40/.test(r.txt), J);
+  t.ok('sem erro na página', !erros.length, J);
+  await ctx.close();
+});
+
+teste('recibos-assiduidade-mes-fechado-desligado', async (b, t) => {
+  // a lista de um mês era montada com quem está ATIVO HOJE: desligado em
+  // outubro sumia da assiduidade de setembro (do prêmio, do sorteio e do
+  // arquivo do grupo). Vale quem trabalhou o mês: desligado ou afastado
+  // DEPOIS do fim do mês continua na lista dele; quem saiu durante o mês
+  // ou entrou depois dele, não.
+  if (!fs.existsSync(path.join(RAIZ, 'recibos_rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'recibos_rm' }, 'index.html', { relogio: '2026-10-09T12:00:00-03:00', fuso: 'America/Sao_Paulo' });
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    const l = document.getElementById('loginScreen'); if (l) l.style.setProperty('display', 'none', 'important');
+    const clt = (id, nome, o) => Object.assign({ id, nome, docTipo: 'CPF', doc: '', status: 'ativo', salario: 3000, dtInicio: '2024-02-05', funcao: 'Soldador' }, o);
+    state.employees = [clt('m1', 'ANA TESTE ATIVA'),
+      clt('m2', 'BRUNO TESTE SAIU EM OUTUBRO', { status: 'desligado', dtDesligamento: '2026-10-05' }),
+      clt('m3', 'CAIO TESTE SAIU EM SETEMBRO', { status: 'desligado', dtDesligamento: '2026-09-18' }),
+      clt('m4', 'DORA TESTE AFASTADA EM OUTUBRO', { status: 'afast', afastMotivo: 'inss', afastDesde: '2026-10-02' }),
+      clt('m5', 'EDU TESTE ENTROU EM OUTUBRO', { dtInicio: '2026-10-01' }),
+      clt('m6', 'FABI TESTE PEDIU DEMISSAO', { status: 'demissao' })];
+    state.cfg.assidCompetencia = '2026-10';
+    // FABI estava na lista de setembro quando ela foi aberta (antes da saída, sem data)
+    state.assiduidade = { '2026-09': { faltou: { m4: true }, premio: 170, sortId: 'm4', sortNome: 'DORA TESTE AFASTADA EM OUTUBRO', membros: { m1: true, m2: true, m6: true } } };
+    document.querySelector('.vtab[data-v="assid"]').click(); await esp(250);
+    const nomes = [...document.querySelectorAll('#assidBody [data-astog]')].map(b => b.closest('tr').querySelector('.forn').textContent);
+    const linhaBruno = ([...document.querySelectorAll('#assidBody tr')].find(tr => /Bruno/.test(tr.textContent)) || {}).textContent || '';
+    const n = { ass: document.getElementById('asAssiduos').textContent, falt: document.getElementById('asFaltaram').textContent };
+    // o arquivo do grupo também
+    let doc = ''; const orig = window.entregarPDF; window.entregarPDF = d => { doc = d; };
+    try { document.getElementById('btnAsEnvelopes').click(); } finally { window.entregarPDF = orig; }
+    // outubro (mês corrente) não traz quem já saiu
+    const sel = document.getElementById('asMes'); sel.value = '9'; sel.dispatchEvent(new Event('change')); await esp(150);
+    const out = [...document.querySelectorAll('#assidBody [data-astog]')].map(b => b.closest('tr').querySelector('.forn').textContent);
+    return { nomes, n, linhaBruno, doc: /Bruno Teste Saiu em Outubro|Bruno Teste Saiu Em Outubro/i.test(doc), out };
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r);
+  const tem = (l, s) => (l || []).some(x => new RegExp(s, 'i').test(x));
+  t.ok('setembro: quem saiu em outubro continua na lista', !r.erro && tem(r.nomes, 'Bruno') && r.n.falt === '1', J);
+  t.ok('setembro: afastado só em outubro continua na lista', !r.erro && tem(r.nomes, 'Dora'), J);
+  t.ok('setembro: quem já estava na lista do mês (sem data de saída) continua', !r.erro && tem(r.nomes, 'Fabi'), J);
+  t.ok('setembro: quem saiu durante setembro ou entrou em outubro não entra', !r.erro && !tem(r.nomes, 'Caio') && !tem(r.nomes, 'Edu'), J);
+  t.ok('a linha diz que a pessoa já foi desligada', !r.erro && /desligad/i.test(r.linhaBruno), J);
+  t.ok('o arquivo do grupo/envelopes também leva quem saiu depois', !r.erro && r.doc === true, J);
+  t.ok('outubro: sem quem já saiu', !r.erro && !tem(r.out, 'Bruno') && !tem(r.out, 'Dora') && tem(r.out, 'Edu'), J);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
+teste('recibos-assiduidade-envelopes', async (b, t) => {
+  // quem ganha o prêmio recebe um envelope com o nome e uma mensagem: agora
+  // sai do sistema, junto com a lista, uma folha A4 por ganhador que vira
+  // envelope-bolso só dobrando (marcas de dobra, frente limpa com a logo e
+  // o nome, a aba com a mensagem e o valor)
+  if (!fs.existsSync(path.join(RAIZ, 'recibos_rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'recibos_rm' }, 'index.html', { relogio: '2026-10-09T12:00:00-03:00', fuso: 'America/Sao_Paulo' });
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    const l = document.getElementById('loginScreen'); if (l) l.style.setProperty('display', 'none', 'important');
+    const clt = (id, nome) => ({ id, nome, docTipo: 'CPF', doc: '', status: 'ativo', salario: 3000, dtInicio: '2024-02-05', funcao: 'Soldador' });
+    state.employees = [clt('ev1', 'BRUNO TESTE ASSIDUO'), clt('ev2', 'ANA TESTE ASSIDUA'), clt('ev3', 'CAIO TESTE FALTOU'), clt('ev4', 'DORA TESTE FALTOU')];
+    state.cfg.assidCompetencia = '2026-10';
+    state.assiduidade = { '2026-09': { faltou: { ev3: true, ev4: true }, premio: 170, sortId: 'ev4', sortNome: 'DORA TESTE FALTOU' } };
+    document.querySelector('.vtab[data-v="assid"]').click(); await esp(250);
+    const bt = document.getElementById('btnAsEnvelopes');
+    let doc = '', nome = '';
+    const orig = window.entregarPDF; window.entregarPDF = (d, n) => { doc = d; nome = n; };
+    try { if (bt) bt.click(); } finally { window.entregarPDF = orig; }
+    await esp(100);
+    const f = document.createElement('iframe'); f.style.cssText = 'position:fixed;left:-3000px;top:0;width:794px;height:1123px'; document.body.appendChild(f);
+    f.contentDocument.open(); f.contentDocument.write(doc); f.contentDocument.close(); await esp(400);
+    const D = f.contentDocument, envs = [...D.querySelectorAll('.env-pg')];
+    const mm = px => Math.round(px / 96 * 25.4);
+    return { botao: !!bt, nome, lista: /Ganhadores da assiduidade/.test(D.body.textContent),
+      n: envs.length, nomes: envs.map(e => (e.querySelector('.env-nome') || {}).textContent),
+      msg: envs.map(e => (e.querySelector('.env-msg') || {}).textContent.replace(/\s+/g, ' ')),
+      valor: envs.map(e => /R\$\s?170,00/.test(e.textContent)),
+      dobras: envs.length ? envs[0].querySelectorAll('.env-dob').length : 0,
+      tam: envs.length ? [mm(envs[0].getBoundingClientRect().width), mm(envs[0].getBoundingClientRect().height)] : null,
+      abaGirada: envs.length ? getComputedStyle(envs[0].querySelector('.env-aba')).transform : '',
+      sorteado: /DORA|Dora/.test(envs.map(e => e.textContent).join(' ')) };
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r).slice(0, 1500);
+  t.ok('botão "Lista + envelopes" na aba Assiduidade', !r.erro && r.botao, J);
+  t.ok('um PDF só: a lista e depois um envelope por ganhador (2)', !r.erro && r.lista && r.n === 2 && /Envelopes/i.test(r.nome), J);
+  t.ok('envelopes em ordem alfabética, com o nome na frente', !r.erro && r.nomes[0] === 'Ana Teste Assidua' && r.nomes[1] === 'Bruno Teste Assiduo', J);
+  t.ok('mensagem fixa com o primeiro nome e o mês trabalhado', !r.erro && /Parabéns, Ana!/.test(r.msg[0]) && /setembro/.test(r.msg[0]), J);
+  t.ok('valor do prêmio no envelope (R$ 170,00)', !r.erro && r.valor.every(Boolean), J);
+  t.ok('folha A4 com as 4 marcas de dobra e a aba impressa de cabeça para baixo', !r.erro && r.tam && r.tam[0] === 210 && r.tam[1] === 297 && r.dobras === 4 && /matrix\(-1/.test(r.abaGirada), J);
+  t.ok('o sorteado do rancho e quem faltou não ganham envelope', !r.erro && !r.sorteado, J);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
+teste('recibos-envelope-textos-editaveis', async (b, t) => {
+  // pedido: tirar o "feche aqui" (só a logo na aba), tirar o traço antes de
+  // "Equipe RM Estruturas" e deixar a mensagem e a assinatura editáveis
+  if (!fs.existsSync(path.join(RAIZ, 'recibos_rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'recibos_rm' }, 'index.html', { relogio: '2026-10-09T12:00:00-03:00', fuso: 'America/Sao_Paulo' });
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    const l = document.getElementById('loginScreen'); if (l) l.style.setProperty('display', 'none', 'important');
+    state.employees = [{ id: 'et1', nome: 'ANA TESTE ENVELOPE', docTipo: 'CPF', doc: '', status: 'ativo', salario: 3000, dtInicio: '2024-02-05', funcao: 'Soldador' }];
+    state.cfg.assidCompetencia = '2026-10'; delete state.cfg.envAssid;
+    // mês decidido: a única pessoa marcada assíduo (sem marca nenhuma, o mês da vez abre em aberto)
+    state.assiduidade = { '2026-09': { v: 2, faltou: {}, assid: { et1: true }, premio: 170, sortId: '', sortNome: '' } };
+    document.querySelector('.vtab[data-v="assid"]').click(); await esp(250);
+    const gera = async () => {
+      let doc = ''; const orig = window.entregarPDF; window.entregarPDF = d => { doc = d; };
+      try { document.getElementById('btnAsEnvelopes').click(); } finally { window.entregarPDF = orig; }
+      const D = new DOMParser().parseFromString(doc, 'text/html'), aba = D.querySelector('.env-aba');
+      return { aba: aba ? aba.textContent.replace(/\s+/g, ' ').trim() : '', ass: (D.querySelector('.env-aba .ass') || {}).textContent,
+        logo: !!(aba && aba.querySelector('.selo img')), negrito: (D.querySelector('.env-msg b') || {}).textContent };
+    };
+    const msg = document.getElementById('asEnvMsg'), ass = document.getElementById('asEnvAss');
+    const campos = { msg: msg ? msg.value : null, ass: ass ? ass.value : null };
+    const antes = await gera();
+    msg.value = 'Valeu, {nome}! Todo o {mes} sem faltar.'; msg.dispatchEvent(new Event('input'));
+    ass.value = 'Diretoria'; ass.dispatchEvent(new Event('input')); await esp(1000);
+    const salvo = JSON.stringify(state.cfg.envAssid || null);
+    const depois = await gera();
+    document.getElementById('asEnvPadrao').click(); await esp(100);
+    const volta = await gera();
+    return { campos, antes, salvo, depois, volta, msgPadrao: msg.value };
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r).slice(0, 1500);
+  t.ok('aba sem "feche aqui", só a logo', !r.erro && !/feche aqui/i.test(r.antes.aba) && r.antes.logo, J);
+  t.ok('assinatura "Equipe RM Estruturas" sem o traço', !r.erro && r.antes.ass === 'Equipe RM Estruturas', J);
+  t.ok('campos de texto do envelope na Assiduidade, com o padrão', !r.erro && /\{nome\}/.test(r.campos.msg) && r.campos.ass === 'Equipe RM Estruturas', J);
+  t.ok('texto editado sai no envelope ({nome} em destaque, {mes})', !r.erro && r.depois.aba.startsWith('Valeu, Ana! Todo o setembro sem faltar.') && r.depois.negrito === 'Ana' && r.depois.ass === 'Diretoria', J);
+  t.ok('texto editado fica salvo', !r.erro && /Valeu/.test(r.salvo) && /Diretoria/.test(r.salvo), J);
+  t.ok('"Restaurar textos" volta ao padrão', !r.erro && /^Parabéns, Ana!/.test(r.volta.aba) && r.volta.ass === 'Equipe RM Estruturas' && /\{nome\}/.test(r.msgPadrao), J);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
+teste('recibos-assiduidade-sem-faltou', async (b, t) => {
+  // relatório de erros: "Cannot read properties of undefined (reading
+  // 'e17…')" em renderAssid. A nuvem não guarda objeto vazio: um mês sem
+  // ninguém marcado voltava sem o "faltou", e a aba Assiduidade quebrava.
+  if (!fs.existsSync(path.join(RAIZ, 'recibos_rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'recibos_rm' }, 'index.html', { relogio: '2026-10-02T12:00:00-03:00', fuso: 'America/Sao_Paulo' });
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    const l = document.getElementById('loginScreen'); if (l) l.style.setProperty('display', 'none', 'important');
+    state.employees = [{ id: 'sf1', nome: 'ANA TESTE NUVEM', docTipo: 'CPF', doc: '', status: 'ativo', salario: 3000, dtInicio: '2024-02-05', funcao: 'Soldador' }];
+    state.cfg.assidCompetencia = '2026-10';
+    state.assiduidade = { '2026-09': { premio: 200, sortId: '', sortNome: '' } };
+    document.querySelector('.vtab[data-v="assid"]').click(); await esp(250);
+    const bt = document.querySelector('#assidBody [data-astog="sf1"]'); if (bt) bt.click(); await esp(150);
+    return { linha: !!bt, marcou: !!((state.assiduidade['2026-09'].faltou || {}).sf1), faltaram: (document.getElementById('asFaltaram') || {}).textContent };
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  t.ok('mês vindo da nuvem sem "faltou": a aba abre e lista', !r.erro && r.linha && !erros.length, J);
+  t.ok('e marcar a falta funciona', !r.erro && r.marcou && String(r.faltaram).trim() === '1', J);
+  await ctx.close();
+});
+
+teste('recibos-assiduidade-em-aberto', async (b, t) => {
+  // o mês novo abria com todo mundo "Assíduo" (sem marca valia assíduo) e
+  // quem ainda nem tinha sido conferido já aparecia ganhando o prêmio. Agora
+  // o mês sem decisão abre EM ABERTO; o que já foi decidido no modelo antigo
+  // continua igual.
+  if (!fs.existsSync(path.join(RAIZ, 'recibos_rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'recibos_rm' }, 'index.html', { relogio: '2026-11-04T12:00:00-03:00', fuso: 'America/Sao_Paulo' });
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    const l = document.getElementById('loginScreen'); if (l) l.style.setProperty('display', 'none', 'important');
+    window.confirm = () => true;
+    const clt = (id, nome) => ({ id, nome, docTipo: 'CPF', doc: '', status: 'ativo', salario: 3000, dtInicio: '2024-02-05', funcao: 'Soldador' });
+    state.employees = [clt('ab1', 'ANA TESTE ABERTO'), clt('ab2', 'BRUNO TESTE ABERTO'), clt('ab3', 'CAIO TESTE ABERTO')];
+    state.cfg.assidCompetencia = '2026-10';
+    // setembro decidido no modelo antigo: Caio faltou e foi sorteado, os outros assíduos (sem marca)
+    state.assiduidade = { '2026-09': { faltou: { ab3: true }, premio: 170, sortId: 'ab3', sortNome: 'CAIO TESTE ABERTO' } };
+    document.querySelector('.vtab[data-v="assid"]').click(); await esp(250);
+    const sit = () => [...document.querySelectorAll('#assidBody tr')].map(tr => tr.querySelector('td.c').innerText.replace(/\s+/g, ' ').trim());
+    const num = id => document.getElementById(id).textContent.trim();
+    const o = { mes: document.getElementById('asMes').value };
+    o.outubro = { sit: sit(), ass: num('asAssiduos'), falt: num('asFaltaram'), premio: num('asTotPremio'), sub: num('asAssiduosS') };
+    // envelopes bloqueados com gente em aberto; sorteio também
+    let doc = ''; const orig = window.entregarPDF; window.entregarPDF = d => { doc = d; };
+    try { document.getElementById('btnAsEnvelopes').click(); } finally { window.entregarPDF = orig; }
+    o.gerouAberto = !!doc;
+    document.getElementById('btnSortear').click(); await esp(50); o.sorteouAberto = !!getAssid().sortNome;
+    // decide: Bruno faltou; "marcar os em aberto como assíduos" não mexe na falta
+    document.querySelector('[data-asset="ab2|faltou"]').click(); await esp(50);
+    o.botao = document.getElementById('btnAsTodosAssid').textContent;
+    document.getElementById('btnAsTodosAssid').click(); await esp(50);
+    o.decidido = { sit: sit(), ass: num('asAssiduos'), falt: num('asFaltaram') };
+    // setembro (modelo antigo) continua como estava
+    const sel = document.getElementById('asMes'); sel.value = '8'; sel.dispatchEvent(new Event('change')); await esp(100);
+    o.setembro = { sit: sit(), ass: num('asAssiduos'), falt: num('asFaltaram'), sorteado: document.getElementById('asSortNome').textContent };
+    // "Desmarcar todos" volta o mês para em aberto (antes marcava todo mundo como faltou)
+    document.getElementById('btnAsTodosFalta').click(); await esp(50);
+    o.desmarcado = { sit: sit(), falt: num('asFaltaram') };
+    return o;
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  const aberto = l => (l || []).length === 3 && l.every(x => /Assíduo/.test(x) && /Faltou/.test(x));
+  t.ok('mês novo (outubro, em novembro) abre com todos em aberto', !r.erro && r.mes === '9' && aberto(r.outubro.sit) && r.outubro.ass === '0' && r.outubro.falt === '0' && /R\$ 0,00/.test(r.outubro.premio) && /3 em aberto/.test(r.outubro.sub), J);
+  t.ok('com gente em aberto não gera envelopes nem sorteia', !r.erro && !r.gerouAberto && !r.sorteouAberto, J);
+  t.ok('"marcar os em aberto como assíduos" decide só os em aberto, a falta fica', !r.erro && /2 em aberto/.test(r.botao) && r.decidido.ass === '2' && r.decidido.falt === '1', J);
+  t.ok('mês já decidido no modelo antigo continua igual (2 assíduos, 1 faltou, sorteado)', !r.erro && r.setembro.ass === '2' && r.setembro.falt === '1' && /Caio/i.test(r.setembro.sorteado), J);
+  t.ok('"Desmarcar todos" deixa todos em aberto', !r.erro && aberto(r.desmarcado.sit) && r.desmarcado.falt === '0' && !erros.length, J);
+  await ctx.close();
+});
+
+teste('recibos-assiduidade-ponto', async (b, t) => {
+  // a Assiduidade abria no mês CORRENTE e só tinha o botão Assíduo/Faltou:
+  // para saber quem perdeu o prêmio era preciso abrir o cartão RHID e o
+  // ponto PF. Agora abre no mês TRABALHADO (o anterior, como o pagamento) e
+  // mostra ao lado de cada nome as faltas/atrasos em horas e minutos e o
+  // atestado -- os mesmos números do Excel da contabilidade. O que já tinha
+  // sido marcado no mês corrente passa para o anterior, uma vez só.
+  if (!fs.existsSync(path.join(RAIZ, 'recibos_rm'))) return;
+  const monta = () => {
+    const clt = (id, nome) => ({ id, nome, docTipo: 'CPF', doc: '', status: 'ativo', salario: 3000, dtInicio: '2024-02-05', dtCarteira: '2024-02-05', funcao: 'Soldador' });
+    state.employees = [clt('as1', 'ANA TESTE ASSIDUA'), clt('as2', 'BRUNO TESTE ATRASO'), clt('as3', 'CAIO TESTE FALTA'),
+      clt('as4', 'DORA TESTE ATESTADO'), clt('as6', 'FABI TESTE SEM CARTAO'),
+      { id: 'as5', nome: 'EDU TESTE PF', docTipo: 'CPF', doc: '', status: 'ativo', salario: 2400, dtInicio: '2026-08-03', dtCarteira: '', metodo: 'pf', funcao: 'Auxiliar' }];
+    const cartao = (empId, o) => Object.assign({ nome: '', cpf: '', empId, pagina: 1, diasFalta: 0, faltaMin: 0, diasAtestado: 0, atestadoMin: 0, abonoMin: 0,
+      diasAfastado: 0, afastadoMin: 0, motivoAfast: '', diasFerias: 0, repousoMin: 0, extra0Min: 0, extra0NotMin: 0, extra50Min: 0, extra50NotMin: 0,
+      extra100Min: 0, extra100NotMin: 0, diurnaTotMin: 0, noturnaTotMin: 0, diasFaltaColuna: 0 }, o);
+    state.rhid = { '2026-09': { arquivo: 'cartao-setembro-teste.pdf', importadoEm: '2026-10-01T13:00:00.000Z', casados: 4, conferir: 0, itens: [
+      cartao('as1', {}), cartao('as2', { faltaMin: 135 }), cartao('as3', { faltaMin: 530, diasFalta: 1 }), cartao('as4', { diasAtestado: 2, atestadoMin: 880 })] } };
+    // ponto PF de setembro: tudo trabalhado, um dia com 40 min de atraso e um de atestado
+    state.pfPontos = { as5: { '2026-09': {} } };
+    pfMesDatas('2026-09').forEach(d => { if (!pfPrevisto(d)) return;
+      state.pfPontos.as5['2026-09'][pfISO(d)] = { s: 'trabalhado', m1: '07:00', m2: '12:00', t1: '13:00', t2: d.getDay() === 5 ? '16:00' : '17:00', obs: '' }; });
+    state.pfPontos.as5['2026-09']['2026-09-08'].m1 = '07:40';
+    state.pfPontos.as5['2026-09']['2026-09-15'] = { s: 'atestado', m1: '', m2: '', t1: '', t2: '', obs: '' };
+    // o que foi marcado no mês corrente (outubro) antes da mudança
+    state.assiduidade = { '2026-10': { faltou: { as3: true }, premio: 170, sortId: 'as3', sortNome: 'CAIO TESTE FALTA' } };
+    delete state.cfg.assidCompetencia;
+  };
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'recibos_rm' }, 'index.html', { relogio: '2026-10-02T12:00:00-03:00', fuso: 'America/Sao_Paulo' });
+  const r = await pg.evaluate(async (monta) => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    const l = document.getElementById('loginScreen'); if (l) l.style.setProperty('display', 'none', 'important');
+    eval('(' + monta + ')')();
+    document.querySelector('.vtab[data-v="assid"]').click(); await esp(250);
+    const linha = id => { const bt = document.querySelector('#assidBody [data-astog="' + id + '"]'), tr = bt && bt.closest('tr'); return tr ? tr.innerText.replace(/\s+/g, ' ').trim() : ''; };
+    const out = { mes: document.getElementById('asMes').value, ano: document.getElementById('asAno').value, l: {},
+      set: JSON.stringify(state.assiduidade['2026-09'] || null), out: JSON.stringify(state.assiduidade['2026-10'] || null),
+      faltaram: document.getElementById('asFaltaram').textContent.trim(), fonte: ((document.getElementById('asFonte') || {}).innerText || '').replace(/\s+/g, ' ') };
+    ['as1', 'as2', 'as3', 'as4', 'as5', 'as6'].forEach(id => { out.l[id] = linha(id); });
+    // não move de novo
+    state.assiduidade['2026-10'] = { faltou: { as2: true }, premio: 170, sortId: '', sortNome: '' };
+    renderAssid();
+    const faltou = k => JSON.stringify((state.assiduidade[k] || {}).faltou || null);
+    out.umaVez = faltou('2026-09') === '{"as3":true}' && faltou('2026-10') === '{"as2":true}';
+    // nem por cima de um mês que já tem marcações
+    delete state.cfg.assidCompetencia; renderAssid();
+    out.semPorCima = faltou('2026-09') === '{"as3":true}' && faltou('2026-10') === '{"as2":true}';
+    return out;
+  }, monta.toString()).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  t.ok('abre no mês trabalhado: setembro, em 2 de outubro (como o pagamento)', !r.erro && r.mes === '8' && r.ano === '2026', J);
+  t.ok('atraso em horas e minutos ao lado do nome (cartão RHID)', !r.erro && /2h15/.test(r.l.as2), J);
+  t.ok('falta: as horas e o dia de falta', !r.erro && /8h50/.test(r.l.as3) && /1 dia/.test(r.l.as3), J);
+  t.ok('atestado aparece com os dias', !r.erro && /atestado/i.test(r.l.as4) && /2 dias/.test(r.l.as4) && !/2h15|faltas e atrasos/i.test(r.l.as4), J);
+  t.ok('ponto da aba PF: 40 min de atraso e o atestado', !r.erro && /40\s?min/.test(r.l.as5) && /atestado/i.test(r.l.as5), J);
+  t.ok('quem não tem nada no ponto aparece limpo', !r.erro && /sem faltas/i.test(r.l.as1), J);
+  t.ok('quem não está no cartão: avisa que não há ponto', !r.erro && /sem ponto/i.test(r.l.as6) && !/sem faltas/i.test(r.l.as6), J);
+  t.ok('diz de onde veio: o cartão RHID importado na aba PF', !r.erro && /cartao-setembro-teste\.pdf/.test(r.fonte), J);
+  t.ok('o que estava marcado em outubro passa para setembro', !r.erro && r.set !== 'null' && (JSON.parse(r.set).faltou || {}).as3 === true && r.out === 'null' && r.faltaram === '1', J);
+  t.ok('passa uma vez só, e nunca por cima de um mês já marcado', !r.erro && r.umaVez && r.semPorCima, J);
+  t.ok('sem erro na página', !erros.length, J);
+  await ctx.close();
+  // celular da empresa: os quatro números cabem e a lista vira cartões com o ponto
+  const c = await abre(b, { 'sis.local': 'recibos_rm' }, 'index.html', { relogio: '2026-10-02T12:00:00-03:00', fuso: 'America/Sao_Paulo', tela: { width: 360, height: 740 } });
+  const m = await c.pg.evaluate(async (monta) => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    const l = document.getElementById('loginScreen'); if (l) l.style.setProperty('display', 'none', 'important');
+    eval('(' + monta + ')')();
+    document.querySelector('.vtab[data-v="assid"]').click(); await esp(250);
+    const fora = ['asAssiduos', 'asFaltaram', 'asTotPremio', 'asRanchos'].filter(id => { const q = document.getElementById(id).closest('.card').getBoundingClientRect(); return q.left < -1 || q.right > innerWidth + 1; });
+    const bt = document.querySelector('#assidBody [data-astog="as2"]'), tr = bt && bt.closest('tr');
+    return { fora, cartao: !!(tr && getComputedStyle(tr).display !== 'table-row'), txt: tr ? tr.innerText.replace(/\s+/g, ' ') : '', largura: document.documentElement.scrollWidth };
+  }, monta.toString()).catch(e => ({ erro: e.message }));
+  const JM = JSON.stringify(m) + ' ' + c.erros.join(' | ');
+  t.ok('celular: os quatro números cabem na tela', !m.erro && !m.fora.length && m.largura <= 362, JM);
+  t.ok('celular: cada pessoa vira um cartão com o ponto', !m.erro && m.cartao && /2h15/.test(m.txt), JM);
+  await c.ctx.close();
+});
+
+/* ---- Controle de Máquinas ----
+   Galpão fictício: três setores, uma furadeira em dois exemplares com compra
+   e garantia acabando, uma serra no conserto há 47 dias com a previsão
+   vencida e uma parafusadeira parada no Estoque Interno. Hoje = 06/10/2026. */
+const MAQ_DB = () => ({ iniciado: true, eventos: [], termos: [],
+  auditorias: [{ id: 'a0', setor: 's2', setorNome: 'Setor Beta', data: '2026-09-20', quando: Date.parse('2026-09-20T12:00:00Z'),
+    itens: 1, conferidos: 1, faltas: [], manutencao: [], naoConferidos: [] }],
+  setores: [{ id: 's1', nome: 'Setor Alfa', cor: '#2f74d0', responsavel: 'Encarregado Teste', ordem: 0 },
+            { id: 's2', nome: 'Setor Beta', cor: '#00b050', responsavel: '', ordem: 1 },
+            { id: 's5', nome: 'Estoque Interno', cor: '#7030a0', responsavel: '', ordem: 4 }],
+  maquinas: [
+    { id: 'm1', nome: 'FURADEIRA TESTE', modelo: 'FT 100 (MARCA X)', qtd: 2, setor: 's1', situacao: 'uso', preco: 500,
+      dataCompra: '2025-11-01', garantiaMeses: 12, fornecedor: 'LOJA TESTE', notaFiscal: '123' },
+    { id: 'm2', nome: 'ESMERILHADEIRA COM NOME BEM COMPRIDO DE TESTE', modelo: 'GA 1 (MARCA X)', qtd: 1, setor: 's2', situacao: 'uso', preco: 300 },
+    { id: 'm3', nome: 'PARAFUSADEIRA TESTE', modelo: 'DTD 172 (MARCA Y)', qtd: 1, setor: 's5', situacao: 'uso', preco: 0 },
+    { id: 'm4', nome: 'SERRA TESTE', modelo: 'S 9', qtd: 1, setor: 's2', situacao: 'manutencao', preco: 800,
+      conserto: { desde: '2026-08-20', onde: 'OFICINA TESTE', motivo: 'motor', previsao: '2026-09-10' } }] });
+async function maqAbre(b, opt) {
+  const r = await abre(b, { 'sis.local': 'Controle-estoque-maquinas' }, 'index.html',
+    Object.assign({ relogio: '2026-10-06T10:00:00-03:00', fuso: 'America/Sao_Paulo' }, opt || {}));
+  await r.pg.evaluate(d => {
+    document.querySelectorAll('#loginScreen').forEach(e => e.classList.add('hide'));
+    if (document.activeElement) document.activeElement.blur();
+    db = d; ui.modo = 'normal'; ui.aba = 'setores'; render();
+  }, MAQ_DB());
+  await r.pg.waitForTimeout(250);
+  return r;
+}
+
+teste('maquinas-layout', async (b, t) => {
+  // "Proponha melhorias no sistema de máquinas e layout": avisos no lugar dos
+  // quadros parados, cinco abas, busca em todos os setores, colunas
+  // alinhadas entre os setores e duas ações por linha.
+  if (!fs.existsSync(path.join(RAIZ, 'Controle-estoque-maquinas'))) return;
+  const { ctx, pg, erros } = await maqAbre(b);
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    const txt = s => [...document.querySelectorAll(s)].map(e => e.innerText.replace(/\s+/g, ' ').trim());
+    const out = { abas: txt('#tabs .tab'), alertas: document.getElementById('cards').innerText.replace(/\s+/g, ' ') };
+    out.regra = /Regra de saída/.test(document.body.innerText);
+    out.xModelo = [...document.querySelectorAll('#conteudo .setor table thead th:nth-child(2)')].map(th => Math.round(th.getBoundingClientRect().left));
+    out.botoes = [...new Set([...document.querySelectorAll('#conteudo .setor tbody td.t-acao')].map(td => td.innerText.replace(/\s+/g, ' ').trim()))];
+    out.cabAlfa = (document.querySelector('.setor[data-setor="s1"] .setor-h') || {}).innerText || '';
+    out.cabBeta = (document.querySelector('.setor[data-setor="s2"] .setor-h') || {}).innerText || '';
+    const bx = document.getElementById('busca');
+    bx.focus(); bx.value = 'dtd 172'; bx.dispatchEvent(new Event('input', { bubbles: true })); await esp(200);
+    out.mesmoCampo = document.getElementById('busca') === bx && document.activeElement === bx;
+    out.achados = txt('#conteudo .setor tbody td:first-child');
+    bx.value = 'serra'; bx.dispatchEvent(new Event('input', { bubbles: true })); await esp(200);
+    out.achouConserto = txt('#conteudo .setor tbody tr').join(' | ');
+    bx.value = ''; bx.dispatchEvent(new Event('input', { bubbles: true })); await esp(150);
+    // um setor recolhido continua recolhido depois de redesenhar
+    document.querySelector('.setor[data-setor="s2"] .recolher').click(); await esp(150); render(); await esp(100);
+    out.recolhido = document.querySelector('.setor[data-setor="s2"]').classList.contains('recolhido');
+    // Inventário: total, valor e garantia na mesma linha
+    irPara('inventario'); await esp(200);
+    out.inv = txt('#conteudo tbody tr').find(x => /FURADEIRA TESTE/.test(x)) || '';
+    out.invCab = txt('#conteudo thead th').join('|');
+    // o aviso de garantia leva ao Inventário filtrado
+    [...document.querySelectorAll('#cards .card')].find(c => /Garantia/i.test(c.innerText)).click(); await esp(200);
+    out.invGar = txt('#conteudo tbody tr').filter(x => !/^TOTAL/.test(x)).map(x => x.split(' ')[0]);
+    out.fSit = (document.getElementById('fSit') || {}).value;
+    return out;
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  t.ok('cinco abas: Setores, Estoque interno, Conserto, Inventário, Conferências', !r.erro &&
+    ['Setores', 'Estoque interno', 'Conserto', 'Inventário', 'Conferências'].every((n, i) => (r.abas[i] || '').startsWith(n)) && r.abas.length === 5, J);
+  t.ok('aviso: serra no conserto há mais de 30 dias', !r.erro && /No conserto há \+30 dias/i.test(r.alertas) && /SERRA TESTE/.test(r.alertas), J);
+  t.ok('aviso: 2 peças com a garantia acabando', !r.erro && /Garantia acabando 2/i.test(r.alertas), J);
+  t.ok('aviso: Setor Alfa nunca conferido', !r.erro && /sem conferência/i.test(r.alertas) && /Setor Alfa/.test(r.alertas) && !/Setor Beta/.test(r.alertas.split(/sem conferência/i)[1] || ''), J);
+  t.ok('sem a faixa roxa da regra de saída', !r.erro && !r.regra, J);
+  t.ok('a coluna Modelo começa no mesmo lugar em todos os setores', !r.erro && r.xModelo.length >= 2 && new Set(r.xModelo).size === 1, J);
+  t.ok('cada linha tem só Mover e ⋯', !r.erro && r.botoes.length === 1 && r.botoes[0] === 'Mover ⋯', J);
+  t.ok('o cabeçalho do setor diz o responsável e a última conferência', !r.erro && /Encarregado Teste/.test(r.cabAlfa) && /nunca conferido/.test(r.cabAlfa) &&
+    /sem responsável/.test(r.cabBeta) && /conferido há 16 dias/.test(r.cabBeta), J);
+  t.ok('busca acha no Estoque Interno, sem perder o campo', !r.erro && r.mesmoCampo && r.achados.length === 1 && /PARAFUSADEIRA TESTE/.test(r.achados[0]), J);
+  t.ok('busca acha a que está no conserto, dizendo isso', !r.erro && /SERRA TESTE/.test(r.achouConserto) && /conserto/i.test(r.achouConserto), J);
+  t.ok('setor recolhido continua recolhido', !r.erro && r.recolhido, J);
+  t.ok('Inventário: total, valor e garantia juntos', !r.erro && /Valor unit/i.test(r.invCab) && /Garantia/i.test(r.invCab) &&
+    /R\$ 500,00/.test(r.inv) && /R\$ 1\.000,00/.test(r.inv) && /vence/.test(r.inv), J);
+  t.ok('o aviso de garantia abre o Inventário só com elas', !r.erro && r.fSit === 'garantia' && r.invGar.length === 1 && r.invGar[0] === 'FURADEIRA', J);
+  t.ok('sem erro na página', !erros.length, J);
+  await ctx.close();
+  // celular: nada passa da tela e o nome do setor não quebra no meio
+  const c = await maqAbre(b, { tela: { width: 360, height: 740 } });
+  const m = await c.pg.evaluate(() => ({ largura: document.documentElement.scrollWidth,
+    nomes: [...document.querySelectorAll('.setor-nome')].map(e => Math.round(e.getBoundingClientRect().height)) })).catch(e => ({ erro: e.message }));
+  t.ok('celular: nada passa da tela', !m.erro && m.largura <= 362, JSON.stringify(m));
+  t.ok('celular: nome do setor numa linha só', !m.erro && m.nomes.length && m.nomes.every(h => h < 30), JSON.stringify(m));
+  t.ok('celular: sem erro na página', !c.erros.length, c.erros.join(' | '));
+  await c.ctx.close();
+});
+
+teste('maquinas-mover-historico', async (b, t) => {
+  // Mover de setor era trocar o campo no cadastro, sem registro de quem levou,
+  // quando, nem de onde para onde. Agora é uma ação, e fica na ficha.
+  if (!fs.existsSync(path.join(RAIZ, 'Controle-estoque-maquinas'))) return;
+  const { ctx, pg, erros } = await maqAbre(b);
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    const out = {};
+    moverDialog('m1'); await esp(150);
+    document.getElementById('mvQtd').value = '1';
+    document.getElementById('mvDest').value = 's2';
+    document.getElementById('mvMotivo').value = 'obra teste';
+    document.getElementById('ovOk').click(); await esp(200);
+    const fur = db.maquinas.filter(m => m.nome === 'FURADEIRA TESTE');
+    out.linhas = fur.map(m => m.setor + ':' + m.qtd + ':' + (m.dataCompra || '')).sort();
+    out.ev = db.eventos[0] && { tipo: db.eventos[0].tipo, de: db.eventos[0].de, para: db.eventos[0].para, qtd: db.eventos[0].qtd, motivo: db.eventos[0].motivo };
+    abrirFicha(fur.find(m => m.setor === 's2').id); await esp(200);
+    out.ficha = document.getElementById('ficha').innerText.replace(/\s+/g, ' ');
+    out.fichaAberta = document.getElementById('ficha').classList.contains('on');
+    // a segunda vai junto: as duas, da mesma compra, viram uma linha só
+    moverDialog(fur.find(m => m.setor === 's1').id); await esp(150);
+    document.getElementById('mvDest').value = 's2'; document.getElementById('ovOk').click(); await esp(200);
+    out.depois = db.maquinas.filter(m => m.nome === 'FURADEIRA TESTE').map(m => m.setor + ':' + m.qtd);
+    // "Enviar ao estoque" também é mover, e também fica registrado
+    moverDialog('m2', 'estoque'); await esp(150);
+    out.destEstoque = document.getElementById('mvDest').value;
+    document.getElementById('ovOk').click(); await esp(150);
+    out.esmeril = db.maquinas.find(m => m.id === 'm2').setor;
+    out.nEventos = db.eventos.length;
+    // e sobe para a nuvem junto com o resto
+    let saiu = null; fdbBase = JSON.parse(JSON.stringify(db)); fdbBase.eventos = [];
+    fdb = { transaction(fn, cb) { saiu = fn({ setores: db.setores, maquinas: db.maquinas, auditorias: db.auditorias, iniciado: true }); cb && cb(null, true); }, off() {} };
+    fdbLido = true; salvar();
+    out.nuvem = saiu && Array.isArray(saiu.eventos) ? saiu.eventos.length : -1;
+    return out;
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  t.ok('mover 1 de 2: uma fica, a outra vai, com a mesma compra', !r.erro && r.linhas.join(',') === 's1:1:2025-11-01,s2:1:2025-11-01', J);
+  t.ok('fica registrado: de, para, quantas e o motivo', !r.erro && r.ev && r.ev.tipo === 'mover' && r.ev.de === 'Setor Alfa' && r.ev.para === 'Setor Beta' && r.ev.qtd === 1 && r.ev.motivo === 'obra teste', J);
+  t.ok('a ficha abre com onde está e o histórico', !r.erro && r.fichaAberta && /Setor Alfa/.test(r.ficha) && /Setor Beta/.test(r.ficha) && /Movida/.test(r.ficha) && /obra teste/.test(r.ficha) && /LOJA TESTE/.test(r.ficha), J);
+  t.ok('as duas da mesma compra no mesmo setor viram uma linha', !r.erro && r.depois.join(',') === 's2:2', J);
+  t.ok('Enviar ao estoque abre o Mover já apontando o Estoque Interno', !r.erro && r.destEstoque === 's5' && r.esmeril === 's5' && r.nEventos === 3, J);
+  t.ok('o histórico sobe para a nuvem', !r.erro && r.nuvem === 3, J);
+  t.ok('sem erro na página', !erros.length, J);
+  await ctx.close();
+});
+
+teste('maquinas-conserto', async (b, t) => {
+  // O conserto era só uma situação: não dizia quando foi, para onde, por quê,
+  // nem quanto custou. Agora diz, e o aviso aparece passados 30 dias.
+  if (!fs.existsSync(path.join(RAIZ, 'Controle-estoque-maquinas'))) return;
+  const { ctx, pg, erros } = await maqAbre(b);
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    const out = {};
+    mandarConserto('m2'); await esp(150);
+    document.getElementById('csOnde').value = 'OFICINA TESTE 2';
+    document.getElementById('csMotivo').value = 'escova gasta';
+    document.getElementById('csPrev').value = '2026-10-20';
+    document.getElementById('ovOk').click(); await esp(200);
+    const e = db.maquinas.find(m => m.nome.startsWith('ESMERILHADEIRA'));
+    out.esm = { sit: e.situacao, setor: e.setor, c: e.conserto };
+    out.ev = db.eventos[0] && db.eventos[0].tipo;
+    irPara('manutencao'); await esp(200);
+    out.tela = [...document.querySelectorAll('#conteudo tbody tr')].map(x => x.innerText.replace(/\s+/g, ' '));
+    voltouConserto('m4'); await esp(150);
+    out.destPadrao = document.getElementById('vcDest').value;
+    document.getElementById('vcCusto').value = '180,00';
+    document.getElementById('ovOk').click(); await esp(200);
+    const s = db.maquinas.find(m => m.id === 'm4');
+    out.serra = { sit: s.situacao, setor: s.setor, temConserto: !!s.conserto };
+    const v = db.eventos.find(x => x.tipo === 'voltou');
+    out.volta = v && { custo: v.custo, dias: v.dias, para: v.para };
+    abrirFicha('m4'); await esp(150);
+    out.ficha = document.getElementById('ficha').innerText.replace(/\s+/g, ' ');
+    out.alerta = document.getElementById('cards').innerText.replace(/\s+/g, ' ');
+    irPara('manutencao'); await esp(150);
+    out.gasto = document.getElementById('conteudo').innerText.replace(/\s+/g, ' ');
+    return out;
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  t.ok('mandar para o conserto guarda onde, motivo, saída e previsão', !r.erro && r.esm.sit === 'manutencao' && r.esm.setor === 's2' &&
+    r.esm.c.onde === 'OFICINA TESTE 2' && r.esm.c.motivo === 'escova gasta' && r.esm.c.desde === '2026-10-06' && r.esm.c.previsao === '2026-10-20' && r.ev === 'conserto', J);
+  t.ok('aba Conserto: há quanto tempo, onde e a previsão vencida', !r.erro && r.tela.some(x => /SERRA TESTE/.test(x) && /47 dias/.test(x) && /OFICINA TESTE/.test(x) && /vencida/.test(x)) &&
+    r.tela.some(x => /ESMERILHADEIRA/.test(x) && /hoje/.test(x)), J);
+  t.ok('Voltou sugere o setor de origem', !r.erro && r.destPadrao === 's2', J);
+  t.ok('voltou: em uso de novo, com custo e dias fora registrados', !r.erro && r.serra.sit === 'uso' && !r.serra.temConserto &&
+    r.volta && r.volta.custo === 180 && r.volta.dias === 47 && r.volta.para === 'Setor Beta', J);
+  t.ok('ficha: gasto com conserto e quanto isso é do valor de uma nova', !r.erro && /R\$ 180,00/.test(r.ficha) && /23%/.test(r.ficha), J);
+  t.ok('sem nada há mais de 30 dias, o aviso sai', !r.erro && !/há \+30 dias/i.test(r.alerta), J);
+  t.ok('aba Conserto soma o gasto do ano', !r.erro && /Gasto com conserto em 2026: R\$ 180,00/.test(r.gasto), J);
+  t.ok('sem erro na página', !erros.length, J);
+  await ctx.close();
+});
+
+teste('maquinas-termo', async (b, t) => {
+  // Termo de responsabilidade por setor: a lista do que o encarregado
+  // recebe, assinada no aparelho, guardada e em PDF no timbrado.
+  if (!fs.existsSync(path.join(RAIZ, 'Controle-estoque-maquinas'))) return;
+  const { ctx, pg, erros } = await maqAbre(b);
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    const out = {};
+    const assina = () => {
+      const cv = document.getElementById('tmPad'), q = cv.getBoundingClientRect();
+      const ev = (tipo, x, y) => cv.dispatchEvent(new PointerEvent(tipo, { bubbles: true, pointerId: 1, clientX: q.left + x, clientY: q.top + y, isPrimary: true }));
+      ev('pointerdown', 20, 40); for (let i = 1; i <= 12; i++) ev('pointermove', 20 + i * 15, 40 + (i % 2) * 25); ev('pointerup', 200, 40);
+    };
+    termoSetor('s1'); await esp(200);
+    out.lista = document.querySelector('#ovB').innerText.replace(/\s+/g, ' ');
+    out.resp = document.getElementById('tmResp').value;
+    document.getElementById('ovOk').click(); await esp(150);           // sem assinatura: não salva
+    out.semAssinatura = db.termos.length;
+    assina(); document.getElementById('ovOk').click(); await esp(200);
+    const tm = db.termos[0] || {};
+    out.termo = { resp: tm.responsavel, itens: (tm.itens || []).map(i => i.nome + ':' + i.qtd), img: String(tm.assinatura || '').slice(0, 22), tam: String(tm.assinatura || '').length };
+    out.cab = document.querySelector('.setor[data-setor="s1"] .setor-h').innerText;
+    const pdf = htmlPDFTermo(tm);
+    out.pdf = { resp: pdf.includes('Encarregado Teste'), img: pdf.includes(tm.assinatura), razao: /Nunes e Kuhn/.test(pdf), item: pdf.includes('FURADEIRA TESTE') };
+    // o setor mudou: o termo fica desatualizado
+    moverDialog('m1'); await esp(150); document.getElementById('mvQtd').value = '1'; document.getElementById('mvDest').value = 's2';
+    document.getElementById('ovOk').click(); await esp(200);
+    out.cabDepois = document.querySelector('.setor[data-setor="s1"] .setor-h').innerText;
+    irConferencias('termos'); await esp(150);
+    out.lista2 = document.getElementById('conteudo').innerText.replace(/\s+/g, ' ');
+    return out;
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  t.ok('o termo lista o que está no setor e já traz o responsável', !r.erro && /FURADEIRA TESTE/.test(r.lista) && /FT 100/.test(r.lista) && r.resp === 'Encarregado Teste', J);
+  t.ok('sem assinatura não salva', !r.erro && r.semAssinatura === 0, J);
+  t.ok('assinado: guarda responsável, itens e a assinatura', !r.erro && r.termo.resp === 'Encarregado Teste' && r.termo.itens.join() === 'FURADEIRA TESTE:2' &&
+    r.termo.img === 'data:image/png;base64,' && r.termo.tam > 500, J);
+  t.ok('o cabeçalho do setor mostra o termo em dia', !r.erro && /Termo ✓ 06\/10/.test(r.cab), J);
+  t.ok('PDF no timbrado com o nome, a assinatura e as máquinas', !r.erro && r.pdf.resp && r.pdf.img && r.pdf.razao && r.pdf.item, J);
+  t.ok('setor mudou: termo desatualizado', !r.erro && /Termo desatualizado/.test(r.cabDepois), J);
+  t.ok('Conferências › Termos lista o termo e diz que o setor mudou', !r.erro && /Setor Alfa/.test(r.lista2) && /Encarregado Teste/.test(r.lista2) && /desatualizado/i.test(r.lista2), J);
+  t.ok('sem erro na página', !erros.length, J);
+  await ctx.close();
+});
+
+teste('recibos-relatorio-dentro-da-folha', async (b, t) => {
+  // "Estourando da tela": na Conferência Mensal os quatro quadros, o rótulo
+  // e o botão PDF encostavam na borda do painel, enquanto os filtros logo
+  // acima têm 30 px de folga. Valia para todas as sub-abas do Relatório.
+  // A tabela continua de ponta a ponta, como em todo o sistema.
+  if (!fs.existsSync(path.join(RAIZ, 'recibos_rm'))) return;
+  for (const w of [1366, 1653]) {
+    const { ctx, pg, erros } = await abre(b, { 'sis.local': 'recibos_rm' }, 'index.html', { viewport: { width: w, height: 900 } });
+    const r = await pg.evaluate(async () => {
+      const esp = ms => new Promise(x => setTimeout(x, ms));
+      if (document.activeElement) document.activeElement.blur(); showLogin(false);
+      state.employees = [{ id: 'rd1', nome: 'ANA TESTE RELATORIO', status: 'ativo', salario: 3000, emprestimos: [], historicoSalario: [], historicoFuncao: [], fichasEpi: [], folhaExtra: [] }];
+      state.movimentos = { rm1: { id: 'rm1', competencia: '2026-09', tipo: 'pagamento', pessoaTipo: 'funcionario', pessoaId: 'rd1', nome: 'ANA TESTE RELATORIO', valorPrevisto: 1680, status: 'pendente', dataPrevista: '2026-10-05', metodo: 'banco' } };
+      dadosCarregados = true; bootUI();
+      document.querySelector('.vtab[data-v="rel"]').click(); await esp(400);
+      const V = document.getElementById('v-rel').getBoundingClientRect(), out = {};
+      for (const bt of document.querySelectorAll('#v-rel [data-rv]')) {
+        bt.click(); await esp(300);
+        const pane = document.getElementById('relp-' + bt.dataset.rv); if (!pane) continue;
+        const ruins = new Set();
+        pane.querySelectorAll('*').forEach(e => {
+          if (e.closest('.tbl-wrap,table,.sheetfoot')) return;
+          const q = e.getBoundingClientRect(); if (!q.width || !q.height) return;
+          if (q.left < V.left + 16 || q.right > V.right - 16) ruins.add(String(e.id || e.className || e.tagName).slice(0, 30));
+        });
+        const tb = pane.querySelector('.tbl-wrap');
+        const tq = tb && tb.getBoundingClientRect();
+        out[bt.dataset.rv] = { ruins: [...ruins].slice(0, 5), tabelaPontaAPonta: !tq || !tq.width || (Math.abs(tq.left - V.left) < 2 && Math.abs(tq.right - V.right) < 2) };
+      }
+      return out;
+    }).catch(e => ({ erro: e.message }));
+    const J = w + ' ' + JSON.stringify(r) + ' ' + erros.join(' | ');
+    for (const aba of ['conferencia', 'geral', 'custos', 'terceiros', 'funcao', 'reaj', 'export'])
+      t.ok(w + ' px, ' + aba + ': nada encosta na borda', !r.erro && r[aba] && !r[aba].ruins.length && r[aba].tabelaPontaAPonta, J);
+    t.ok(w + ' px: sem erro na página', !erros.length, J);
+    await ctx.close();
+  }
+});
+
+teste('recibos-celular-so-epi', async (b, t) => {
+  // "No celular uso só a troca rápida e o histórico, porém aparece tudo: se
+  // alguém pegar o telefone vê o salário de todos." O modo campo existia, mas
+  // só ligava pelo atalho ?modo=campo; aberto pelo ícone, era o sistema
+  // inteiro. No celular agora é sempre só EPI, e nada leva às outras abas.
+  if (!fs.existsSync(path.join(RAIZ, 'recibos_rm'))) return;
+  const monta = () => {
+    state.employees = [{ id: 'cs1', nome: 'ANA TESTE CELULAR', docTipo: 'CPF', doc: '', status: 'ativo', salario: 3456.78, funcao: 'Soldador', metodo: 'banco',
+      valPagamento: 2345.67, emprestimos: [], historicoSalario: [], historicoFuncao: [], fichasEpi: [], folhaExtra: [] }];
+  };
+  const olha = async (pg) => pg.evaluate(async (monta) => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    if (document.activeElement) document.activeElement.blur();
+    showLogin(false); eval('(' + monta + ')')(); dadosCarregados = true; bootUI();
+    await esp(2500);
+    const vis = el => !!el && !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length) && getComputedStyle(el).visibility !== 'hidden';
+    const out = { campo: document.body.classList.contains('rm-campo'),
+      epiAberta: vis(document.getElementById('v-epi')),
+      subs: [...document.querySelectorAll('#v-epi .epi-stab')].filter(vis).map(x => x.getAttribute('data-p')),
+      abasVisiveis: [...document.querySelectorAll('.vtab')].filter(vis).map(x => x.dataset.v) };
+    const tela = () => document.body.innerText;
+    out.salarioNaTela = /3\.456,78|2\.345,67/.test(tela());
+    // nem o nome das outras telas: a barra de assuntos e o cabeçalho somem
+    out.outrasTelas = (tela().match(/Funcionários|Salários|Documentos|Relatórios|Backup|CNPJ/g) || []);
+    // mesmo forçando a troca de aba, Salários e Funcionários não aparecem
+    for (const v of ['sal', 'func']) { const bt = document.querySelector('.vtab[data-v="' + v + '"]'); if (bt) bt.click(); await esp(300); }
+    out.salarioDepoisDeForcar = /3\.456,78|2\.345,67/.test(tela());
+    out.salAberta = vis(document.getElementById('v-sal')) || vis(document.getElementById('v-func'));
+    // nem a ficha do funcionário (o cadastro tem o salário)
+    try { openEmp('cs1'); } catch (e) {}
+    await esp(300);
+    out.cadastroAberto = vis(document.getElementById('empModal'));
+    return out;
+  }, monta.toString());
+  for (const [rot, aparelho] of [['iPhone', devices['iPhone 13']], ['Android', devices['Pixel 5']]]) {
+    const ctx = await b.newContext(Object.assign({}, aparelho, { timezoneId: 'America/Sao_Paulo' }));
+    const pg = await ctx.newPage(); const erros = [];
+    pg.on('pageerror', e => erros.push(String(e.message).slice(0, 160)));
+    pg.on('dialog', d => d.accept().catch(() => {}));
+    await pg.route('**/*', rq => {
+      const u = new URL(rq.request().url());
+      const mm = u.pathname.match(/firebasejs\/[^/]+\/(firebase-[a-z-]+\.js)$/);
+      if (mm) return fs.existsSync(path.join(FB, mm[1])) ? rq.fulfill({ status: 200, contentType: 'text/javascript', body: fs.readFileSync(path.join(FB, mm[1])) }) : rq.abort();
+      if (u.hostname !== 'sis.local') return rq.abort();
+      const f = path.join(RAIZ, 'recibos_rm', decodeURIComponent(u.pathname.replace(/^\//, '')) || 'index.html');
+      if (!fs.existsSync(f) || !fs.statSync(f).isFile()) return rq.abort();
+      return rq.fulfill({ status: 200, contentType: tipo(f), body: fs.readFileSync(f) });
+    });
+    // aberto pelo ícone: endereço limpo, sem ?modo=campo
+    try { await pg.goto('http://sis.local/', { waitUntil: 'domcontentloaded', timeout: 30000 }); } catch (e) {}
+    await pg.waitForTimeout(2500);
+    const r = await olha(pg).catch(e => ({ erro: e.message }));
+    const J = rot + ' ' + JSON.stringify(r) + ' ' + erros.join(' | ');
+    t.ok(rot + ': aberto pelo ícone já entra no modo só EPI', !r.erro && r.campo && r.epiAberta, J);
+    t.ok(rot + ': só Troca rápida e Histórico', !r.erro && r.subs.slice().sort().join(',') === 'historico,rapida', J);
+    t.ok(rot + ': nenhuma aba do sistema à mostra', !r.erro && !r.abasVisiveis.length && !r.outrasTelas.length, J);
+    t.ok(rot + ': nenhum salário na tela', !r.erro && !r.salarioNaTela, J);
+    t.ok(rot + ': nem forçando a aba Salários ou Funcionários', !r.erro && !r.salarioDepoisDeForcar && !r.salAberta, J);
+    t.ok(rot + ': nem abrindo o cadastro do funcionário', !r.erro && !r.cadastroAberto, J);
+    t.ok(rot + ': sem erro na página', !erros.length, J);
+    await ctx.close();
+  }
+  // no computador continua o sistema inteiro
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'recibos_rm' });
+  const r = await olha(pg).catch(e => ({ erro: e.message }));
+  const J = 'PC ' + JSON.stringify(r) + ' ' + erros.join(' | ');
+  t.ok('PC: sistema inteiro, com Salários', !r.erro && !r.campo && r.abasVisiveis.length > 1 && r.salarioDepoisDeForcar, J);
+  await ctx.close();
+});
+
+teste('recibos-lista-nao-some-com-dado-torto', async (b, t) => {
+  // "Todos os funcionários sumiram da lista": a nuvem devolve uma lista com
+  // buraco (null) ou como objeto ({0:..,3:..}) e a primeira conta do arranque
+  // (o histórico tirado do fechamento) quebrava -- nenhuma aba era desenhada,
+  // com o cadastro inteiro intacto. Uma parte que falha não pode apagar as
+  // outras, e tem de dizer qual foi.
+  if (!fs.existsSync(path.join(RAIZ, 'recibos_rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'recibos_rm' }, 'index.html', { relogio: '2026-10-05T15:30:00-03:00', fuso: 'America/Sao_Paulo' });
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    if (document.activeElement) document.activeElement.blur();
+    showLogin(false); await esp(500);
+    const emp = (id, nome, o) => Object.assign({ nome, docTipo: 'CPF', doc: '', status: 'ativo', salario: 3000, metodo: 'banco', ord: 0 }, o || {});
+    const parc = (n, venc, pago) => ({ numero: n, vencimento: venc, valor: 500, pago });
+    const v = {
+      employees: {
+        lt1: emp('lt1', 'ANA TESTE TORTO'),
+        // empréstimo com buraco e parcelas como objeto, como o Firebase devolve
+        lt2: emp('lt2', 'BRUNO TESTE TORTO', { emprestimos: [null, { id: 'em1', desc: 'emp', valor: 1500, data: '2026-08-10', desde: 'pagamento',
+          parcelas: { 0: parc(1, '2026-09-10', true), 2: parc(3, '2026-11-10', false) } }] }),
+        lt3: emp('lt3', 'CAIO TESTE TORTO', { folhaExtra: { 1: { desc: 'Bônus', valor: 300 } } }),
+      },
+      fechamentos: {
+        '2026-09-adiantamento': { ano: 2026, mes: 8, tipo: 'adiantamento', data: '2026-09-15', ts: 1757950000000,
+          itens: [{ id: 'lt1', nome: 'ANA TESTE TORTO', valAdiantamento: 1200 }, null, { id: 'lt3', nome: 'CAIO TESTE TORTO', valAdiantamento: 1200 }] },
+        '2026-08-pagamento': { ano: 2026, mes: 7, tipo: 'pagamento', data: '2026-09-05', ts: 1757000000000,
+          itens: { 0: { id: 'lt1', nome: 'ANA TESTE TORTO', valPagamento: 1800 }, 4: { id: 'lt2', nome: 'BRUNO TESTE TORTO', valPagamento: 1700 } } },
+      },
+      historico: { '2026-07-pagamento': { ano: 2026, mes: 6, tipo: 'pagamento', data: '2026-08-05', itens: { 1: { id: 'lt1', nome: 'ANA TESTE TORTO', valor: 1800 } } } },
+    };
+    const out = {};
+    // o mesmo caminho do ouvinte da nuvem (startData)
+    try { seeded = true; applyData(v); ultimoRetrato = JSON.parse(JSON.stringify(retratoDados())); dadosCarregados = true; bootUI(); } catch (e) { out.quebrou = e.message; }
+    await esp(300);
+    const nomes = sel => [...document.querySelectorAll(sel)].map(x => x.innerText.replace(/\s+/g, ' ')).join(' | ');
+    out.func = nomes('#empBody tr');
+    document.querySelector('.vtab[data-v="sal"]').click(); await esp(300);
+    out.sal = nomes('#salBody tr[data-sficha]');
+    out.histAgo = JSON.stringify((state.historico['2026-08-pagamento'] || {}).qtd || 0);
+    // uma parte que falha não leva as outras junto, e avisa qual foi
+    const orig = renderTerc; renderTerc = () => { throw new Error('falha de teste'); };
+    document.querySelector('.vtab[data-v="func"]').click(); await esp(100);
+    const avisos = [], ot = toast; toast = (m, k) => { avisos.push(m); ot(m, k); };
+    try { bootUI(); } catch (e) { out.quebrou2 = e.message; }
+    await esp(200);
+    renderTerc = orig; toast = ot;
+    out.func2 = nomes('#empBody tr');
+    out.aviso = avisos.join(' | ');
+    return out;
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  t.ok('fechamento com buraco e como objeto: o arranque não quebra', !r.erro && !r.quebrou, J);
+  t.ok('a aba Funcionários mostra os três', !r.erro && /ANA/i.test(r.func) && /BRUNO/i.test(r.func) && /CAIO/i.test(r.func), J);
+  t.ok('a aba Salários mostra os três (empréstimo com buraco e parcelas como objeto)', !r.erro && /ANA/i.test(r.sal) && /BRUNO/i.test(r.sal) && /CAIO/i.test(r.sal), J);
+  t.ok('o fechamento como objeto ainda vira histórico', !r.erro && r.histAgo === '2', J);
+  t.ok('uma parte que falha não apaga a lista', !r.erro && !r.quebrou2 && /ANA/i.test(r.func2) && /BRUNO/i.test(r.func2), J);
+  t.ok('e o aviso diz o que falhou', !r.erro && /falha de teste/.test(r.aviso), J);
+  t.ok('sem erro na página', !erros.length, J);
+  await ctx.close();
+});
+
+teste('recibos-mes-fechado-nao-muda', async (b, t) => {
+  // Fechar o pagamento baixa a parcela do empréstimo; logo depois a tela
+  // refazia a conta (agora sem a parcela) e GRAVAVA no mês fechado: o
+  // líquido de setembro passava de 1.100 para 1.500 sem ninguém mexer. Mês
+  // fechado é só leitura, e o arquivo do fechamento manda nele -- inclusive
+  // para consertar o que já tinha sido regravado assim.
+  if (!fs.existsSync(path.join(RAIZ, 'recibos_rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'recibos_rm' }, 'index.html', { relogio: '2026-10-02T12:00:00-03:00', fuso: 'America/Sao_Paulo' });
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    const l = document.getElementById('loginScreen'); if (l) l.style.setProperty('display', 'none', 'important');
+    window.confirm = () => true; window.prompt = () => 'teste'; window.alert = () => {};
+    state.employees = [{ id: 'mf1', nome: 'MARIA TESTE FECHADO', docTipo: 'CPF', doc: '', status: 'ativo', salario: 3000, metodo: 'banco', obs: '',
+      emprestimos: [{ id: 'emf', desc: 'Conserto', desde: 'pagamento', valor: 800, data: '2026-09-01',
+        parcelas: [{ numero: 1, vencimento: '2026-10-01', valor: 400, lancar: true, pago: false }, { numero: 2, vencimento: '2026-11-01', valor: 400, pago: false }] }],
+      historicoSalario: [], historicoFuncao: [], fichasEpi: [], folhaExtra: [] }];
+    state.ciclos = { '2026-09-pagamento': { tipo: 'pagamento', ano: 2026, mesIdx: 8, data: '2026-10-01', itens: { mf1: { base: 1500 } } } };
+    state.fechamentos = {}; state.historico = {}; state.movimentos = {};
+    document.querySelector('.vtab[data-v="sal"]').click(); await esp(200);
+    abrirCiclo({ tipo: 'pagamento', ano: 2026, mesIdx: 8 }); await esp(100);
+    const e = state.employees[0], k = '2026-09-pagamento';
+    const antes = e.valPagamento;
+    await fecharCompetencia('pagamento'); await esp(150);
+    const arquivo = ((state.fechamentos[k] || {}).itens || [])[0] || {};
+    const depoisFechar = { tela: e.valPagamento, ciclo: JSON.parse(JSON.stringify((((state.ciclos[k] || {}).itens || {}).mf1) || null)) };
+    // voltar para a aba e trocar de ciclo e voltar: nada pode recalcular
+    document.querySelector('.vtab[data-v="sal"]').click(); await esp(150);
+    abrirCiclo({ tipo: 'adiantamento', ano: 2026, mesIdx: 9 }); abrirCiclo({ tipo: 'pagamento', ano: 2026, mesIdx: 8 }); await esp(100);
+    const depoisVoltar = { tela: e.valPagamento, ciclo: (((state.ciclos[k] || {}).itens || {}).mf1 || {}).valPagamento,
+      obs: (((state.ciclos[k] || {}).itens || {}).mf1 || {}).obs || '' };
+    // o que já estava estragado na nuvem (ciclo regravado com 1.500) volta ao arquivo
+    state.ciclos[k].itens.mf1.valPagamento = 1500;
+    salCiclo = null; defaultsSalarios(); abrirCiclo({ tipo: 'pagamento', ano: 2026, mesIdx: 8 }); await esp(100);
+    const conserto = { tela: e.valPagamento, ciclo: state.ciclos[k].itens.mf1.valPagamento };
+    return { antes, arquivo: arquivo.valPagamento, obsArquivo: arquivo.obs || '', depoisFechar, depoisVoltar, conserto,
+      baixada: e.emprestimos[0].parcelas[0].pago === true };
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  t.ok('fechou com 1.100 e baixou a parcela', !r.erro && r.antes === 1100 && r.arquivo === 1100 && r.baixada, J);
+  t.ok('depois de fechar, a tela e o ciclo continuam 1.100', !r.erro && r.depoisFechar.tela === 1100 && r.depoisFechar.ciclo && r.depoisFechar.ciclo.valPagamento === 1100, J);
+  t.ok('voltar ao mês fechado não refaz a conta nem a observação', !r.erro && r.depoisVoltar.tela === 1100 && r.depoisVoltar.ciclo === 1100 && r.depoisVoltar.obs === r.obsArquivo, J);
+  t.ok('mês já regravado com 1.500 volta ao valor do arquivo', !r.erro && r.conserto.tela === 1100 && r.conserto.ciclo === 1100, J);
+  t.ok('sem erro na página', !erros.length, J);
+  await ctx.close();
+});
+
+teste('recibos-adiantamento-da-planilha-fica', async (b, t) => {
+  // O adiantamento que vem da planilha da folha, importada no ciclo do
+  // pagamento, não era guardado no ciclo: depois de recarregar a página (ou
+  // trocar de ciclo e voltar) a linha "(−) Adiantamento" sumia do recibo, e
+  // o fechamento feito depois disso arquivava adiantamento 0.
+  if (!fs.existsSync(path.join(RAIZ, 'recibos_rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'recibos_rm' }, 'index.html', { relogio: '2026-10-02T12:00:00-03:00', fuso: 'America/Sao_Paulo' });
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    const l = document.getElementById('loginScreen'); if (l) l.style.setProperty('display', 'none', 'important');
+    window.confirm = () => true; window.prompt = () => 'teste'; window.alert = () => {};
+    state.employees = [{ id: 'ap1', nome: 'PAULO TESTE PLANILHA', docTipo: 'CPF', doc: '', status: 'ativo', salario: 3000, metodo: 'banco', obs: '',
+      emprestimos: [], historicoSalario: [], historicoFuncao: [], fichasEpi: [], folhaExtra: [] }];
+    state.ciclos = {}; state.fechamentos = {}; state.historico = {}; state.movimentos = {};
+    document.querySelector('.vtab[data-v="sal"]').click(); await esp(200);
+    abrirCiclo({ tipo: 'pagamento', ano: 2026, mesIdx: 8 }); await esp(50);
+    const e = state.employees[0];
+    // o que a importação da planilha faz no ciclo do pagamento
+    e.adiantBase = 1200; e.valAdiantamento = 1200; e.base = 1650; e.he = 120; e.plano = 70; e.inss = 200; e.valPagamento = calcPag(e);
+    persist();
+    RCTX = { tipo: 'pagamento', mesIdx: 8, ano: '2026', dataISO: '2026-10-01', cidade: '' };
+    const linha = () => ((linhasDemonstrativo(e) || { linhas: [] }).linhas.find(x => /Adiantamento/.test(x.l)) || {}).v || 0;
+    const naHora = linha();
+    // "recarregar": troca de ciclo e volta (o buffer é relido do ciclo)
+    abrirCiclo({ tipo: 'adiantamento', ano: 2026, mesIdx: 9 }); abrirCiclo({ tipo: 'pagamento', ano: 2026, mesIdx: 8 }); await esp(50);
+    RCTX = { tipo: 'pagamento', mesIdx: 8, ano: '2026', dataISO: '2026-10-01', cidade: '' };
+    const depois = linha();
+    await fecharCompetencia('pagamento'); await esp(100);
+    const arq = ((state.fechamentos['2026-09-pagamento'] || {}).itens || [])[0] || {};
+    return { naHora, depois, adBuffer: e.adiantBase, arquivo: arq.adiantBase || 0 };
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  t.ok('o recibo mostra o adiantamento da planilha', !r.erro && r.naHora === 1200, J);
+  t.ok('depois de recarregar a linha continua lá', !r.erro && r.depois === 1200 && r.adBuffer === 1200, J);
+  t.ok('e o fechamento arquiva o adiantamento', !r.erro && r.arquivo === 1200, J);
+  t.ok('sem erro na página', !erros.length, J);
+  await ctx.close();
+});
+
+teste('recibos-correcao-do-fechamento-chega-ao-ciclo', async (b, t) => {
+  // Corrigir um valor na janela de Fechamentos acertava o arquivo, o
+  // histórico e o lançamento -- mas não o ciclo, que é o que a aba Salários,
+  // a rescisão e o "adiantamento pago" leem: 1.300 num lugar, 1.280 no outro.
+  // O detalhe do histórico (base, almoço) também ficava velho.
+  if (!fs.existsSync(path.join(RAIZ, 'recibos_rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'recibos_rm' }, 'index.html', { relogio: '2026-10-02T12:00:00-03:00', fuso: 'America/Sao_Paulo' });
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    const l = document.getElementById('loginScreen'); if (l) l.style.setProperty('display', 'none', 'important');
+    window.confirm = () => false; window.prompt = () => 'teste'; window.alert = () => {};
+    state.employees = [{ id: 'fc1', nome: 'LUCAS TESTE CORRECAO', docTipo: 'CPF', doc: '', status: 'ativo', salario: 3000, metodo: 'banco', obs: '',
+      emprestimos: [], historicoSalario: [], historicoFuncao: [], fichasEpi: [], folhaExtra: [] }];
+    const it = { id: 'fc1', nome: 'LUCAS TESTE CORRECAO', metodo: 'banco', salario: 3000, base: 1500, almoco: 280, valPagamento: 1780, obs: '' };
+    state.fechamentos = { '2026-09-pagamento': { ano: 2026, mes: 8, tipo: 'pagamento', data: '2026-10-01', ts: 1, itens: [Object.assign({}, it)] } };
+    state.historico = { '2026-09-pagamento': { ano: 2026, mes: 8, tipo: 'pagamento', data: '2026-10-01', itens: [{ id: 'fc1', nome: 'LUCAS TESTE CORRECAO', doc: '', valor: 1780, metodo: 'banco', salario: 3000, base: 1500, almoco: 280, valPagamento: 1780 }] } };
+    state.ciclos = { '2026-09-pagamento': { tipo: 'pagamento', ano: 2026, mesIdx: 8, data: '2026-10-01', fechadoEm: '2026-10-01T12:00:00.000Z', itens: { fc1: { base: 1500, almoco: 280, valPagamento: 1780 } } } };
+    state.movimentos = {};
+    document.querySelector('.vtab[data-v="sal"]').click(); await esp(200);
+    abrirCiclo({ tipo: 'pagamento', ano: 2026, mesIdx: 8 }); await esp(50);
+    // a correção pela janela de Fechamentos: almoço 280 -> 300, líquido 1.780 -> 1.800
+    fechEditMode.pagamento = true; renderFechSection('pagamento');
+    const set = (f, v) => { const x = document.querySelector('#fechPagtoBody input[data-fe-f="' + f + '"]'); if (x) x.value = v; return !!x; };
+    const achou = set('almoco', '300,00') && set('valPagamento', '1.800,00');
+    salvarFechEdit('pagamento'); await esp(50);
+    const c = state.ciclos['2026-09-pagamento'].itens.fc1, h = state.historico['2026-09-pagamento'].itens[0];
+    return { achou, ciclo: { almoco: c.almoco, val: c.valPagamento }, tela: { almoco: state.employees[0].almoco, val: state.employees[0].valPagamento },
+      hist: { valor: h.valor, almoco: h.almoco, val: h.valPagamento }, pago: adiantPagoDoMes('fc1', '2026-09') };
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  t.ok('a correção chega ao ciclo', !r.erro && r.achou && r.ciclo.almoco === 300 && r.ciclo.val === 1800, J);
+  t.ok('e à tela de Salários aberta nesse mês', !r.erro && r.tela.almoco === 300 && r.tela.val === 1800, J);
+  t.ok('o histórico leva o valor e o detalhe', !r.erro && r.hist.valor === 1800 && r.hist.almoco === 300 && r.hist.val === 1800, J);
+  t.ok('sem erro na página', !erros.length, J);
+  await ctx.close();
+});
+
+teste('recibos-parcela-nao-repete', async (b, t) => {
+  // A marca "lançar" da parcela era solta, sem dizer de qual ciclo: com o
+  // adiantamento de outubro gerado e ainda sem fechar, o de novembro achava a
+  // parcela 1 "já marcada", pulava a conferência e a descontava DE NOVO -- e
+  // a parcela 2, a do mês, ficava de fora. Cada ciclo desconta só as suas.
+  if (!fs.existsSync(path.join(RAIZ, 'recibos_rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'recibos_rm' }, 'index.html', { relogio: '2026-11-14T12:00:00-03:00', fuso: 'America/Sao_Paulo' });
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    const l = document.getElementById('loginScreen'); if (l) l.style.setProperty('display', 'none', 'important');
+    window.confirm = () => true; window.prompt = () => 'teste'; window.alert = () => {};
+    state.employees = [{ id: 'pr1', nome: 'RITA TESTE PARCELA', docTipo: 'CPF', doc: '', status: 'ativo', salario: 3000, metodo: 'banco', obs: '',
+      emprestimos: [{ id: 'epr', desc: 'Telha', desde: 'adiantamento', valor: 1500, data: '2026-09-10',
+        parcelas: [{ numero: 1, vencimento: '2026-10-10', valor: 500, pago: false }, { numero: 2, vencimento: '2026-11-10', valor: 500, pago: false }, { numero: 3, vencimento: '2026-12-10', valor: 500, pago: false }] }],
+      historicoSalario: [], historicoFuncao: [], fichasEpi: [], folhaExtra: [] }];
+    state.ciclos = {}; state.fechamentos = {}; state.historico = {}; state.movimentos = {};
+    document.querySelector('.vtab[data-v="sal"]').click(); await esp(200);
+    const e = state.employees[0], num = a => a.map(x => x.numero).join(',');
+    // outubro: a conferência desconta a parcela 1 e os recibos saem; o ciclo NÃO é fechado
+    abrirCiclo({ tipo: 'adiantamento', ano: 2026, mesIdx: 9 }); e.adiantBase = 1500;
+    emprConferir('adiantamento', '2026-10-15', [e], () => { emprConferir('adiantamento', '2026-10-15', [e], () => {}); }); emprConfAplicar(true); await esp(50);
+    const outubro = { desconta: num(obterDescontosEmpr('pr1', 'adiantamento')), liquido: calcAdiant(e) };
+    // novembro
+    abrirCiclo({ tipo: 'adiantamento', ano: 2026, mesIdx: 10 }); e.adiantBase = 1500;
+    const oferta = emprParcelasDoCiclo('adiantamento', '2026-11-15', [e]).map(x => x.numero + (x.marcada ? '✓' : ''));
+    const antesConf = num(obterDescontosEmpr('pr1', 'adiantamento'));
+    let seguiu = false; const abriu = emprConferir('adiantamento', '2026-11-15', [e], () => { seguiu = emprConferir('adiantamento', '2026-11-15', [e], () => {}); }) === false;
+    const aviso = ((document.getElementById('emprConfIntro') || {}).textContent || '');
+    emprConfAplicar(true); await esp(50);
+    const novembro = { desconta: num(obterDescontosEmpr('pr1', 'adiantamento')), liquido: calcAdiant(e) };
+    // outubro continua com a sua parcela, e só ela
+    abrirCiclo({ tipo: 'adiantamento', ano: 2026, mesIdx: 9 });
+    const outubroDepois = num(obterDescontosEmpr('pr1', 'adiantamento'));
+    // fechar novembro baixa só a parcela de novembro
+    abrirCiclo({ tipo: 'adiantamento', ano: 2026, mesIdx: 10 }); e.adiantBase = 1500; e.valAdiantamento = calcAdiant(e);
+    await fecharCompetencia('adiantamento'); await esp(50);
+    const ps = e.emprestimos[0].parcelas.map(p => p.numero + ':' + (p.pago ? 'paga' : (p.lancar ? 'lançada' : 'aberta')));
+    return { outubro, oferta, antesConf, abriu, aviso, novembro, outubroDepois, ps };
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  t.ok('outubro desconta a parcela 1', !r.erro && r.outubro.desconta === '1' && r.outubro.liquido === 1000, J);
+  t.ok('novembro não desconta de novo a parcela de outubro', !r.erro && r.antesConf === '' && r.novembro.desconta === '2' && r.novembro.liquido === 1000, J);
+  t.ok('a conferência de novembro abre, propõe a parcela 2 e avisa que outubro não foi fechado', !r.erro && r.abriu && r.oferta.join() === '1,2✓' && /outubro/i.test(r.aviso) && /fechad/i.test(r.aviso), J);
+  t.ok('outubro continua só com a parcela 1', !r.erro && r.outubroDepois === '1', J);
+  t.ok('fechar novembro baixa só a parcela 2', !r.erro && r.ps.join() === '1:lançada,2:paga,3:aberta', J);
+  t.ok('sem erro na página', !erros.length, J);
+  await ctx.close();
+});
+
+teste('recibos-valor-com-ponto-de-milhar', async (b, t) => {
+  // "1.500" (ponto de milhar, sem vírgula) era lido como R$ 1,50: um
+  // empréstimo de mil e quinhentos virava parcelas de trinta centavos, com
+  // "Empréstimo registrado" na tela.
+  if (!fs.existsSync(path.join(RAIZ, 'recibos_rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'recibos_rm' }, 'index.html', { relogio: '2026-10-02T12:00:00-03:00', fuso: 'America/Sao_Paulo' });
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    const l = document.getElementById('loginScreen'); if (l) l.style.setProperty('display', 'none', 'important');
+    const casos = {}; ['1.500', 'R$ 1.500', '2.000.000', '1.500,00', '1500', '1,5', '12.5', '1.50', '0.500', '-1.200'].forEach(s => { casos[s] = parseValor(s); });
+    state.employees = [{ id: 'vm1', nome: 'NINA TESTE MILHAR', docTipo: 'CPF', doc: '', status: 'ativo', salario: 3000, metodo: 'banco', emprestimos: [],
+      historicoSalario: [], historicoFuncao: [], fichasEpi: [], folhaExtra: [] }];
+    document.querySelector('.vtab[data-v="empr"]').click(); await esp(200);
+    const sel = document.getElementById('emprFunc'); if (sel && !sel.querySelector('option[value="vm1"]')) { const o = document.createElement('option'); o.value = 'vm1'; sel.appendChild(o); }
+    sel.value = 'vm1'; document.getElementById('emprValor').value = '1.500'; document.getElementById('emprParc').value = '3';
+    document.getElementById('emprData').value = '2026-10-02'; document.getElementById('btnEmprSalvar').click(); await esp(50);
+    const em = state.employees[0].emprestimos[0] || {};
+    return { casos, valor: em.valor, parcelas: (em.parcelas || []).map(p => p.valor) };
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  const c = r.casos || {};
+  t.ok('"1.500" e "R$ 1.500" são mil e quinhentos; "2.000.000", dois milhões', !r.erro && c['1.500'] === 1500 && c['R$ 1.500'] === 1500 && c['2.000.000'] === 2000000 && c['-1.200'] === -1200, J);
+  t.ok('o resto continua igual: 1.500,00 · 1500 · 1,5 · 12.5 · 1.50 · 0.500', !r.erro && c['1.500,00'] === 1500 && c['1500'] === 1500 && c['1,5'] === 1.5 && c['12.5'] === 12.5 && c['1.50'] === 1.5 && c['0.500'] === 0.5, J);
+  t.ok('empréstimo de "1.500" em 3 vezes: parcelas de 500', !r.erro && r.valor === 1500 && JSON.stringify(r.parcelas) === '[500,500,500]', J);
+  t.ok('sem erro na página', !erros.length, J);
+  await ctx.close();
+});
+
+teste('recibos-observacao-por-ciclo', async (b, t) => {
+  // A observação só era guardada no ciclo do pagamento: a do pagamento
+  // aparecia no recibo do adiantamento seguinte, a digitada no adiantamento
+  // sumia ao trocar de ciclo, e o bloco automático do empréstimo juntava os
+  // dois tipos no mesmo recibo.
+  if (!fs.existsSync(path.join(RAIZ, 'recibos_rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'recibos_rm' }, 'index.html', { relogio: '2026-10-02T12:00:00-03:00', fuso: 'America/Sao_Paulo' });
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    const l = document.getElementById('loginScreen'); if (l) l.style.setProperty('display', 'none', 'important');
+    state.employees = [{ id: 'ob1', nome: 'OLGA TESTE OBS', docTipo: 'CPF', doc: '', status: 'ativo', salario: 3000, metodo: 'banco', obs: '',
+      emprestimos: [
+        { id: 'opg', desc: 'Moto', desde: 'pagamento', valor: 600, data: '2026-08-20', parcelas: [{ numero: 1, vencimento: '2026-09-20', valor: 300, lancar: true, pago: false }, { numero: 2, vencimento: '2026-10-20', valor: 300 }] },
+        { id: 'oad', desc: 'Telha', desde: 'adiantamento', valor: 400, data: '2026-09-01', parcelas: [{ numero: 1, vencimento: '2026-10-15', valor: 200, lancar: true, pago: false }, { numero: 2, vencimento: '2026-11-15', valor: 200 }] }],
+      historicoSalario: [], historicoFuncao: [], fichasEpi: [], folhaExtra: [] }];
+    state.ciclos = {}; state.fechamentos = {}; state.historico = {}; state.movimentos = {};
+    document.querySelector('.vtab[data-v="sal"]').click(); await esp(200);
+    const e = state.employees[0];
+    abrirCiclo({ tipo: 'pagamento', ano: 2026, mesIdx: 8 }); e.base = 1500; e.obs = 'Obs do pagamento'; persist(); renderSal();
+    const pg = e.obs;
+    abrirCiclo({ tipo: 'adiantamento', ano: 2026, mesIdx: 9 }); e.adiantBase = 1200; renderSal();
+    const adAntes = e.obs;
+    e.obs = 'Obs do adiantamento\n\n' + e.obs; persist(); renderSal();
+    abrirCiclo({ tipo: 'pagamento', ano: 2026, mesIdx: 8 }); renderSal();
+    const pgDepois = e.obs;
+    abrirCiclo({ tipo: 'adiantamento', ano: 2026, mesIdx: 9 }); renderSal();
+    return { pg, adAntes, pgDepois, adDepois: e.obs };
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  t.ok('o bloco do pagamento fala só do pagamento', !r.erro && /Obs do pagamento/.test(r.pg) && /Parcela 1\/2: R\$ 300,00 \(Moto\)/.test(r.pg) && !/Telha|Adiantamento:/.test(r.pg), J);
+  t.ok('no adiantamento a observação do pagamento não aparece', !r.erro && !/Obs do pagamento|Moto/.test(r.adAntes) && /Telha/.test(r.adAntes), J);
+  t.ok('cada ciclo guarda a sua observação', !r.erro && /Obs do pagamento/.test(r.pgDepois) && !/Obs do adiantamento/.test(r.pgDepois) && /Obs do adiantamento/.test(r.adDepois) && !/Obs do pagamento/.test(r.adDepois), J);
+  t.ok('sem erro na página', !erros.length, J);
+  await ctx.close();
+});
+
+teste('recibos-situacao-na-folha', async (b, t) => {
+  // A pílula de situação na aba Salários mostrava "Ativo" para quem estava em
+  // teste; um clique afastava sem perguntar nada, e dois cliques efetivavam
+  // quem estava em teste sem passar pelo Efetivar.
+  if (!fs.existsSync(path.join(RAIZ, 'recibos_rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'recibos_rm' }, 'index.html', { relogio: '2026-10-02T12:00:00-03:00', fuso: 'America/Sao_Paulo' });
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    const l = document.getElementById('loginScreen'); if (l) l.style.setProperty('display', 'none', 'important');
+    const emp = (id, nome, st) => ({ id, nome, docTipo: 'CPF', doc: '', status: st, salario: 3000, metodo: 'banco', dtInicio: '2026-09-20', emprestimos: [], historicoSalario: [], historicoFuncao: [], fichasEpi: [], folhaExtra: [] });
+    state.employees = [emp('si1', 'IVO TESTE ATIVO', 'ativo'), emp('si2', 'TEO TESTE NOVATO', 'teste')];
+    state.ciclos = {}; state.fechamentos = {}; state.historico = {}; state.movimentos = {};
+    document.querySelector('.vtab[data-v="sal"]').click(); await esp(200);
+    abrirCiclo({ tipo: 'pagamento', ano: 2026, mesIdx: 8 }); await esp(50);
+    const pil = id => document.querySelector('#salBody [data-sst="' + id + '"]');
+    const out = { textoTeste: (pil('si2') || {}).textContent || '(sem pílula)' };
+    let perguntas = 0; window.confirm = () => { perguntas++; return false; };
+    if (pil('si1')) pil('si1').click(); await esp(30);
+    out.recusou = { st: state.employees[0].status, perguntas };
+    window.confirm = () => { perguntas++; return true; };
+    if (pil('si1')) pil('si1').click(); await esp(30);
+    out.afastou = { st: state.employees[0].status, desde: state.employees[0].afastDesde || '' };
+    if (pil('si1')) pil('si1').click(); await esp(30);
+    out.voltou = { st: state.employees[0].status, desde: state.employees[0].afastDesde || '' };
+    if (pil('si2')) { pil('si2').click(); await esp(30); }
+    if (pil('si2')) { pil('si2').click(); await esp(30); }
+    out.teste = state.employees[1].status;
+    return out;
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  t.ok('quem está em teste aparece "Em teste"', !r.erro && /em teste/i.test(r.textoTeste), J);
+  t.ok('afastar pede confirmação (e recusar não muda nada)', !r.erro && r.recusou.st === 'ativo' && r.recusou.perguntas === 1, J);
+  t.ok('confirmado, afasta com a data de hoje; voltar limpa a data', !r.erro && r.afastou.st === 'afast' && r.afastou.desde === '2026-10-02' && r.voltou.st === 'ativo' && r.voltou.desde === '', J);
+  t.ok('clicar em quem está em teste não efetiva nem afasta', !r.erro && r.teste === 'teste', J);
+  t.ok('sem erro na página', !erros.length, J);
+  await ctx.close();
+});
+
+teste('recibos-emprestimo-adiantamento-primeiro-mes', async (b, t) => {
+  // Empréstimo descontado no adiantamento vencia no mesmo dia do mês
+  // seguinte: feito do dia 19 em diante, a 1ª parcela caía depois do
+  // adiantamento do dia 15 e só era cobrada um mês depois.
+  if (!fs.existsSync(path.join(RAIZ, 'recibos_rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'recibos_rm' }, 'index.html', { relogio: '2026-10-02T12:00:00-03:00', fuso: 'America/Sao_Paulo' });
+  const r = await pg.evaluate(async () => {
+    const l = document.getElementById('loginScreen'); if (l) l.style.setProperty('display', 'none', 'important');
+    state.employees = [{ id: 'ea1', nome: 'EVA TESTE EMPRESTIMO', docTipo: 'CPF', doc: '', status: 'ativo', salario: 3000, metodo: 'banco', emprestimos: [], historicoSalario: [], historicoFuncao: [], fichasEpi: [], folhaExtra: [] }];
+    const e = state.employees[0], out = {};
+    [['2026-09-20', 'adiantamento'], ['2026-09-05', 'adiantamento'], ['2026-01-31', 'adiantamento'], ['2026-09-20', 'pagamento']].forEach(([dia, onde]) => {
+      e.emprestimos = []; const em = gerarParcelamento('ea1', 900, 3, dia, 'Teste', onde);
+      out[onde + ' ' + dia] = em.parcelas.map(p => p.vencimento).join(',');
+    });
+    e.emprestimos = []; gerarParcelamento('ea1', 900, 3, '2026-09-20', 'Teste', 'adiantamento');
+    out.outubro = emprParcelasDoCiclo('adiantamento', '2026-10-15', [e]).map(x => x.numero).join(',');
+    return out;
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  t.ok('feito em 20/09: parcelas nos adiantamentos de 15/10, 15/11 e 15/12', !r.erro && r['adiantamento 2026-09-20'] === '2026-10-15,2026-11-15,2026-12-15' && r.outubro === '1', J);
+  t.ok('feito no começo do mês ou em 31/01: também no dia 15 dos meses seguintes', !r.erro && r['adiantamento 2026-09-05'] === '2026-10-15,2026-11-15,2026-12-15' && r['adiantamento 2026-01-31'] === '2026-02-15,2026-03-15,2026-04-15', J);
+  t.ok('empréstimo do pagamento continua vencendo no mesmo dia do mês seguinte', !r.erro && r['pagamento 2026-09-20'] === '2026-10-20,2026-11-20,2026-12-20', J);
+  t.ok('sem erro na página', !erros.length, J);
+  await ctx.close();
+});
+
+teste('recibos-restaurar-backup-completo', async (b, t) => {
+  // O backup salva tudo, mas o restaurar não devolvia as Indicações nem as
+  // Fichas de admissão (e deixava os funcionários sem as listas de função e
+  // de EPI).
+  if (!fs.existsSync(path.join(RAIZ, 'recibos_rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'recibos_rm' }, 'index.html', { relogio: '2026-10-02T12:00:00-03:00', fuso: 'America/Sao_Paulo' });
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    const l = document.getElementById('loginScreen'); if (l) l.style.setProperty('display', 'none', 'important');
+    if (!fb) fb = { db: { ref: () => ({ update: () => Promise.resolve(), set: () => Promise.resolve(), on: () => {} }) }, auth: {} };
+    state.employees = [{ id: 'rb1', nome: 'BIA TESTE BACKUP', docTipo: 'CPF', doc: '', status: 'ativo', salario: 3000, metodo: 'banco', emprestimos: [], historicoSalario: [], folhaExtra: [] }];
+    state.indicacoes = [{ id: 'in1', indicadorId: 'rb1', indicadoId: 'rb1', dtInicio: '2026-09-01', valor: 300, ord: 0 }];
+    state.fichasAdm = { fa1: { nome: 'CANDIDATO TESTE', criadaEm: '2026-09-30T12:00:00.000Z' } };
+    const json = JSON.stringify(state);
+    state.indicacoes = []; state.fichasAdm = {};
+    const inp = document.getElementById('fileImport'); const dt = new DataTransfer();
+    dt.items.add(new File([json], 'backup.json', { type: 'application/json' })); inp.files = dt.files;
+    inp.dispatchEvent(new Event('change')); await esp(300);
+    const e = state.employees[0] || {};
+    return { indic: state.indicacoes.length, fichas: Object.keys(state.fichasAdm || {}).length, funcao: Array.isArray(e.historicoFuncao), epi: Array.isArray(e.fichasEpi) };
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  t.ok('as indicações voltam', !r.erro && r.indic === 1, J);
+  t.ok('as fichas de admissão voltam', !r.erro && r.fichas === 1, J);
+  t.ok('os funcionários voltam com as listas de função e EPI', !r.erro && r.funcao && r.epi, J);
+  t.ok('sem erro na página', !erros.length, J);
+  await ctx.close();
+});
+
+teste('recibos-segunda-via-salario-da-competencia', async (b, t) => {
+  // Fechar agosto depois de lançar o reajuste de setembro guardava o salário
+  // NOVO no arquivo de agosto: a 2ª via saía com 3.200 e o recibo original
+  // tinha 3.000. E a janela de Fechamentos ainda oferecia "corrigir" o
+  // cadastro de volta para 3.000.
+  if (!fs.existsSync(path.join(RAIZ, 'recibos_rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'recibos_rm' }, 'index.html', { relogio: '2026-09-01T12:00:00-03:00', fuso: 'America/Sao_Paulo' });
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    const l = document.getElementById('loginScreen'); if (l) l.style.setProperty('display', 'none', 'important');
+    let perguntouCadastro = 0;
+    window.confirm = m => { if (/cadastro/i.test(String(m)) && /sal[aá]rio/i.test(String(m))) perguntouCadastro++; return true; };
+    window.prompt = () => 'teste'; window.alert = () => {};
+    state.cfg.detalharRecibo = true;
+    state.employees = [{ id: 'sc1', nome: 'SARA TESTE REAJUSTE', docTipo: 'CPF', doc: '000.000.000-00', status: 'ativo', salario: 3200, metodo: 'banco', obs: '',
+      emprestimos: [], historicoSalario: [{ data: '2026-09-01', anterior: 3000, novo: 3200 }], historicoFuncao: [], fichasEpi: [], folhaExtra: [] }];
+    state.ciclos = { '2026-08-pagamento': { tipo: 'pagamento', ano: 2026, mesIdx: 7, data: '2026-09-01', itens: { sc1: { base: 1500, he: 100 } } } };
+    state.fechamentos = {}; state.historico = {}; state.movimentos = {};
+    document.querySelector('.vtab[data-v="sal"]').click(); await esp(200);
+    abrirCiclo({ tipo: 'pagamento', ano: 2026, mesIdx: 7 }); await esp(50);
+    await fecharCompetencia('pagamento'); await esp(100);
+    const arq = ((state.fechamentos['2026-08-pagamento'] || {}).itens || [])[0] || {};
+    const hist = ((state.historico['2026-08-pagamento'] || {}).itens || [])[0] || {};
+    const m = movLista().find(x => x.pessoaId === 'sc1' && x.tipo === 'pagamento');
+    let txt = ''; if (m) { verReciboDoMov(m.id); await esp(200); txt = ((document.getElementById('printScroll') || {}).innerText || '').replace(/\s+/g, ' '); }
+    fechEditMode.pagamento = true; renderFechSection('pagamento'); salvarFechEdit('pagamento');
+    return { arq: arq.salario, hist: hist.salario, via: (txt.match(/Sal[aá]rio R\$ ?[\d.,]+/) || [''])[0], perguntouCadastro, cadastro: state.employees[0].salario };
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  t.ok('o fechamento de agosto guarda o salário de agosto (3.000)', !r.erro && r.arq === 3000 && r.hist === 3000, J);
+  t.ok('a 2ª via de agosto sai com Salário R$ 3.000,00', !r.erro && /3\.000,00/.test(r.via), J);
+  t.ok('salvar o fechamento não oferece desfazer o reajuste no cadastro', !r.erro && r.perguntouCadastro === 0 && r.cadastro === 3200, J);
+  t.ok('sem erro na página', !erros.length, J);
+  await ctx.close();
+});
+
+teste('recibos-numero-fixo-do-recibo', async (b, t) => {
+  // O Nº da 2ª via do recibo de salário saía da POSIÇÃO no histórico: quem
+  // teve o recibo impresso sozinho (Nº 001) aparecia na 2ª via como Nº 002
+  // se outro lote do mês tivesse saído antes. O número impresso fica guardado.
+  if (!fs.existsSync(path.join(RAIZ, 'recibos_rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'recibos_rm' }, 'index.html', { relogio: '2026-10-02T12:00:00-03:00', fuso: 'America/Sao_Paulo' });
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    const l = document.getElementById('loginScreen'); if (l) l.style.setProperty('display', 'none', 'important');
+    window.confirm = () => true; window.prompt = () => 'teste'; window.alert = () => {};
+    const emp = (id, nome) => ({ id, nome, docTipo: 'CPF', doc: '', status: 'ativo', salario: 3000, metodo: 'banco', obs: '', emprestimos: [], historicoSalario: [], historicoFuncao: [], fichasEpi: [], folhaExtra: [] });
+    state.employees = [emp('nf1', 'ANA TESTE NUMERO'), emp('nf2', 'BETO TESTE NUMERO')];
+    state.ciclos = { '2026-09-pagamento': { tipo: 'pagamento', ano: 2026, mesIdx: 8, data: '2026-10-01', itens: { nf1: { base: 1000 }, nf2: { base: 1200 } } } };
+    state.fechamentos = {}; state.historico = {}; state.movimentos = {};
+    document.querySelector('.vtab[data-v="sal"]').click(); await esp(200);
+    abrirCiclo({ tipo: 'pagamento', ano: 2026, mesIdx: 8 }); await esp(50);
+    const num = () => ((document.getElementById('printScroll') || {}).innerText || '').match(/Nº\s*(\d+)/);
+    salGen.excluded = { nf1: true }; gerarSalario('pagamento'); await esp(100);
+    const beto = (num() || [])[1];
+    salGen.excluded = { nf2: true }; gerarSalario('pagamento'); await esp(100);
+    const ana = (num() || [])[1];
+    salGen.excluded = {};
+    const mov = movLista().find(m => m.pessoaId === 'nf1' && m.tipo === 'pagamento');
+    const via = () => { verReciboDoMov(mov.id); return (num() || [])[1]; };
+    const via1 = mov ? via() : '';
+    await fecharCompetencia('pagamento'); await esp(100);
+    const via2 = mov ? via() : '';
+    return { beto, ana, via1, via2 };
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  t.ok('cada lote imprimiu Nº 001', !r.erro && r.beto === '001' && r.ana === '001', J);
+  t.ok('a 2ª via sai com o número do papel (001), antes e depois de fechar', !r.erro && r.via1 === '001' && r.via2 === '001', J);
+  t.ok('sem erro na página', !erros.length, J);
+  await ctx.close();
+});
+
+teste('recibos-numeracao-reservada', async (b, t) => {
+  // Dois computadores emitindo ao mesmo tempo pegavam o mesmo número: cada
+  // um somava 1 no contador que tinha na memória. Agora o número é reservado
+  // no servidor numa transação; sem conexão, vale a conta local de antes.
+  if (!fs.existsSync(path.join(RAIZ, 'recibos_rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'recibos_rm' }, 'index.html', { relogio: '2026-10-02T12:00:00-03:00', fuso: 'America/Sao_Paulo' });
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    const l = document.getElementById('loginScreen'); if (l) l.style.setProperty('display', 'none', 'important');
+    if (typeof reservarNumerosRecibo !== 'function') return { erro: 'sem reserva de número' };
+    // "servidor" onde outro computador já usou o 14
+    const servidor = { 'recibos/cfg/numRecibos/terc_2026': 14, 'recibos/cfg/numRecibos/func_2026': 5 };
+    const fbAntes = fb;
+    fb = { db: { ref: p => ({ transaction: fn => { const cur = servidor[p]; const nv = fn(cur); if (nv === undefined) return Promise.resolve({ committed: false, snapshot: { val: () => cur } }); servidor[p] = nv; return Promise.resolve({ committed: true, snapshot: { val: () => nv } }); },
+      update: () => Promise.resolve(), set: () => Promise.resolve(), on: () => {} }) }, auth: fbAntes && fbAntes.auth };
+    state.cfg.numRecibos = { terc_2026: 13, func_2026: 5 }; state.movimentos = {};
+    const dois = await reservarNumerosRecibo('terc', '2026-10-02', 2);
+    // o avulso também passa pela reserva
+    state.employees = [{ id: 'nr1', nome: 'NARA TESTE NUMERO', docTipo: 'CPF', doc: '', status: 'ativo', salario: 3000, metodo: 'banco', emprestimos: [], historicoSalario: [], historicoFuncao: [], fichasEpi: [], folhaExtra: [] }];
+    servidor['recibos/cfg/numRecibos/func_2026'] = 9;
+    document.querySelector('.vtab[data-v="extra"]').click(); await esp(200);
+    const sel = document.getElementById('exAEmp'); if (sel && !sel.querySelector('option[value="nr1"]')) { const o = document.createElement('option'); o.value = 'nr1'; sel.appendChild(o); }
+    sel.value = 'nr1'; document.getElementById('exData').value = '2026-10-02';
+    document.getElementById('exAValor').value = '150,00'; document.getElementById('exARef').value = 'bônus teste';
+    document.getElementById('exAGerar').click(); await esp(300);
+    const avulso = (movLista().find(m => m.pessoaId === 'nr1') || {}).numeroRecibo || '';
+    // sem servidor: conta local
+    fb = null; state.cfg.numRecibos = { terc_2026: 20 };
+    const local = await reservarNumerosRecibo('terc', '2026-10-02', 1);
+    fb = fbAntes;
+    return { dois, servidor: servidor['recibos/cfg/numRecibos/terc_2026'], avulso, local };
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  t.ok('com outro computador no 14, saem 15 e 16 (e o servidor fica no 16)', !r.erro && JSON.stringify(r.dois) === '["2026/0015","2026/0016"]' && r.servidor === 16, J);
+  t.ok('o recibo avulso usa o número reservado (2026/0010)', !r.erro && r.avulso === '2026/0010', J);
+  t.ok('sem conexão, segue a conta local (2026/0021)', !r.erro && JSON.stringify(r.local) === '["2026/0021"]', J);
+  t.ok('sem erro na página', !erros.length, J);
+  await ctx.close();
+});
+
+teste('recibos-ciclo-gravado-por-pessoa', async (b, t) => {
+  // A folha aberta ia para a nuvem inteira a cada gravação: duas pessoas
+  // lançando em funcionários diferentes ao mesmo tempo, a última gravação
+  // apagava a da outra. Agora cada funcionário do ciclo é um caminho próprio.
+  if (!fs.existsSync(path.join(RAIZ, 'recibos_rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'recibos_rm' }, 'index.html', { relogio: '2026-10-02T12:00:00-03:00', fuso: 'America/Sao_Paulo' });
+  const r = await pg.evaluate(() => {
+    const k = '2026-09-pagamento', clone = x => JSON.parse(JSON.stringify(x));
+    const base = { ciclos: { [k]: { tipo: 'pagamento', ano: 2026, mesIdx: 8, data: '2026-10-01', itens: { a1: { base: 1000 }, b2: { base: 2000 }, c3: { base: 500 } } } } };
+    const a = clone(base); a.ciclos[k].itens.a1.he = 100;                      // um computador mexe na Ana
+    const bb = clone(base); bb.ciclos[k].itens.b2.plano = 60; delete bb.ciclos[k].itens.c3; bb.ciclos[k].data = '2026-10-02';  // o outro, no Bruno
+    const ua = diffParaUpdate(base, a), ub = diffParaUpdate(base, bb);
+    const novo = clone(base); novo.ciclos['2026-10-adiantamento'] = { tipo: 'adiantamento', ano: 2026, mesIdx: 9, itens: { a1: { adiantBase: 900 } } };
+    const un = diffParaUpdate(base, novo);
+    // aplica as duas gravações num "servidor", como o update do Firebase faz
+    const srv = clone(base);
+    const aplica = u => Object.keys(u).forEach(p => { const ps = p.split('/'); let o = srv; ps.slice(0, -1).forEach(x => { o = o[x] = o[x] || {}; }); if (u[p] === null) delete o[ps[ps.length - 1]]; else o[ps[ps.length - 1]] = clone(u[p]); });
+    aplica(ua); aplica(ub);
+    return { ua: Object.keys(ua), ub: Object.keys(ub).sort(), un: Object.keys(un), it: srv.ciclos[k].itens, data: srv.ciclos[k].data };
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  t.ok('mexer em uma pessoa grava só ela', !r.erro && JSON.stringify(r.ua) === '["ciclos/2026-09-pagamento/itens/a1"]', J);
+  t.ok('item que sai e data do ciclo viram caminhos próprios', !r.erro && JSON.stringify(r.ub) === '["ciclos/2026-09-pagamento/data","ciclos/2026-09-pagamento/itens/b2","ciclos/2026-09-pagamento/itens/c3"]', J);
+  t.ok('ciclo novo vai inteiro', !r.erro && JSON.stringify(r.un) === '["ciclos/2026-10-adiantamento"]', J);
+  t.ok('as duas gravações ficam (nenhuma apaga a outra)', !r.erro && r.it.a1.he === 100 && r.it.b2.plano === 60 && !r.it.c3 && r.data === '2026-10-02', J);
+  t.ok('sem erro na página', !erros.length, J);
+  await ctx.close();
+});
+
+teste('recibos-conferencia-cabe-na-tela', async (b, t) => {
+  // Relatório › Conferência Mensal: onze colunas com 30 px de folga de cada
+  // lado cortavam a Situação e as Ações numa tela de 1366.
+  if (!fs.existsSync(path.join(RAIZ, 'recibos_rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'recibos_rm' }, 'index.html', { relogio: '2026-10-02T12:00:00-03:00', fuso: 'America/Sao_Paulo', viewport: { width: 1366, height: 800 } });
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    const l = document.getElementById('loginScreen'); if (l) l.style.setProperty('display', 'none', 'important');
+    state.employees = [{ id: 'cm1', nome: 'MARIA APARECIDA TESTE DOS SANTOS', docTipo: 'CPF', doc: '', status: 'ativo', salario: 3000, metodo: 'banco', emprestimos: [], historicoSalario: [], historicoFuncao: [], fichasEpi: [], folhaExtra: [] }];
+    state.movimentos = { mc1: { id: 'mc1', pessoaTipo: 'funcionario', pessoaId: 'cm1', nome: 'MARIA APARECIDA TESTE DOS SANTOS', tipo: 'pagamento', competencia: '2026-09', status: 'divergente',
+      valorPrevisto: 12345.67, valorPago: 12000, metodo: 'banco', dataPrevista: '2026-10-01', dataPagamento: '2026-10-01', reciboGerado: true, origem: 'controle_pagamentos', createdAt: 1, updatedAt: 1, auditoria: [] } };
+    document.querySelector('.vtab[data-v="rel"]').click(); await esp(300);
+    const tb = document.getElementById('relMovTable'), wrap = tb && tb.closest('.tbl-wrap');
+    const th = [...tb.querySelectorAll('thead th')].find(x => /Situa/.test(x.textContent));
+    const box = wrap.getBoundingClientRect(), q = th ? th.getBoundingClientRect() : { right: 99999 };
+    return { sobra: wrap.scrollWidth - wrap.clientWidth, situacaoDentro: q.right <= box.right + 1 };
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  t.ok('a tabela cabe em 1366 sem rolar de lado, com a Situação à vista', !r.erro && r.sobra <= 1 && r.situacaoDentro, J);
+  t.ok('sem erro na página', !erros.length, J);
+  await ctx.close();
+});
+
+teste('recibos-contabilidade-mes-anterior', async (b, t) => {
+  // O relatório para a contabilidade abria o "adiantamento pago no mês" no mês
+  // corrente: no dia 2 de outubro, outubro -- que ainda não teve adiantamento.
+  if (!fs.existsSync(path.join(RAIZ, 'recibos_rm'))) return;
+  const out = {};
+  for (const [quando, rot] of [['2026-10-02T12:00:00-03:00', 'out'], ['2026-01-05T12:00:00-03:00', 'jan']]) {
+    const { ctx, pg, erros } = await abre(b, { 'sis.local': 'recibos_rm' }, 'index.html', { relogio: quando, fuso: 'America/Sao_Paulo' });
+    out[rot] = await pg.evaluate(async () => {
+      const esp = ms => new Promise(x => setTimeout(x, ms));
+      const l = document.getElementById('loginScreen'); if (l) l.style.setProperty('display', 'none', 'important');
+      const m = document.getElementById('repFuncMes'); if (m) m.innerHTML = ''; const a = document.getElementById('repFuncAno'); if (a) a.value = '';
+      renderEmps(); await esp(50);
+      return { mes: (document.getElementById('repFuncMes') || {}).value, ano: (document.getElementById('repFuncAno') || {}).value };
+    }).catch(e => ({ erro: e.message }));
+    out[rot].erros = erros.slice(); await ctx.close();
+  }
+  const J = JSON.stringify(out);
+  t.ok('em 2 de outubro abre em setembro', !out.out.erro && out.out.mes === '8' && out.out.ano === '2026', J);
+  t.ok('em 5 de janeiro abre em dezembro do ano anterior', !out.jan.erro && out.jan.mes === '11' && out.jan.ano === '2025', J);
+  t.ok('sem erro na página', !out.out.erros.length && !out.jan.erros.length, J);
+});
+
+teste('recibos-nomes-e-confirmacoes', async (b, t) => {
+  // "D'ávila" no lugar de "D'Ávila"; confirmações com o nome em CAIXA ALTA e
+  // "bônus de 300,00" sem o "R$".
+  if (!fs.existsSync(path.join(RAIZ, 'recibos_rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'recibos_rm' }, 'index.html', { relogio: '2026-10-02T12:00:00-03:00', fuso: 'America/Sao_Paulo' });
+  const r = await pg.evaluate(async () => {
+    const l = document.getElementById('loginScreen'); if (l) l.style.setProperty('display', 'none', 'important');
+    const nomes = { apostrofo: titlePt("GUSTAVO D'ÁVILA"), hifen: titlePt('MARIA-JOSÉ DA SILVA'), simples: titlePt('JOÃO DOS SANTOS E SILVA') };
+    state.employees = [{ id: 'nc1', nome: 'ANA TESTE INDICOU', status: 'ativo', emprestimos: [], historicoSalario: [], historicoFuncao: [], fichasEpi: [], folhaExtra: [] },
+      { id: 'nc2', nome: 'BIA TESTE INDICADA', status: 'ativo', dtInicio: '2026-05-01', emprestimos: [], historicoSalario: [], historicoFuncao: [], fichasEpi: [], folhaExtra: [] }];
+    state.indicacoes = [{ id: 'inc', indicadorId: 'nc1', indicadoId: 'nc2', dtInicio: '2026-05-01', valor: 300, situacao: 'andamento' }];
+    let msg = ''; window.confirm = m => { msg = String(m); return false; };
+    marcarIndic('inc', 'pago');
+    return { nomes, msg };
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  t.ok("nomes: D'Ávila, Maria-José da Silva, João dos Santos e Silva", !r.erro && r.nomes.apostrofo === "Gustavo D'Ávila" && r.nomes.hifen === 'Maria-José da Silva' && r.nomes.simples === 'João dos Santos e Silva', J);
+  t.ok('a confirmação do bônus fala R$ 300,00 e o nome como se escreve', !r.erro && /R\$ 300,00/.test(r.msg) && /Ana Teste Indicou/.test(r.msg) && !/ANA TESTE/.test(r.msg), J);
+  t.ok('sem erro na página', !erros.length, J);
+  await ctx.close();
+});
+
+teste('recibos-bonus-indicacao-na-folha', async (b, t) => {
+  // O bônus de indicação era lançado à mão na folha depois de marcado como
+  // pago. Agora "Pagar" já lança no pagamento em aberto de quem indicou, e
+  // "Reabrir" tira o lançamento.
+  if (!fs.existsSync(path.join(RAIZ, 'recibos_rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'recibos_rm' }, 'index.html', { relogio: '2026-10-02T12:00:00-03:00', fuso: 'America/Sao_Paulo' });
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    const l = document.getElementById('loginScreen'); if (l) l.style.setProperty('display', 'none', 'important');
+    window.confirm = () => true; window.alert = () => {};
+    const emp = (id, nome, ini) => ({ id, nome, docTipo: 'CPF', doc: '', status: 'ativo', salario: 3000, metodo: 'banco', dtInicio: ini, obs: '', emprestimos: [], historicoSalario: [], historicoFuncao: [], fichasEpi: [], folhaExtra: [] });
+    state.employees = [emp('bi1', 'IGOR TESTE INDICOU', '2024-01-10'), emp('bi2', 'JULIA TESTE INDICADA', '2026-06-01')];
+    state.ciclos = { '2026-09-pagamento': { tipo: 'pagamento', ano: 2026, mesIdx: 8, data: '2026-10-01', itens: { bi1: { base: 1500 }, bi2: { base: 1400 } } } };
+    state.fechamentos = {}; state.historico = {}; state.movimentos = {};
+    state.indicacoes = [{ id: 'ib1', indicadorId: 'bi1', indicadoId: 'bi2', dtInicio: '2026-06-01', valor: 300, situacao: 'andamento' }];
+    document.querySelector('.vtab[data-v="sal"]').click(); await esp(200);
+    abrirCiclo({ tipo: 'pagamento', ano: 2026, mesIdx: 8 }); await esp(50);
+    const e = state.employees[0], antes = e.valPagamento;
+    marcarIndic('ib1', 'pago'); await esp(50);
+    const lanc = (e.folhaExtra || []).map(x => x.desc + '=' + x.valor);
+    const depois = e.valPagamento, noCiclo = ((state.ciclos['2026-09-pagamento'].itens.bi1 || {}).folhaExtra || []).length;
+    marcarIndic('ib1', 'pago'); // de novo não duplica
+    const repetido = (e.folhaExtra || []).length;
+    marcarIndic('ib1', 'andamento'); await esp(50);
+    return { antes, depois, lanc, noCiclo, repetido, reaberto: (e.folhaExtra || []).length, voltou: e.valPagamento, sit: state.indicacoes[0].situacao };
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  t.ok('"Pagar" lança o bônus no pagamento aberto de quem indicou', !r.erro && r.lanc.length === 1 && /Bônus de indicação/.test(r.lanc[0]) && /Julia Teste Indicada/.test(r.lanc[0]) && /=300$/.test(r.lanc[0]) && r.depois === r.antes + 300 && r.noCiclo === 1, J);
+  t.ok('pagar de novo não lança duas vezes', !r.erro && r.repetido === 1, J);
+  t.ok('"Reabrir" tira o lançamento e o valor volta', !r.erro && r.reaberto === 0 && r.voltou === r.antes && r.sit === 'andamento', J);
+  t.ok('sem erro na página', !erros.length, J);
+  await ctx.close();
+});
+
+teste('recibos-simula-rescisao-afastamento', async (b, t) => {
+  // o simulador contava o tempo todo como trabalhado, mesmo com a pessoa
+  // afastada pelo INSS ou em cárcere (o afastamento já está na ficha):
+  // · INSS: os 15 primeiros dias são da empresa; dali em diante o mês não
+  //   dá 13º pela empresa (o INSS paga o abono), não há saldo de salário nem
+  //   FGTS (salvo acidente de trabalho), e mais de 6 meses de benefício no
+  //   período aquisitivo tiram as férias dele (CLT art. 133, IV);
+  // · cárcere: contrato suspenso desde o 1º dia -- o tempo não conta para
+  //   13º, férias, aviso nem FGTS.
+  if (!fs.existsSync(path.join(RAIZ, 'recibos_rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'recibos_rm' }, 'index.html', { relogio: '2026-10-20T12:00:00-03:00', fuso: 'America/Sao_Paulo' });
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    const l = document.getElementById('loginScreen'); if (l) l.style.setProperty('display', 'none', 'important');
+    const clt = (id, nome, o) => Object.assign({ id, nome, docTipo: 'CPF', doc: '', status: 'ativo', salario: 3000, dtInicio: '2024-02-05', dtCarteira: '2024-02-05' }, o);
+    const sem = rescSugere(clt('af0', 'ANA TESTE SEM AFAST'), '2026-10-20', 'sjc', 'indenizado');
+    // 1) INSS desde 11/03 e ainda afastada na saída
+    const inss = rescSugere(clt('af1', 'BIA TESTE INSS', { status: 'afast', afastMotivo: 'inss', afastDesde: '2026-03-11' }), '2026-10-20', 'sjc', 'indenizado');
+    // 2) cárcere de 01/05 a 30/07, já de volta
+    const car = rescSugere(clt('af2', 'CAIO TESTE CARCERE', { afastHist: [{ motivo: 'carcere', desde: '2026-05-01', ate: '2026-07-30' }] }), '2026-10-20', 'sjc', 'indenizado');
+    // 3) INSS curto (abril e maio), já de volta: férias seguem
+    const curto = rescSugere(clt('af3', 'DORA TESTE INSS CURTO', { afastHist: [{ motivo: 'inss', desde: '2026-04-01', ate: '2026-05-31' }] }), '2026-10-20', 'sjc', 'indenizado');
+    const conta = (sug, extra) => rescSimula(Object.assign({ tipo: 'sjc', aviso: 'indenizado', admissao: '2024-02-05', saida: '2026-10-20', salario: 3000, salCarteira: 3000,
+      a13: sug.a13, aFer: sug.aFer, dVenc: 0, dDobro: 0, a13p: sug.a13p, aFerP: sug.aFerP, diasAviso: sug.diasAviso, fgtsSaldo: 0, descontos: [],
+      diasSuspMes: (sug.afast && sug.afast.diasMesSaida) || 0 }, extra || {}));
+    const vSaldo = x => (x.verbas.find(v => v.k === 'saldo') || { valor: 0 }).valor;
+    // a tela: dica e quadro do afastamento
+    state.employees = [clt('af1', 'BIA TESTE INSS', { status: 'afast', afastMotivo: 'inss', afastDesde: '2026-03-11' })];
+    document.querySelector('.vtab[data-v="resc"]').click(); await esp(200);
+    document.getElementById('btnRescSim').click(); await esp(200);
+    const s = document.getElementById('rsEmp'); s.value = 'af1'; s.dispatchEvent(new Event('change')); await esp(100);
+    const sd = document.getElementById('rsSaida'); sd.value = '2026-10-20'; sd.dispatchEvent(new Event('change')); await esp(150);
+    const tela = (document.getElementById('rsDicaAvos').textContent + ' | ' + document.getElementById('rsResultado').textContent).replace(/\s+/g, ' ');
+    // a ficha guarda o período quando a pessoa volta (pílula de situação)
+    const e = state.employees[0]; e.status = 'afast';
+    if (typeof afastEncerra === 'function') afastEncerra(e, '2026-10-01');
+    return { sem: { a13: sem.a13, aFer: sem.aFer, aviso: sem.diasAviso, fgts: sem.fgtsEstimado },
+      inss: { a13: inss.a13, aFer: inss.aFer, mes: inss.afast && inss.afast.diasMesSaida, aviso: inss.diasAviso, fgts: inss.fgtsEstimado, perde: inss.afast && inss.afast.perdeFerias, ainda: inss.afast && inss.afast.aindaInss },
+      car: { a13: car.a13, aFer: car.aFer, ini: car.periodoIni, susp: car.afast && car.afast.carcereDias, fgts: car.fgtsEstimado },
+      curto: { a13: curto.a13, aFer: curto.aFer, perde: curto.afast && curto.afast.perdeFerias },
+      saldoInss: vSaldo(conta(inss)), saldoSem: vSaldo(conta(sem)), tela,
+      hist: JSON.stringify(e.afastHist || null), estado: e.status, mapa: JSON.stringify((empsToMap()[e.id] || {}).afastHist || null) };
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r).slice(0, 1800);
+  t.ok('sem afastamento: 10 avos de 13º, 9 de férias', !r.erro && r.sem.a13 === 10 && r.sem.aFer === 9, J);
+  t.ok('INSS desde 11/03: 13º só jan–mar pela empresa (3 avos)', !r.erro && r.inss.a13 === 3, J);
+  t.ok('INSS por mais de 6 meses no período: perde as férias dele (0 avos)', !r.erro && r.inss.aFer === 0 && r.inss.perde === true, J);
+  t.ok('INSS: sem saldo de salário no mês da saída (afastada o mês todo)', !r.erro && r.inss.mes >= 20 && r.saldoInss === 0 && r.saldoSem > 0, J);
+  t.ok('INSS: FGTS estimado menor (sem depósito no benefício)', !r.erro && r.inss.fgts < r.sem.fgts, J);
+  t.ok('cárcere 01/05–30/07: maio, junho e julho fora do 13º (7 avos)', !r.erro && r.car.a13 === 7, J);
+  // 05/02 + 91 dias = 06/05 (fev/2024 com 29 dias); de 06/05 a 20/10: 5 meses e 15 dias = 6 avos (sem o cárcere: 9)
+  t.ok('cárcere: o período de férias anda 91 dias (6 avos, desde 06/05)', !r.erro && r.car.susp === 91 && r.car.ini === '2026-05-06' && r.car.aFer === 6, J);
+  t.ok('cárcere: FGTS estimado menor', !r.erro && r.car.fgts < r.sem.fgts, J);
+  t.ok('INSS curto (abr–mai): só maio sai do 13º, férias seguem', !r.erro && r.curto.a13 === 9 && r.curto.aFer === 9 && !r.curto.perde, J);
+  t.ok('a tela mostra o afastamento e avisa do contrato suspenso', !r.erro && /INSS/.test(r.tela) && /afast/i.test(r.tela) && /suspenso/i.test(r.tela), J);
+  t.ok('a ficha guarda o período quando a pessoa volta', !r.erro && r.estado === 'ativo' && /"motivo":"inss","desde":"2026-03-11","ate":"2026-10-01"/.test(r.hist) && /2026-03-11/.test(r.mapa), J);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
+teste('recibos-simula-rescisao-descontos', async (b, t) => {
+  // o simulador lia adiantamento e plano do ciclo aberto na folha: com o
+  // pagamento aberto o adiantamento vinha 0, com o adiantamento aberto o
+  // plano vinha 0. Agora busca na folha do mês: adiantamento já pago no mês
+  // da saída e o plano do último pagamento
+  if (!fs.existsSync(path.join(RAIZ, 'recibos_rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'recibos_rm' }, 'index.html', { relogio: '2026-09-30T12:00:00-03:00', fuso: 'America/Sao_Paulo' });
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    const l = document.getElementById('loginScreen'); if (l) l.style.setProperty('display', 'none', 'important');
+    // o que a tela mostra com o ciclo "pagamento" aberto: adiantamento zerado
+    state.employees = [{ id: 'rd1', nome: 'LIA TESTE DESCONTO', status: 'ativo', salario: 3000, dtInicio: '2025-12-15', dtCarteira: '2026-03-01',
+      valAdiantamento: 0, plano: 0,
+      emprestimos: [{ valor: 900, parcelas: [{ valor: 300, pago: true }, { valor: 300 }, { valor: 300 }] }] }];
+    state.ciclos = state.ciclos || {};
+    state.ciclos['2026-09-adiantamento'] = { data: '2026-09-15', itens: { rd1: { valAdiantamento: 1300 } } };
+    state.ciclos['2026-07-pagamento'] = { data: '2026-08-01', itens: { rd1: { plano: 60 } } };
+    state.ciclos['2026-08-pagamento'] = { data: '2026-09-01', itens: { rd1: { plano: 69.21 } } };
+    document.querySelector('.vtab[data-v="resc"]').click(); await esp(200);
+    document.getElementById('btnRescSim').click(); await esp(200);
+    const sd = document.getElementById('rsSaida'); sd.value = '2026-09-30';
+    const s = document.getElementById('rsEmp'); s.value = 'rd1'; s.dispatchEvent(new Event('change')); await esp(100);
+    const v = id => document.getElementById(id).value;
+    const fim = { ad: v('rsAdiant'), pl: v('rsPlano'), em: v('rsEmpr') };
+    // saída antes do dia do adiantamento: ainda não recebeu nada no mês
+    sd.value = '2026-09-10'; sd.dispatchEvent(new Event('change')); await esp(100);
+    const antes = { ad: v('rsAdiant'), pl: v('rsPlano') };
+    return { fim, antes };
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r);
+  t.ok('adiantamento já pago no mês da saída entra sozinho', !r.erro && r.fim.ad === '1.300,00', J);
+  t.ok('plano de saúde do último pagamento', !r.erro && r.fim.pl === '69,21', J);
+  t.ok('empréstimo: só o saldo em aberto', !r.erro && r.fim.em === '600,00', J);
+  t.ok('saída antes do dia 15: sem adiantamento a descontar', !r.erro && r.antes.ad === '' && r.antes.pl === '69,21', J);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
+teste('recibos-simula-rescisao-faltas', async (b, t) => {
+  // o simulador não olhava as faltas: quem faltou saía com férias cheias, o
+  // 13º com todos os avos e o mês da saída sem desconto. Agora lê o ponto
+  // (cartão RHID e ponto PF) antes da conta: faltas no período de férias
+  // cortam os dias pela tabela do art. 130, mês com menos de 15 dias
+  // trabalhados não dá avo de 13º, e as faltas/atrasos do mês da saída
+  // (com o repouso da semana) viram desconto e saem da base do INSS
+  if (!fs.existsSync(path.join(RAIZ, 'recibos_rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'recibos_rm' }, 'index.html', { relogio: '2026-09-30T12:00:00-03:00', fuso: 'America/Sao_Paulo' });
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    const l = document.getElementById('loginScreen'); if (l) l.style.setProperty('display', 'none', 'important');
+    const cartao = (empId, o) => Object.assign({ nome: '', cpf: '', empId, pagina: 1, diasFalta: 0, faltaMin: 0, diasAtestado: 0, atestadoMin: 0, abonoMin: 0,
+      diasAfastado: 0, afastadoMin: 0, motivoAfast: '', diasFerias: 0, repousoMin: 0, extra0Min: 0, extra0NotMin: 0, extra50Min: 0, extra50NotMin: 0,
+      extra100Min: 0, extra100NotMin: 0, diurnaTotMin: 0, noturnaTotMin: 0, diasFaltaColuna: 0 }, o);
+    const mes = (comp, itens) => ({ arquivo: 'cartao-' + comp + '-teste.pdf', importadoEm: comp + '-28T12:00:00.000Z', casados: 1, conferir: 0, itens });
+    state.employees = [
+      { id: 'rf1', nome: 'FELIPE TESTE FALTAS', docTipo: 'CPF', doc: '', status: 'ativo', salario: 3300, dtInicio: '2025-12-15', dtCarteira: '2025-12-15' },
+      { id: 'rf2', nome: 'GIL TESTE PF FALTA', docTipo: 'CPF', doc: '', status: 'ativo', salario: 2400, dtInicio: '2026-06-01', dtCarteira: '', metodo: 'pf' }];
+    state.rhid = {
+      '2026-03': mes('2026-03', [cartao('rf1', { diasFalta: 4, faltaMin: 2112, repousoMin: 880 })]),
+      '2026-07': mes('2026-07', [cartao('rf1', { diasFalta: 17, faltaMin: 8976, repousoMin: 1760 })]),
+      '2026-08': mes('2026-08', [cartao('rf1', { diasAtestado: 3, atestadoMin: 1584 })]),
+      '2026-09': mes('2026-09', [cartao('rf1', { diasFalta: 1, faltaMin: 573, repousoMin: 440 })]) };
+    // PF: setembro trabalhado, menos terça e quarta da 2ª semana (falta)
+    state.pfPontos = { rf2: { '2026-09': {} } };
+    pfMesDatas('2026-09').forEach(d => { if (!pfPrevisto(d)) return;
+      state.pfPontos.rf2['2026-09'][pfISO(d)] = { s: 'trabalhado', m1: '07:00', m2: '12:00', t1: '13:00', t2: d.getDay() === 5 ? '16:00' : '17:00', obs: '' }; });
+    ['2026-09-08', '2026-09-09'].forEach(k => { state.pfPontos.rf2['2026-09'][k] = { s: 'falta', m1: '', m2: '', t1: '', t2: '', obs: '' }; });
+    const sug = rescSugere(state.employees[0], '2026-09-30', 'sjc', 'indenizado');
+    const base = { tipo: 'sjc', aviso: 'indenizado', admissao: '2025-12-15', saida: '2026-09-30', salario: 3300, salCarteira: 3300,
+      a13: 8, aFer: 10, dVenc: 0, dDobro: 0, a13p: 1, aFerP: 1, diasAviso: 30, fgtsSaldo: 2283.6, descontos: [] };
+    const sem = rescSimula(base);
+    const com = rescSimula(Object.assign({}, base, { faltasFer: 22, faltaMin: 573, dsr: 1 }));
+    // a tela
+    document.querySelector('.vtab[data-v="resc"]').click(); await esp(200);
+    document.getElementById('btnRescSim').click(); await esp(200);
+    const sd = document.getElementById('rsSaida'); sd.value = '2026-09-30';
+    const s = document.getElementById('rsEmp'); s.value = 'rf1'; s.dispatchEvent(new Event('change')); await esp(100);
+    const v = id => (document.getElementById(id) || {}).value;
+    const txt = id => ((document.getElementById(id) || {}).textContent || '').replace(/\s+/g, ' ');
+    const tela = { fer: v('rsFaltFer'), mesH: v('rsFaltMes'), dsr: v('rsFaltDsr'), a13: v('rsA13'),
+      ponto: txt('rsFaltasPonto'), dica: txt('rsDicaFaltas'), res: txt('rsResultado') };
+    s.value = 'rf2'; s.dispatchEvent(new Event('change')); await esp(100);
+    const pf = { mesH: v('rsFaltMes'), dsr: v('rsFaltDsr'), fer: v('rsFaltFer') };
+    return { sug, sem, com, tela, pf };
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r).slice(0, 2500), v = (x, k) => x && x.verbas && (x.verbas.find(i => i.k === k) || {}).valor;
+  const d = (x, k) => x && x.descontos && (x.descontos.find(i => i.k === k) || {}).valor;
+  t.ok('sugestão: 22 faltas no período de férias (4 + 17 + 1 do mês da saída; atestado não conta)', !r.erro && r.sug.faltas && r.sug.faltas.fer === 22, J);
+  t.ok('sugestão: julho com 17 faltas não dá avo de 13º (9 → 8)', !r.erro && r.sug.a13 === 8 && r.sug.faltas.perde13.length === 1 && r.sug.faltas.perde13[0] === '2026-07', J);
+  t.ok('sugestão: mês da saída com 9h33 de faltas e atrasos e 1 repouso', !r.erro && r.sug.faltas.min === 573 && r.sug.faltas.dsr === 1, J);
+  t.ok('sem faltas a conta não muda', !r.erro && Math.abs(v(r.sem, 'ferProp') - 2750) < 0.01 && !d(r.sem, 'faltas'), J);
+  // como a contabilidade: falta não corta as férias PROPORCIONAIS (as
+  // vencidas já vêm cortadas do controle de férias)
+  t.ok('faltas não cortam as férias proporcionais nem as do aviso (como a contabilidade)', !r.erro && Math.abs(v(r.com, 'ferProp') - 2750) < 0.01 && Math.abs(v(r.com, 'ferInd') - 275) < 0.01 && Math.abs(v(r.com, 'ferProp13') - 916.67) < 0.01, J);
+  t.ok('mês da saída: desconto de (9h33 + 7h20) × salário ÷ 220 = 253,25', !r.erro && Math.abs(d(r.com, 'faltas') - 253.25) < 0.01, J);
+  t.ok('falta sai da base do INSS e do FGTS', !r.erro && Math.abs(r.com.baseInss - 3046.75) < 0.01 && r.com.fgts.base < r.sem.fgts.base - 250, J);
+  t.ok('tela: campos de faltas preenchidos pelo ponto, sem o campo do período de férias', !r.erro && r.tela.fer === undefined && r.tela.mesH === '09:33' && r.tela.dsr === '1' && r.tela.a13 === '8', J);
+  t.ok('tela: mostra os meses com falta e os meses sem ponto', !r.erro && /mar\/2026/i.test(r.tela.ponto) && /jul\/2026/i.test(r.tela.ponto) && /sem ponto/i.test(r.tela.ponto), J);
+  t.ok('tela: explica o avo perdido, sem corte de férias', !r.erro && /jul\/2026/i.test(r.tela.dica) && !/dias de férias|art\. 130/.test(r.tela.dica), J);
+  t.ok('tela: resultado sem corte de férias e com o desconto das faltas', !r.erro && !/18 dias/.test(r.tela.res) && /Faltas e atrasos/.test(r.tela.res) && /253,25/.test(r.tela.res), J);
+  t.ok('ponto PF: 2 dias de falta na mesma semana = 18h e 1 repouso', !r.erro && r.pf.mesH === '18:00' && r.pf.dsr === '1', J);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
+/* Um cartão-ponto no leiaute do RHID, em PDF de verdade, com texto
+   posicionado (o leitor do sistema acha as colunas pela posição). Dados
+   fictícios. itens: [{x, y, t}] em pontos, origem embaixo à esquerda. */
+function pdfCartaoRhid(nome, itens) {
+  const esc = t => String(t).replace(/\\/g, '\\\\').replace(/\(/g, '\\(').replace(/\)/g, '\\)');
+  const corpo = itens.map(i => 'BT /F1 8 Tf 1 0 0 1 ' + i.x + ' ' + i.y + ' Tm (' + esc(i.t) + ') Tj ET').join('\n');
+  const obj = ['<< /Type /Catalog /Pages 2 0 R >>', '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>',
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>',
+    '<< /Length ' + Buffer.byteLength(corpo, 'latin1') + ' >>\nstream\n' + corpo + '\nendstream'];
+  let pdf = '%PDF-1.4\n'; const off = [];
+  obj.forEach((o, i) => { off.push(Buffer.byteLength(pdf, 'latin1')); pdf += (i + 1) + ' 0 obj\n' + o + '\nendobj\n'; });
+  const x = Buffer.byteLength(pdf, 'latin1');
+  pdf += 'xref\n0 ' + (obj.length + 1) + '\n0000000000 65535 f \n' + off.map(o => String(o).padStart(10, '0') + ' 00000 n \n').join('') +
+    'trailer\n<< /Size ' + (obj.length + 1) + ' /Root 1 0 R >>\nstartxref\n' + x + '\n%%EOF\n';
+  const f = path.join(require('os').tmpdir(), 'rm-testes-recibos', nome + '.pdf');
+  fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, Buffer.from(pdf, 'latin1')); return f;
+}
+
+teste('recibos-simula-rescisao-cartao-pdf', async (b, t) => {
+  // "não seria mais fácil eu gerar o relatório em PDF do mês e o sistema ler
+  // as faltas para a simulação?" -- o cartão do mês da saída ainda não foi
+  // importado na aba PF; agora a própria simulação lê o PDF (individual) e
+  // preenche faltas, repousos, período de férias e o avo do 13º. Não grava
+  // no ponto do mês: o cartão é parcial e o fechamento da contabilidade
+  // continua vindo da aba PF.
+  if (!fs.existsSync(path.join(RAIZ, 'recibos_rm'))) return;
+  const dia = (d, sem, falta) => d + '/10/2026 - ' + sem + ' 07:00-12:00 13:00-17:00' + (falta ? ' FALTA FALTA 1' : ' 07:00 12:00 13:00 17:00');
+  const linhas = [
+    { x: 40, y: 760, t: 'NOME DO FUNCIONÁRIO: GIL TESTE CARTAO' }, { x: 40, y: 748, t: 'CPF DO FUNCIONÁRIO: 111.222.333-44' },
+    { x: 40, y: 736, t: 'DE 01/10/2026 ATÉ 15/10/2026' },
+    { x: 120, y: 695, t: 'PREVISTO' }, { x: 400, y: 700, t: 'DIA' }, { x: 400, y: 690, t: 'FALTA' },
+    { x: 470, y: 700, t: 'FALTA' }, { x: 470, y: 690, t: 'ATRASO' }, { x: 520, y: 690, t: 'ABONO' },
+    { x: 40, y: 640, t: dia('01', 'QUI') }, { x: 40, y: 628, t: dia('02', 'SEX') }, { x: 40, y: 616, t: dia('05', 'SEG') },
+    { x: 40, y: 604, t: dia('06', 'TER', true) }, { x: 40, y: 592, t: dia('07', 'QUA', true) }, { x: 40, y: 580, t: dia('08', 'QUI') },
+    { x: 40, y: 300, t: 'TOTAIS' }, { x: 405, y: 300, t: '2' }, { x: 472, y: 300, t: '18:00' }];
+  const arq = pdfCartaoRhid('cartao_individual_out', linhas);
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'recibos_rm' }, 'index.html', { relogio: '2026-10-15T12:00:00-03:00', fuso: 'America/Sao_Paulo' });
+  let r = {};
+  try {
+    r = await pg.evaluate(async () => {
+      const esp = ms => new Promise(x => setTimeout(x, ms));
+      const l = document.getElementById('loginScreen'); if (l) l.style.setProperty('display', 'none', 'important');
+      state.employees = [{ id: 'rc1', nome: 'GIL TESTE CARTAO', docTipo: 'CPF', doc: '111.222.333-44', status: 'ativo', salario: 3300, dtInicio: '2026-03-02', dtCarteira: '2026-03-02' },
+        { id: 'rc2', nome: 'OUTRO TESTE', docTipo: 'CPF', doc: '999.888.777-66', status: 'ativo', salario: 3000, dtInicio: '2026-03-02', dtCarteira: '2026-03-02' }];
+      state.rhid = {};
+      document.querySelector('.vtab[data-v="resc"]').click(); await esp(200);
+      document.getElementById('btnRescSim').click(); await esp(200);
+      document.getElementById('rsSaida').value = '2026-10-15';
+      const s = document.getElementById('rsEmp'); s.value = 'rc1'; s.dispatchEvent(new Event('change')); await esp(150);
+      const v = id => (document.getElementById(id) || {}).value;
+      return { temBotao: !!document.getElementById('rsRhidFile'), a13: v('rsA13'), mes: v('rsFaltMes') };
+    });
+    if (r.temBotao) { await pg.setInputFiles('#rsRhidFile', arq); await pg.waitForTimeout(2500); }
+    Object.assign(r, await pg.evaluate(async () => {
+      const v = id => (document.getElementById(id) || {}).value, txt = id => ((document.getElementById(id) || {}).innerText || '').replace(/\s+/g, ' ');
+      const depois = { fer: v('rsFaltFer'), mes2: v('rsFaltMes'), dsr: v('rsFaltDsr'), a13d: v('rsA13'), ponto: txt('rsFaltasPonto'), gravou: !!(state.rhid && state.rhid['2026-10']) };
+      // outro funcionário: o cartão é do GIL, não vale para ele
+      const s = document.getElementById('rsEmp'); s.value = 'rc2'; s.dispatchEvent(new Event('change')); await new Promise(x => setTimeout(x, 150));
+      depois.outro = v('rsFaltMes');
+      return depois;
+    }));
+  } catch (e) { r.erro = e.message; }
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  t.ok('a simulação tem o botão para ler o cartão do RHID', r.temBotao === true, J);
+  t.ok('antes: sem ponto de outubro, campos vazios e 13º com 8 avos', !r.erro && r.mes === '' && r.a13 === '8', J);
+  t.ok('lido o PDF: 18:00 de faltas, 1 repouso (2 faltas na mesma semana)', !r.erro && r.mes2 === '18:00' && r.dsr === '1', J);
+  t.ok('outubro com 13 dias trabalhados até a saída: o 13º cai para 7 avos', !r.erro && r.a13d === '7', J);
+  t.ok('o quadro mostra outubro com as 2 faltas, lido do cartão', !r.erro && /out\/2026/.test(r.ponto) && /2 dias de falta/.test(r.ponto) && /cartão/i.test(r.ponto), J);
+  t.ok('não grava o cartão parcial no ponto do mês', !r.erro && r.gravou === false, J);
+  t.ok('o cartão do GIL não vale para outro funcionário', !r.erro && r.outro === '', J);
+  t.ok('sem erro na página', !erros.length, J);
+  await ctx.close();
+});
+
+teste('recibos-simula-rescisao-trct', async (b, t) => {
+  // conferência com um termo de rescisão da contabilidade (experiência
+  // encerrada antes pelo empregado, com insalubridade e faltas no mês):
+  // · a indenização do art. 480 saía sozinha e deixava o líquido negativo;
+  //   a contabilidade não cobra -- agora é opção, desmarcada
+  // · a insalubridade não existia na simulação
+  // · falta na segunda da semana da saída tirava um repouso que nem está no
+  //   saldo (o domingo dela cai depois da saída)
+  if (!fs.existsSync(path.join(RAIZ, 'recibos_rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'recibos_rm' }, 'index.html', { relogio: '2026-10-06T12:00:00-03:00', fuso: 'America/Sao_Paulo' });
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    const l = document.getElementById('loginScreen'); if (l) l.style.setProperty('display', 'none', 'important');
+    const base = { tipo: 'exp_func', aviso: '', admissao: '2026-08-26', saida: '2026-10-06', salario: 2100, salCarteira: 2100,
+      a13: 1, aFer: 1, dVenc: 0, dDobro: 0, a13p: 0, aFerP: 0, diasAviso: 0, diasRestExp: 34, fgtsSaldo: 0, descontos: [] };
+    const sem = rescSimula(base), com480 = rescSimula(Object.assign({}, base, { art480: true }));
+    const ins = rescSimula(Object.assign({}, base, { insalPct: 20 }));
+    // falta na sexta (02/10) e na segunda (05/10); saída na terça 06/10
+    const cartao = { nome: 'TESTE DSR', cpf: '', empId: 'rt1', diasFalta: 2, datasFalta: ['2026-10-02', '2026-10-05'], faltaMin: 1056, repousoMin: 880 };
+    state.employees = [{ id: 'rt1', nome: 'TESTE DSR', docTipo: 'CPF', doc: '', status: 'ativo', salario: 2100, dtInicio: '2026-08-26', dtCarteira: '2026-08-26', insalubridade: 20 }];
+    state.rhid = { '2026-10': { arquivo: 'x.pdf', itens: [cartao] } };
+    const sug = rescSugere(state.employees[0], '2026-10-06', 'exp_func', '');
+    // a tela: tipo experiência pelo empregado
+    document.querySelector('.vtab[data-v="resc"]').click(); await esp(200);
+    document.getElementById('btnRescSim').click(); await esp(200);
+    document.getElementById('rsSaida').value = '2026-10-06';
+    const s = document.getElementById('rsEmp'); s.value = 'rt1'; s.dispatchEvent(new Event('change')); await esp(150);
+    const tp = document.getElementById('rsTipo'); tp.value = 'exp_func'; tp.dispatchEvent(new Event('change')); await esp(150);
+    const cb = document.getElementById('rsArt480');
+    const tela = { temOpcao: !!cb, marcada: cb ? cb.checked : null, insal: (document.getElementById('rsInsal') || {}).value, res: (document.getElementById('rsResultado') || {}).innerText || '' };
+    return { sem, com480, ins, dsr: sug.faltas && sug.faltas.dsr, tela };
+  }).catch(e => ({ erro: e.message }));
+  const d = (x, k) => x && x.descontos && (x.descontos.find(i => i.k === k) || {}).valor, v = (x, k) => x && x.verbas && (x.verbas.find(i => i.k === k) || {}).valor;
+  const J = JSON.stringify(r).slice(0, 2500) + ' ' + erros.join(' | ');
+  t.ok('art. 480 só quando marcado: sem marcar, não desconta', !r.erro && !d(r.sem, 'art480') && d(r.com480, 'art480') > 0, J);
+  t.ok('na tela a opção do art. 480 existe e vem desmarcada', !r.erro && r.tela.temOpcao && r.tela.marcada === false && !/art\. 480/.test(r.tela.res), J);
+  t.ok('insalubridade 20% sobre o mínimo (1.621): 6 dias = 64,84 no saldo', !r.erro && Math.abs(v(r.ins, 'insal') - 64.84) < 0.01, J);
+  t.ok('insalubridade entra na base do 13º e das férias (1/12 de 2.424,20)', !r.erro && Math.abs(v(r.ins, 'dec') - 202.02) < 0.01 && Math.abs(v(r.ins, 'ferProp') - 202.02) < 0.01, J);
+  t.ok('insalubridade vem do cadastro para a tela', !r.erro && r.tela.insal === '20', J);
+  t.ok('repouso só do domingo que cai até a saída: 1, não 2', !r.erro && r.dsr === 1, J);
+  t.ok('sem erro na página', !erros.length, J);
+  await ctx.close();
+});
+
+teste('recibos-simula-rescisao-contabilidade', async (b, t) => {
+  // "simular como a contabilidade": o termo oficial usa a data e o salário
+  // da CARTEIRA; a simulação usa os reais (o que a empresa paga). A chave
+  // troca a conta inteira (avos sugeridos de novo) e mostra a outra ao lado.
+  if (!fs.existsSync(path.join(RAIZ, 'recibos_rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'recibos_rm' }, 'index.html', { relogio: '2026-10-06T12:00:00-03:00', fuso: 'America/Sao_Paulo' });
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    const l = document.getElementById('loginScreen'); if (l) l.style.setProperty('display', 'none', 'important');
+    state.employees = [{ id: 'rk1', nome: 'TESTE CONTAB', docTipo: 'CPF', doc: '', status: 'ativo', salario: 2400, salarioCarteira: 2100,
+      dtInicio: '2026-08-14', dtCarteira: '2026-08-26', insalubridade: 20 }];
+    state.rhid = {};
+    document.querySelector('.vtab[data-v="resc"]').click(); await esp(200);
+    document.getElementById('btnRescSim').click(); await esp(200);
+    document.getElementById('rsSaida').value = '2026-10-06';
+    const s = document.getElementById('rsEmp'); s.value = 'rk1'; s.dispatchEvent(new Event('change')); await esp(150);
+    const tp = document.getElementById('rsTipo'); tp.value = 'exp_func'; tp.dispatchEvent(new Event('change')); await esp(150);
+    const v = id => (document.getElementById(id) || {}).value, txt = () => ((document.getElementById('rsResultado') || {}).innerText || '').replace(/\s+/g, ' ');
+    const emp = { a13: v('rsA13'), liq: rsRes && rsRes.liquido, res: txt() };
+    const bt = document.querySelector('[data-rs-modo="contab"]'); if (bt) bt.click(); await esp(200);
+    const con = { a13: v('rsA13'), liq: rsRes && rsRes.liquido, res: txt(), on: !!(bt && bt.classList.contains('on')), adm: v('rsAdm'), sal: v('rsSal') };
+    // a mesma conta feita à mão, com os dados da carteira
+    const mao = rescSimula({ tipo: 'exp_func', aviso: '', admissao: '2026-08-26', saida: '2026-10-06', salario: 2100, salCarteira: 2100, insalPct: 20,
+      a13: 1, aFer: 1, a13p: 0, aFerP: 0, diasAviso: 0, dVenc: 0, dDobro: 0, diasRestExp: 0, fgtsSaldo: 0, descontos: [] }).liquido;
+    const vb = document.querySelector('[data-rs-modo="empresa"]'); if (vb) vb.click(); await esp(200);
+    const volta = { a13: v('rsA13'), liq: rsRes && rsRes.liquido };
+    return { temChave: !!bt, emp, con, mao, volta };
+  }).catch(e => ({ erro: e.message }));
+  const brl = n => (n || 0).toFixed(2).replace('.', ',').replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+  const J = JSON.stringify(r).slice(0, 2500) + ' ' + erros.join(' | ');
+  t.ok('a simulação tem a chave "como a contabilidade"', !r.erro && r.temChave, J);
+  t.ok('empresa: contratação 14/08 dá 2 avos', !r.erro && r.emp.a13 === '2', J);
+  t.ok('contabilidade: data da carteira (26/08) dá 1 avo, salário da carteira, e o líquido é o da conta à mão', !r.erro && r.con.on && r.con.a13 === '1' && Math.abs(r.con.liq - r.mao) < 0.005, J);
+  t.ok('diz no resultado que é a conta da contabilidade, pela carteira (data e salário)', !r.erro && /conta da contabilidade/i.test(r.con.res) && /26\/08\/2026/.test(r.con.res) && /2\.100,00/.test(r.con.res), J);
+  t.ok('mostra a outra conta ao lado', !r.erro && r.con.liq !== r.emp.liq && /quanto a empresa paga/i.test(r.con.res) && r.con.res.includes(brl(r.emp.liq)) && /como a contabilidade/i.test(r.emp.res) && r.emp.res.includes(brl(r.con.liq)), J);
+  t.ok('os campos da tela não são apagados (contratação e salário reais ficam)', !r.erro && r.con.adm === '2026-08-14' && r.con.sal === '2.400,00', J);
+  t.ok('voltando para a empresa, a conta volta igual', !r.erro && r.volta.a13 === '2' && Math.abs(r.volta.liq - r.emp.liq) < 0.005, J);
+  t.ok('sem erro na página', !erros.length, J);
+  await ctx.close();
+});
+
+teste('recibos-funcionarios-colunas', async (b, t) => {
+  // lista de funcionários em colunas: cada dado no seu lugar, em vez de tudo
+  // amontoado embaixo do nome (função, adm., carteira, chip, aniv., banco,
+  // telefone). No celular continua virando cartão com o rótulo de cada campo
+  if (!fs.existsSync(path.join(RAIZ, 'recibos_rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'recibos_rm' }, 'index.html', { relogio: '2026-09-30T12:00:00-03:00', fuso: 'America/Sao_Paulo' });
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    const l = document.getElementById('loginScreen'); if (l) l.style.setProperty('display', 'none', 'important');
+    state.employees = [{ id: 'fc1', nome: 'JOANA TESTE COLUNA', docTipo: 'CPF', doc: '000.000.000-00', status: 'ativo', salario: 2500, funcao: 'Auxiliar de produção',
+      dtInicio: '2026-08-10', dtCarteira: '2026-08-10', nascimento: '1990-06-09', banco: 'Sicredi', telefone: '51999990000' }];
+    document.querySelector('.vtab[data-v="func"]').click(); await esp(150);
+    renderEmps(); await esp(50);
+    const th = [...document.querySelectorAll('#empBody')[0].closest('table').querySelectorAll('thead th')].map(x => x.textContent.trim());
+    const tr = document.querySelector('#empBody tr');
+    const cel = rot => { const td = tr.querySelector('td[data-label="' + rot + '"]'); return td ? td.textContent.replace(/\s+/g, ' ').trim() : null; };
+    const nomeTd = tr.querySelector('td[data-label="Funcionário"]');
+    const larg = document.querySelector('#empBody').closest('.tbl-wrap');
+    return { th, adm: cel('Admissão'), cart: cel('Carteira'), aniv: cel('Aniv.'), banco: cel('Banco'), tel: cel('Telefone'), func: cel('Funcionário'),
+      nomeSemData: !/\d{2}\/\d{2}\/\d{4}/.test(nomeTd.textContent), rola: !larg.clientWidth || larg.scrollWidth > larg.clientWidth + 2, largura: larg.clientWidth };
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r);
+  t.ok('cabeçalho com as colunas', !r.erro && ['Funcionário', 'Admissão', 'Carteira', 'Aniv.', 'Banco', 'Telefone', 'CPF', 'Salário fixo', 'Situação'].every(c => r.th.includes(c)), J);
+  t.ok('cada dado na sua coluna', !r.erro && r.adm === '10/08/2026' && /^10\/08\/2026/.test(r.cart) && /contrato/.test(r.cart) && r.aniv === '09/06' && /Sicredi/.test(r.banco) && /99999-0000/.test(r.tel), J);
+  t.ok('embaixo do nome fica só a função', !r.erro && /Auxiliar de produção/.test(r.func) && r.nomeSemData && !/Sicredi/.test(r.func), J);
+  t.ok('cabe na tela sem rolar para o lado', !r.erro && !r.rola, J);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
+teste('recibos-pf-resumo-escolher', async (b, t) => {
+  // "Resumo contabilidade" gerava direto com todos os PF. Agora abre a
+  // seleção (todos marcados) e só os marcados entram: nas folhas e no resumo
+  if (!fs.existsSync(path.join(RAIZ, 'recibos_rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'recibos_rm' }, 'index.html', { relogio: '2026-10-01T12:00:00-03:00', fuso: 'America/Sao_Paulo' });
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    const l = document.getElementById('loginScreen'); if (l) l.style.setProperty('display', 'none', 'important');
+    state.employees = [
+      { id: 'pa', nome: 'ALFA TESTE PF', status: 'ativo', metodo: 'pf', salario: 2000, dtInicio: '2026-01-05', funcao: 'Pintor' },
+      { id: 'pb', nome: 'BETA TESTE PF', status: 'ativo', metodo: 'pf', salario: 2100, dtInicio: '2026-01-05', funcao: 'Soldador' }];
+    document.querySelector('.vtab[data-v="pf"]').click(); await esp(150);
+    const m = document.getElementById('pfMes'); m.value = '2026-09'; m.dispatchEvent(new Event('change')); await esp(100);
+    document.getElementById('pfRelatorio').click(); await esp(150);
+    const aberto = document.getElementById('pfRelModal').classList.contains('open');
+    const cx = document.querySelector('#pfRelBody [data-pfrel="pb"]');
+    if (cx) { cx.checked = false; cx.dispatchEvent(new Event('change')); }
+    document.getElementById('pfRelGerar').click(); await esp(300);
+    const folhas = [...document.querySelectorAll('#printScroll .folha')];
+    const resumo = (document.querySelector('#printScroll .pf-folha-resumo') || {}).textContent || '';
+    return { aberto, folhas: folhas.length, resumo: resumo.replace(/\s+/g, ' ').slice(0, 900),
+      excelEscolhe: (() => { closeAll(); document.getElementById('pfExcel').click(); return document.getElementById('pfRelModal').classList.contains('open'); })() };
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r);
+  t.ok('o botão abre a seleção dos PF', !r.erro && r.aberto, J);
+  t.ok('só o PF marcado entra nas folhas e no resumo', !r.erro && r.folhas === 2 && /Alfa Teste/i.test(r.resumo) && !/Beta Teste/i.test(r.resumo), J);
+  t.ok('o Excel da contabilidade usa a mesma seleção', !r.erro && r.excelEscolhe, J);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
+teste('recibos-pf-fechar-selecao-propria', async (b, t) => {
+  // "Já fechei o mês PF e continua pedindo para fechar o ponto": a seleção do
+  // Resumo contabilidade era a mesma do Fechar mês. Quem foi tirado do resumo
+  // vinha desmarcado no Fechar mês, ficava com o ponto aberto e o passo
+  // "Fechar o ponto PF" nunca ficava verde -- sem dizer de quem era a pendência
+  if (!fs.existsSync(path.join(RAIZ, 'recibos_rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'recibos_rm' }, 'index.html', { relogio: '2026-10-01T12:00:00-03:00', fuso: 'America/Sao_Paulo' });
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    const l = document.getElementById('loginScreen'); if (l) l.style.setProperty('display', 'none', 'important');
+    window.confirm = () => true;
+    state.pfPontos = {};
+    state.employees = [
+      { id: 'pa', nome: 'ALFA TESTE PF', status: 'ativo', metodo: 'pf', salario: 2000, dtInicio: '2026-01-05', funcao: 'Pintor' },
+      { id: 'pb', nome: 'BETA TESTE PF', status: 'ativo', metodo: 'pf', salario: 2100, dtInicio: '2026-09-18', funcao: 'Soldador' }];
+    document.querySelector('.vtab[data-v="pf"]').click(); await esp(150);
+    const m = document.getElementById('pfMes'); m.value = '2026-09'; m.dispatchEvent(new Event('change')); await esp(100);
+    const passo = () => [...document.querySelectorAll('#pfFechaPassos li')].find(li => /Fechar o ponto PF/.test(li.textContent));
+    const pendNome = (passo() || {}).textContent || '';
+    // tira o Beta do resumo
+    document.getElementById('pfRelatorio').click(); await esp(150);
+    const cx = document.querySelector('#pfRelBody [data-pfrel="pb"]');
+    if (cx) { cx.checked = false; cx.dispatchEvent(new Event('change')); }
+    document.getElementById('pfRelGerar').click(); await esp(300);
+    closeAll(); const po = document.getElementById('printOv'); if (po) po.classList.remove('open');
+    // Fechar mês: tem de vir com todos marcados
+    document.getElementById('pfFechar').click(); await esp(150);
+    const betaMarcado = !!(document.querySelector('#pfRelBody [data-pfrel="pb"]') || {}).checked;
+    const linhaBeta = ((document.querySelector('#pfRelBody [data-pfrel="pb"]') || {}).closest ? document.querySelector('#pfRelBody [data-pfrel="pb"]').closest('tr').textContent : '');
+    document.getElementById('pfRelGerar').click(); await esp(200);
+    const p2 = passo();
+    // e o resumo continua sem o Beta
+    document.getElementById('pfRelatorio').click(); await esp(150);
+    const betaNoResumo = !!(document.querySelector('#pfRelBody [data-pfrel="pb"]') || {}).checked;
+    closeAll();
+    return { pendNome: pendNome.replace(/\s+/g, ' '), betaMarcado, linhaBeta: linhaBeta.replace(/\s+/g, ' '),
+      fechado: !!p2 && p2.classList.contains('feito'), passoTxt: p2 ? p2.textContent.replace(/\s+/g, ' ') : '', betaNoResumo };
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r);
+  t.ok('o passo pendente diz de quem é a pendência', !r.erro && /Alfa Teste/i.test(r.pendNome) && /Beta Teste/i.test(r.pendNome), J);
+  t.ok('Fechar mês abre com todos marcados, mesmo com alguém fora do resumo', !r.erro && r.betaMarcado, J);
+  t.ok('a seleção do Fechar mês mostra os dias pendentes de cada um', !r.erro && /\d+ dias? pendentes?/.test(r.linhaBeta), J);
+  t.ok('depois de fechar, o passo "Fechar o ponto PF" fica verde', !r.erro && r.fechado, J);
+  t.ok('o resumo continua lembrando quem foi tirado', !r.erro && r.betaNoResumo === false, J);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
+teste('recibos-pf-excel-profissional', async (b, t) => {
+  // Excel da contabilidade: o logo saía achatado (900x177 desenhado em
+  // 120x46) e a planilha era só uma tabela solta. Agora: logo na proporção,
+  // grade em todas as células, grupos de colunas, linha de totais e o
+  // cabeçalho repetido na impressão
+  if (!fs.existsSync(path.join(RAIZ, 'recibos_rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'recibos_rm' }, 'index.html', { relogio: '2026-10-01T12:00:00-03:00', fuso: 'America/Sao_Paulo' });
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    const l = document.getElementById('loginScreen'); if (l) l.style.setProperty('display', 'none', 'important');
+    state.employees = [
+      { id: 'pa', nome: 'ALFA TESTE PF', status: 'ativo', metodo: 'pf', salario: 2000, dtInicio: '2026-01-05', funcao: 'Pintor' },
+      { id: 'pb', nome: 'BETA TESTE PF', status: 'ativo', metodo: 'pf', salario: 2100, dtInicio: '2026-01-05', funcao: 'Soldador' }];
+    document.querySelector('.vtab[data-v="pf"]').click(); await esp(150);
+    const m = document.getElementById('pfMes'); m.value = '2026-09'; m.dispatchEvent(new Event('change')); await esp(100);
+    const baixados = [], clk = HTMLAnchorElement.prototype.click;
+    HTMLAnchorElement.prototype.click = function () { if (this.download) baixados.push({ nome: this.download, href: this.href }); else clk.call(this); };
+    pfExcel(); for (let i = 0; i < 60 && !baixados.length; i++) await esp(100);
+    HTMLAnchorElement.prototype.click = clk;
+    if (!baixados.length) return { erro: 'o Excel não foi gerado' };
+    const buf = await (await fetch(baixados[0].href)).arrayBuffer();
+    const wb = new ExcelJS.Workbook(); await wb.xlsx.load(buf);
+    const proporcao = async ws => {
+      const im = ws.getImages()[0]; if (!im) return null;
+      const bmp = await createImageBitmap(new Blob([wb.getImage(im.imageId).buffer]));
+      const ext = im.range.ext || {}; return { natural: bmp.width / bmp.height, desenho: ext.width / ext.height, alt: ext.height };
+    };
+    const ws = wb.worksheets[0], ws2 = wb.worksheets[1];
+    const textos = []; ws.eachRow(row => row.eachCell(c => { if (typeof c.value === 'string') textos.push(c.value); }));
+    let totalRow = null; ws.eachRow((row, n) => { if (/^TOTAL/i.test(String(row.getCell(1).value || ''))) totalRow = n; });
+    const tot = totalRow ? ws.getRow(totalRow).getCell(14).value : null;
+    let primeira = null; ws.eachRow((row, n) => { if (!primeira && /Alfa Teste/i.test(String(row.getCell(1).value || ''))) primeira = n; });
+    const fonteNome = primeira ? (ws.getRow(primeira).getCell(1).font || {}).size : 0, fonteNum = primeira ? (ws.getRow(primeira).getCell(4).font || {}).size : 0;
+    const bordas = primeira ? [1, 5, 11, 14].every(c => { const bd = ws.getRow(primeira).getCell(c).border || {}; return bd.top && bd.bottom && bd.left && bd.right; }) : false;
+    return { nome: baixados[0].nome, p1: await proporcao(ws), p2: ws2 ? await proporcao(ws2) : null, textos: [...new Set(textos)].join(' | ').slice(0, 1500),
+      totalFormula: tot && tot.formula ? tot.formula : '', bordas, fonteNome, fonteNum, titulos: ws.pageSetup.printTitlesRow || '', titulos2: ws2 ? ws2.pageSetup.printTitlesRow || '' : '' };
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r).slice(0, 1400);
+  const certo = p => p && Math.abs(p.desenho / p.natural - 1) < 0.04;
+  t.ok('logo na proporção certa (resumo e folha de cada PF)', !r.erro && certo(r.p1) && certo(r.p2), J);
+  t.ok('logo grande (pelo menos 40 px de altura no resumo) e letra de 11 pt ou mais nos nomes e números', !r.erro && r.p1.alt >= 40 && r.p2.alt >= 36 && r.fonteNome >= 11 && r.fonteNum >= 11, J);
+  t.ok('colunas agrupadas (proventos, horas, descontos)', !r.erro && /Proventos/i.test(r.textos) && /Horas/i.test(r.textos) && /Descontos/i.test(r.textos), J);
+  t.ok('linha de totais com fórmula', !r.erro && /SUM\(N\d+:N\d+\)/.test(r.totalFormula), J);
+  t.ok('grade em todas as células e cabeçalho repetido na impressão', !r.erro && r.bordas && /\d+:\d+/.test(r.titulos) && /\d+:\d+/.test(r.titulos2), J);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
+teste('recibos-isento-inss', async (b, t) => {
+  // funcionário em que a RM não desconta INSS: marca no cadastro, e a
+  // isenção sai sozinha na observação do recibo de pagamento e nos papéis
+  // da contabilidade (relatório de funcionários, relatório completo,
+  // resumo do ponto PF e o Excel)
+  if (!fs.existsSync(path.join(RAIZ, 'recibos_rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'recibos_rm' }, 'index.html', { relogio: '2026-10-01T12:00:00-03:00', fuso: 'America/Sao_Paulo' });
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    const l = document.getElementById('loginScreen'); if (l) l.style.setProperty('display', 'none', 'important');
+    window.confirm = () => true;
+    state.employees = [
+      { id: 'i1', nome: 'IVO TESTE ISENTO', docTipo: 'CPF', doc: '', status: 'ativo', metodo: 'pf', salario: 2000, dtInicio: '2026-01-05', funcao: 'Pintor', historicoSalario: [], historicoFuncao: [] },
+      { id: 'i2', nome: 'JOAO TESTE NORMAL', docTipo: 'CPF', doc: '', status: 'ativo', metodo: 'pf', salario: 2100, dtInicio: '2026-01-05', funcao: 'Soldador', historicoSalario: [], historicoFuncao: [] }];
+    openEmp('i1'); await esp(100);
+    const cx = document.getElementById('mIsentoInss'); if (!cx) return { erro: 'sem a opção no cadastro' };
+    cx.checked = true; saveEmp(); await esp(100);
+    const e = state.employees.find(x => x.id === 'i1');
+    const naNuvem = (empsToMap().i1 || {}).isentoINSS;
+    openEmp('i1'); await esp(80); const volta = document.getElementById('mIsentoInss').checked; closeAll();
+    // recibo de pagamento
+    RCTX.tipo = 'pagamento';
+    const rec1 = reciboHTML(e, 1), rec2 = reciboHTML(state.employees[1], 2);
+    // resumo da contabilidade (PF)
+    const res = pfResumoContabilHTML(state.employees, '2026-09');
+    return { marcado: e.isentoINSS === true, naNuvem, volta, rec1: /Isento de INSS/i.test(rec1), rec2: /Isento de INSS/i.test(rec2),
+      resumo: (res.match(/Ivo Teste Isento[\s\S]{0,1600}?<\/tr>/i) || [''])[0].replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' '),
+      resumo2: (res.match(/Joao Teste Normal[\s\S]{0,1600}?<\/tr>/i) || [''])[0].replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ') };
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r).slice(0, 1200);
+  t.ok('opção "Isento de INSS" no cadastro: grava, volta e vai para a nuvem', !r.erro && r.marcado && r.naNuvem === true && r.volta, J);
+  t.ok('sai na observação do recibo de pagamento (só de quem é isento)', !r.erro && r.rec1 && !r.rec2, J);
+  t.ok('resumo da contabilidade marca a isenção na coluna INSS', !r.erro && /isento/i.test(r.resumo) && !/isento/i.test(r.resumo2), J);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
+teste('recibos-contabil-funcao-insalubridade', async (b, t) => {
+  // Relatórios da contabilidade (Funcionários e salários; resumo do ponto PF
+  // em PDF e em Excel) precisam do início da contratação e da função, e do
+  // percentual de insalubridade -- campo novo do cadastro, marcado à mão
+  if (!fs.existsSync(path.join(RAIZ, 'recibos_rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'recibos_rm' }, 'index.html', { relogio: '2026-10-01T12:00:00-03:00', fuso: 'America/Sao_Paulo' });
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    const l = document.getElementById('loginScreen'); if (l) l.style.setProperty('display', 'none', 'important');
+    window.confirm = () => true;
+    state.employees = [
+      { id: 'n1', nome: 'NANA TESTE INSALUBRE', docTipo: 'CPF', doc: '', status: 'ativo', metodo: 'pf', salario: 2000, dtInicio: '2026-01-05', funcao: 'Pintor', historicoSalario: [], historicoFuncao: [] },
+      { id: 'n2', nome: 'OTO TESTE NORMAL', docTipo: 'CPF', doc: '', status: 'ativo', metodo: 'pf', salario: 2100, dtInicio: '2026-02-09', funcao: 'Soldador', historicoSalario: [], historicoFuncao: [] }];
+    openEmp('n1'); await esp(100);
+    const cx = document.getElementById('mInsalub'); if (!cx) return { erro: 'sem o campo de insalubridade no cadastro' };
+    cx.value = '20'; saveEmp(); await esp(100);
+    const e = state.employees.find(x => x.id === 'n1');
+    const naNuvem = (empsToMap().n1 || {}).insalubridade;
+    openEmp('n1'); await esp(80); const volta = document.getElementById('mInsalub').value; closeAll();
+    // relatório de funcionários e salários
+    let cap = ''; const g0 = window.gerarPDF; window.gerarPDF = (css, html) => { cap = html; };
+    const ca = document.getElementById('repFuncComAdiant'); if (ca) ca.checked = false;
+    exportFuncionariosSalariosPDF(); window.gerarPDF = g0;
+    const cab = ((cap.match(/<thead>[\s\S]*?<\/thead>/) || [''])[0]).replace(/<[^>]+>/g, '|').replace(/\|+/g, '|');
+    const linFunc = (cap.match(/Nana Teste Insalubre[\s\S]*?<\/tr>/i) || [''])[0].replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
+    // resumo PF (PDF)
+    const res = pfResumoContabilHTML(state.employees, '2026-09');
+    const cabPF = ((res.match(/<thead>[\s\S]*?<\/thead>/) || [''])[0]).replace(/<[^>]+>/g, '|').replace(/\|+/g, '|');
+    const linPF = (res.match(/Nana Teste Insalubre[\s\S]*?<\/tr>/i) || [''])[0].replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
+    // Excel
+    document.querySelector('.vtab[data-v="pf"]').click(); await esp(150);
+    const m = document.getElementById('pfMes'); m.value = '2026-09'; m.dispatchEvent(new Event('change')); await esp(100);
+    const baixados = [], clk = HTMLAnchorElement.prototype.click;
+    HTMLAnchorElement.prototype.click = function () { if (this.download) baixados.push(this.href); else clk.call(this); };
+    pfExcel(); for (let i = 0; i < 60 && !baixados.length; i++) await esp(100);
+    HTMLAnchorElement.prototype.click = clk;
+    if (!baixados.length) return { erro: 'o Excel não foi gerado' };
+    const wb = new ExcelJS.Workbook(); await wb.xlsx.load(await (await fetch(baixados[0])).arrayBuffer());
+    const ws = wb.worksheets[0];
+    const txt = v => v == null ? '' : (typeof v === 'object' ? (v.richText ? v.richText.map(x => x.text).join('') : (v.result != null ? v.result : (v instanceof Date ? v.toISOString().slice(0, 10) : JSON.stringify(v)))) : v);
+    const cabX = ws.getRow(6).values.slice(1).map(txt);
+    let linX = null, totX = null;
+    ws.eachRow((row, n) => { const a = String(txt(row.getCell(1).value)); if (/Nana Teste Insalubre/i.test(a)) linX = row.values.slice(1).map(txt); });
+    // o Total continua certo depois das colunas novas
+    const iTot = cabX.indexOf('Total'); ws.eachRow((row, n) => { if (/Nana Teste Insalubre/i.test(String(txt(row.getCell(1).value)))) totX = row.getCell(iTot + 1).value; });
+    return { naNuvem, volta, ins: e.insalubridade, cab, linFunc, cabPF, linPF, cabX, linX, totF: totX && totX.formula, totR: totX && totX.result };
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r).slice(0, 1500);
+  t.ok('campo "Insalubridade (%)" no cadastro: grava, volta e vai para a nuvem', !r.erro && r.ins === 20 && r.naNuvem === 20 && r.volta === '20', J);
+  t.ok('relatório de funcionários: colunas Início da contratação, Função e Insalubridade', !r.erro && /Início/i.test(r.cab) && /Função/.test(r.cab) && /Insalub/i.test(r.cab) && /05\/01\/2026/.test(r.linFunc) && /Pintor/.test(r.linFunc) && /20%/.test(r.linFunc), J);
+  t.ok('resumo PF (PDF): início, função e insalubridade', !r.erro && /Insalub/i.test(r.cabPF) && /05\/01\/2026/.test(r.linPF) && /Pintor/.test(r.linPF) && /20%/.test(r.linPF), J);
+  t.ok('Excel: colunas Início, Função e Insalubridade', !r.erro && r.cabX.includes('Função') && r.cabX.some(x => /Início/.test(x)) && r.cabX.some(x => /Insalub/.test(x)) && r.linX && r.linX.includes('Pintor') && r.linX.some(x => /2026-01-05|05\/01\/2026/.test(String(x))) && r.linX.some(x => x === 0.2 || /20%/.test(String(x))), J);
+  t.ok('Excel: o Total continua sendo a fórmula certa', !r.erro && r.totF && /-K\d+|-[A-Z]+\d+/.test(r.totF) && typeof r.totR === 'number', J);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
+teste('recibos-insalub-por-funcao', async (b, t) => {
+  // Insalubridade definida na FUNÇÃO (aba Empresa): ao preencher, pergunta e
+  // aplica em todos os cadastros com aquela função; no cadastro, escolher a
+  // função já traz o percentual dela; renomear a função leva o percentual junto
+  if (!fs.existsSync(path.join(RAIZ, 'recibos_rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'recibos_rm' });
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    const l = document.getElementById('loginScreen'); if (l) l.style.setProperty('display', 'none', 'important');
+    window.confirm = () => true;
+    state.cfg.funcoes = ['Pintor', 'Soldador', 'Auxiliar de montagem de estruturas metálicas'];
+    state.employees = [
+      { id: 'q1', nome: 'QUIM TESTE UM', status: 'ativo', metodo: 'pf', salario: 1, dtInicio: '2026-01-05', funcao: 'Pintor' },
+      { id: 'q2', nome: 'RUI TESTE DOIS', status: 'ativo', metodo: 'pf', salario: 1, dtInicio: '2026-01-05', funcao: 'Pintor' },
+      { id: 'q3', nome: 'SAL TESTE TRES', status: 'ativo', metodo: 'pf', salario: 1, dtInicio: '2026-01-05', funcao: 'Soldador' }];
+    renderFuncoes(); await esp(30);
+    const linha = nome => [...document.querySelectorAll('#funcoesList .cfg-l')].find(x => x.querySelector('.cfg-n').textContent === nome);
+    const inp = linha('Pintor') && linha('Pintor').querySelector('[data-insf]');
+    if (!inp) return { erro: 'sem o campo de insalubridade na função' };
+    // o nome da função aparece inteiro (era cortado com "...")
+    const lg = linha('Auxiliar de montagem de estruturas metálicas'), nm = lg && lg.querySelector('.cfg-n');
+    const cortado = !nm || nm.scrollWidth > nm.clientWidth + 1 || getComputedStyle(nm).textOverflow === 'ellipsis';
+    inp.value = '20'; inp.dispatchEvent(new Event('change')); await esp(30);
+    const aplicados = state.employees.map(e => Number(e.insalubridade) || 0);
+    // novo cadastro: escolher a função traz o percentual
+    openEmp(null); await esp(80);
+    const sel = document.getElementById('mFuncao'); sel.value = 'Pintor'; sel.dispatchEvent(new Event('change'));
+    const noCadastro = document.getElementById('mInsalub').value;
+    sel.value = 'Soldador'; sel.dispatchEvent(new Event('change'));
+    const trocou = document.getElementById('mInsalub').value;
+    closeAll();
+    // renomear leva junto
+    aplicarRenomeFuncao('Pintor', 'Pintor de estruturas'); await esp(30);
+    renderFuncoes();
+    const depois = linha('Pintor De Estruturas') || linha('Pintor de estruturas');
+    return { cortado, aplicados, noCadastro, trocou, renomeado: depois ? depois.querySelector('[data-insf]').value : null };
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r);
+  t.ok('insalubridade da função vai para todos os cadastros com ela (e só eles)', !r.erro && JSON.stringify(r.aplicados) === '[20,20,0]', J);
+  t.ok('no cadastro, escolher a função preenche a insalubridade', !r.erro && r.noCadastro === '20' && r.trocou === '', J);
+  t.ok('renomear a função mantém o percentual', !r.erro && r.renomeado === '20', J);
+  t.ok('o nome da função aparece inteiro, sem cortar', !r.erro && r.cortado === false, J);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
+teste('recibos-pf-excel-valores', async (b, t) => {
+  // Excel da contabilidade: o Total era uma fórmula só, e na planilha não se
+  // via o que o formava. Agora tem o valor da hora e uma coluna em R$ para o
+  // desconto das faltas e cada tipo de extra -- e o Total é a soma delas.
+  // A coluna Função cabe o nome inteiro.
+  if (!fs.existsSync(path.join(RAIZ, 'recibos_rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'recibos_rm' }, 'index.html', { relogio: '2026-10-01T12:00:00-03:00', fuso: 'America/Sao_Paulo' });
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    const l = document.getElementById('loginScreen'); if (l) l.style.setProperty('display', 'none', 'important');
+    state.employees = [
+      { id: 'va', nome: 'VALDO TESTE EXTRA', status: 'ativo', metodo: 'pf', salario: 2200, dtInicio: '2026-01-05', funcao: 'Montador de estruturas metálicas pesadas' }];
+    state.pfPontos = {};
+    const reg = (iso, o) => { const m = pfMesReg('va', '2026-09', true); m[iso] = Object.assign({ m1: '07:00', m2: '12:00', t1: '13:00', t2: '17:00', s: 'trabalhado' }, o || {}); };
+    pfMesDatas('2026-09').forEach(d => { if (d.getDay() === 0 || d.getDay() === 6) return; const iso = pfISO(d);
+      reg(iso, d.getDate() === 15 ? { m1: '', m2: '', t1: '', t2: '', s: 'falta' } : d.getDate() === 10 ? { t2: '19:00' } : {}); });
+    document.querySelector('.vtab[data-v="pf"]').click(); await esp(150);
+    const m = document.getElementById('pfMes'); m.value = '2026-09'; m.dispatchEvent(new Event('change')); await esp(100);
+    const dados = pfDadosContabilidade('2026-09'), d = dados.find(x => x.e && x.e.id === 'va');
+    const baixados = [], clk = HTMLAnchorElement.prototype.click;
+    HTMLAnchorElement.prototype.click = function () { if (this.download) baixados.push(this.href); else clk.call(this); };
+    pfExcel(); for (let i = 0; i < 60 && !baixados.length; i++) await esp(100);
+    HTMLAnchorElement.prototype.click = clk;
+    if (!baixados.length) return { erro: 'o Excel não foi gerado' };
+    const wb = new ExcelJS.Workbook(); await wb.xlsx.load(await (await fetch(baixados[0])).arrayBuffer());
+    const ws = wb.worksheets[0];
+    const val = v => v == null ? null : (typeof v === 'object' && 'result' in v ? v.result : v);
+    const cab = ws.getRow(6).values.slice(1).map(x => String(x || ''));
+    const col = re => cab.findIndex(x => re.test(x)) + 1;
+    let row = null; ws.eachRow((rw, n) => { if (/Valdo Teste Extra/i.test(String(rw.getCell(1).value))) row = rw; });
+    if (!row) return { erro: 'linha não achada', cab };
+    const g = re => { const c = col(re); return c ? { v: val(row.getCell(c).value), f: (row.getCell(c).value || {}).formula || '' } : null; };
+    const out = { cab, hora: g(/^Valor da hora/), desc: g(/^Desconto faltas/), v50: g(/^Valor extra 50/), v100: g(/^Valor extra 100/), vnot: g(/^Valor extra noturna/),
+      sal: g(/^Salário proporcional/), ad: g(/^Adiantamento/), tot: g(/^Total/), esperado: pfValorTotalFolha(d), falta: d.falta, repouso: d.repouso, e50: d.extra50,
+      larguraFuncao: ws.getColumn(col(/^Função$/)).width, horaEsperada: (Number(d.salMensal) || Number(d.sal)) / 220 };
+    return out;
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r).slice(0, 1400);
+  const perto = (a, b) => typeof a === 'number' && Math.abs(a - b) < 0.02;
+  t.ok('colunas em R$: valor da hora, desconto faltas e cada extra', !r.erro && r.hora && r.desc && r.v50 && r.v100 && r.vnot, J);
+  t.ok('o valor da hora é o salário ÷ 220', !r.erro && r.hora && perto(r.hora.v, r.horaEsperada), J);
+  t.ok('desconto das faltas = hora × (falta + repouso) e extra 50% = hora × 1,5 × horas', !r.erro && r.desc && perto(r.desc.v, r.horaEsperada * (r.falta + r.repouso) / 60) && perto(r.v50.v, r.horaEsperada * 1.5 * r.e50 / 60) && r.desc.v > 0 && r.v50.v > 0, J);
+  t.ok('o Total é a soma das colunas (salário − adiantamento − faltas + extras) e bate com o sistema', !r.erro && r.tot && perto(r.tot.v, r.esperado) && /-[A-Z]+\d+\+[A-Z]+\d+/.test(r.tot.f.replace(/\s/g, '')), J);
+  t.ok('a coluna Função cabe o nome inteiro', !r.erro && r.larguraFuncao >= 'Montador de estruturas metálicas pesadas'.length, J);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
+teste('recibos-pf-pdf-valores', async (b, t) => {
+  // Resumo da contabilidade em PDF: além das horas, o valor em R$ de cada
+  // uma (desconto das faltas e repouso, extras) e o valor da hora, como no Excel
+  if (!fs.existsSync(path.join(RAIZ, 'recibos_rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'recibos_rm' }, 'index.html', { relogio: '2026-10-01T12:00:00-03:00', fuso: 'America/Sao_Paulo' });
+  const r = await pg.evaluate(async () => {
+    const l = document.getElementById('loginScreen'); if (l) l.style.setProperty('display', 'none', 'important');
+    state.employees = [{ id: 'vb', nome: 'VERA TESTE VALOR', status: 'ativo', metodo: 'pf', salario: 2200, dtInicio: '2026-01-05', funcao: 'Pintor' }];
+    state.pfPontos = {};
+    const reg = (iso, o) => { const m = pfMesReg('vb', '2026-09', true); m[iso] = Object.assign({ m1: '07:00', m2: '12:00', t1: '13:00', t2: '17:00', s: 'trabalhado' }, o || {}); };
+    pfMesDatas('2026-09').forEach(d => { if (d.getDay() === 0 || d.getDay() === 6) return; const iso = pfISO(d);
+      reg(iso, d.getDate() === 15 ? { m1: '', m2: '', t1: '', t2: '', s: 'falta' } : d.getDate() === 10 ? { t2: '19:00' } : {}); });
+    const d = pfDadosContabilidade('2026-09').find(x => x.e && x.e.id === 'vb');
+    const hora = (Number(d.salMensal) || Number(d.sal)) / 220;
+    const html = pfResumoContabilHTML(state.employees, '2026-09');
+    const linha = (html.match(/Vera Teste Valor[\s\S]*?<\/tr>/i) || [''])[0].replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
+    const brl = v => v.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    return { linha, hora: brl(hora), falta: brl(hora * d.falta / 60), repouso: brl(hora * d.repouso / 60), e50: brl(hora * 1.5 * d.extra50 / 60) };
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r);
+  t.ok('o valor da hora aparece', !r.erro && r.linha.includes(r.hora), J);
+  t.ok('desconto da falta e do repouso em R$', !r.erro && r.linha.includes(r.falta) && r.linha.includes(r.repouso), J);
+  t.ok('extra 50% em R$', !r.erro && r.linha.includes(r.e50), J);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
+teste('recibos-pf-fim-semana-feriado', async (b, t) => {
+  // folha de ponto PF: sábado/domingo em laranja claro, feriado em azul
+  // claro com o nome do feriado -- 12/10 saía como linha normal
+  if (!fs.existsSync(path.join(RAIZ, 'recibos_rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'recibos_rm' });
+  const r = await pg.evaluate(async () => {
+    const l = document.getElementById('loginScreen'); if (l) l.style.setProperty('display', 'none', 'important');
+    const e = { id: 'pf1', nome: 'ZECA TESTE PONTO', status: 'ativo', metodo: 'pf', salario: 1, dtInicio: '2026-07-28', funcao: 'Pintor' };
+    state.employees = [e];
+    const box = document.createElement('div'); box.className = 'folha pf-folha'; box.innerHTML = pfFichaHTML(e, '2026-10'); document.body.appendChild(box);
+    const linha = dia => [...box.querySelectorAll('tbody tr')].find(tr => tr.cells[0] && tr.cells[0].textContent.trim() === dia + '/10/2026');
+    const cor = tr => { const c = getComputedStyle(tr.cells[2] || tr.cells[0]).backgroundColor.match(/\d+/g).map(Number); return c; };
+    const sab = linha('03'), fer = linha('12'), util = linha('13');
+    const out = { sab: sab && [sab.className, cor(sab)], fer: fer && [fer.className, cor(fer), fer.textContent.replace(/\s+/g, ' ')], util: util && [util.className, cor(util)] };
+    box.remove();
+    // a lista de ponto para imprimir não leva "Página 1 de 3"
+    pfAbrirPrint([pfFichaHTML(e, '2026-10'), pfFichaHTML(e, '2026-11')], 'Ponto PF', 'ponto');
+    out.folhas = document.querySelectorAll('#printScroll .folha').length;
+    out.pagenum = document.querySelectorAll('#printScroll .pagenum').length;
+    return out;
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r);
+  const laranja = c => c && c[0] > c[2] + 15 && c[0] >= 240, azul = c => c && c[2] > c[0] + 12;
+  t.ok('sábado em laranja claro', !r.erro && laranja(r.sab[1]), J);
+  t.ok('feriado (12/10) em azul claro, com o nome', !r.erro && /feriado/.test(r.fer[0]) && azul(r.fer[1]) && /Aparecida/i.test(r.fer[2]), J);
+  t.ok('dia útil sem cor', !r.erro && !laranja(r.util[1]) && !azul(r.util[1]), J);
+  t.ok('lista de ponto sem numeração de página', !r.erro && r.folhas === 2 && r.pagenum === 0, J);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
+teste('recibos-importa-salario-carteira', async (b, t) => {
+  // "Relação de Empregados" da contabilidade: código, nome + cargo colados,
+  // categoria, horas, admissão e salário numa linha. O salário vai para o
+  // "Salário carteira" de quem o nome casar (os dados não ficam no código)
+  if (!fs.existsSync(path.join(RAIZ, 'recibos_rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'recibos_rm' });
+  const r = await pg.evaluate(async () => {
+    const l = document.getElementById('loginScreen'); if (l) l.style.setProperty('display', 'none', 'important');
+    if (typeof salCarteiraDasLinhas !== 'function') return { erro: 'sem a importação' };
+    state.employees = [
+      { id: 'a', nome: 'ANA TESTE DA SILVA', status: 'ativo', salario: 3000 },
+      { id: 'b', nome: 'BRUNO TESTE', status: 'ativo', salario: 9500, salarioCarteira: 1000 },
+      { id: 'c', nome: 'CARLA OUTRA PESSOA', status: 'ativo', salario: 2000 }];
+    const linhas = ['EMPRESA TESTE LTDA Página: 1/1', 'Código Nome Cargo Categoria Hor. NF ND ADMISSÃO SIN OPT Salário',
+      '134 ANA TESTE DA SILVA AUXILIAR DE PRODUCAO Mensalista 220,00 0 0 10/08/2026 S S 2.124,25',
+      '12 BRUNO TESTE MOTORISTA DE CARRETA Mensalista 220,00 0 0 21/07/2026 S S 2.448,45',
+      '99 DANIEL NAO CADASTRADO SOLDADOR Mensalista 220,00 0 0 01/01/2026 S S 3.000,00', 'Total de empregados: 3'];
+    const res = salCarteiraDasLinhas(linhas);
+    salCarteiraAplica(res.achados);
+    return { achados: res.achados.map(x => [x.e.id, x.valor]), fora: res.fora.map(x => x.nome), sal: state.employees.map(e => [e.id, e.salarioCarteira || 0, e.salario]) };
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r);
+  t.ok('lê as linhas e casa pelo nome', !r.erro && JSON.stringify(r.achados) === JSON.stringify([['a', 2124.25], ['b', 2448.45]]), J);
+  t.ok('quem não está no cadastro aparece à parte', !r.erro && r.fora.length === 1 && /DANIEL/.test(r.fora[0]), J);
+  t.ok('grava o salário carteira sem mexer no fixo', !r.erro && JSON.stringify(r.sal) === JSON.stringify([['a', 2124.25, 3000], ['b', 2448.45, 9500], ['c', 0, 2000]]), J);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
+teste('recibos-salario-carteira', async (b, t) => {
+  // "Salário carteira" no cadastro do funcionário: grava, volta ao abrir e é
+  // a base de INSS e FGTS do simulador de rescisão -- e só dele (o salário
+  // fixo e a folha não mudam). Em branco, o simulador usa o salário fixo.
+  if (!fs.existsSync(path.join(RAIZ, 'recibos_rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'recibos_rm' });
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    const l = document.getElementById('loginScreen'); if (l) l.style.setProperty('display', 'none', 'important');
+    window.confirm = () => true;
+    state.employees = [{ id: 'sc1', nome: 'TEO TESTE CARTEIRA', docTipo: 'CPF', doc: '', status: 'ativo', salario: 9500, dtInicio: '2025-01-10', dtCarteira: '2025-01-10', historicoSalario: [], historicoFuncao: [] }];
+    openEmp('sc1'); await esp(150);
+    const campo = document.getElementById('mSalCarteira'); if (!campo) return { erro: 'sem o campo Salário carteira' };
+    const vazio = campo.value;
+    campo.value = '2.448,45'; saveEmp(); await esp(150);
+    const e = state.employees[0], gravado = e.salarioCarteira, salario = e.salario;
+    openEmp('sc1'); await esp(150);
+    const volta = document.getElementById('mSalCarteira').value;
+    closeAll();
+    const usado = rsSalCarteira(e);
+    delete e.salarioCarteira; const semCampo = rsSalCarteira(e);
+    return { vazio, gravado, salario, volta, usado, semCampo };
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r);
+  t.ok('campo Salário carteira no cadastro: grava e volta ao abrir', !r.erro && r.vazio === '' && r.gravado === 2448.45 && r.volta === '2.448,45', J);
+  t.ok('não mexe no salário fixo', r.salario === 9500, J);
+  t.ok('simulador usa o da carteira; em branco, o salário fixo', r.usado === 2448.45 && r.semCampo === 9500, J);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
+teste('obras-envio-nfs', async (b, t) => {
+  // o ⤴ da obra voltou a mandar para a contabilidade o arquivo da obra COM
+  // as NFs dentro (era assim antes do PDF): abre no navegador e cada nota
+  // se vê e se baixa. O PDF continua como a outra opção.
+  if (!fs.existsSync(path.join(RAIZ, 'controle_obras'))) return;
+  const antes = () => {
+    window.__enviados = [];
+    Object.defineProperty(navigator, 'canShare', { configurable: true, value: d => !!(d && d.files && d.files.length) });
+    Object.defineProperty(navigator, 'share', { configurable: true, value: d => { window.__enviados.push(d); return Promise.resolve(); } });
+  };
+  for (const tela of [null, { width: 390, height: 844 }]) {
+    const { ctx, pg, erros } = await abre(b, { 'sis.local': 'controle_obras' }, 'index.html', tela ? { antes, tela } : { antes });
+    const r = await pg.evaluate(async () => {
+      const esp = ms => new Promise(x => setTimeout(x, ms));
+      const l = document.getElementById('loginScreen'); if (l) l.style.setProperty('display', 'none', 'important');
+      S.obras = [{ id: 'o1', nome: 'Galpão Teste', cliente: 'Cliente', valor: 1000, notaAcordada: 0, status: 'andamento', parcelas: [], _open: true,
+        fornecedores: [{ id: 'f1', nome: 'Aço Teste', numeroNF: '77', dataNF: '2026-09-02', valor: 200, anexo: { nome: 'nf77.pdf', tipo: 'application/pdf', dados: 'data:application/pdf;base64,JVBERi0=' } }] }];
+      render(); if (typeof renderObras === 'function') renderObras(); await esp(100);
+      document.querySelector('.pbtn.rep').click(); await esp(100);
+      const op = document.getElementById('relOpNF'); if (!op) return { erro: 'o ⤴ não oferece o envio com as NFs' };
+      op.click();
+      let env = null; for (let i = 0; i < 60 && !(env = document.getElementById('relEnviar')); i++) await esp(100);
+      if (!env) return { erro: 'sem o Enviar' };
+      for (let i = 0; i < 60 && env.disabled; i++) await esp(100);
+      env.click(); await esp(200);
+      const d = window.__enviados[0]; if (!d) return { erro: 'não abriu o compartilhar' };
+      const f = d.files[0], txt = await f.text();
+      return { nome: f.name, tipo: f.type, nf: txt.includes('data:application/pdf;base64,JVBERi0=') && /Baixar NF/.test(txt), obra: txt.includes('Galpão Teste') };
+    }).catch(e => ({ erro: e.message }));
+    const J = JSON.stringify(r) + ' ' + erros.join(' | '), onde = tela ? 'celular' : 'computador';
+    t.ok(onde + ': ⤴ → "Com as notas fiscais" envia o arquivo da obra com a NF dentro', !r.erro && r.tipo === 'text/html' && /^Relatorio de Obra Galpao Teste .*\.html$/.test(r.nome) && r.nf && r.obra, J);
+    await ctx.close();
+  }
+});
+
+teste('obras-notas-perdidas', async (b, t) => {
+  // as notas que sumiram deixaram o arquivo na nuvem (obras_rm_anexos): a
+  // obra acha esses arquivos órfãos e devolve as notas -- do XML saem
+  // fornecedor, número, data, valor e chave
+  if (!fs.existsSync(path.join(RAIZ, 'controle_obras'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'controle_obras' });
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    const l = document.getElementById('loginScreen'); if (l) l.style.setProperty('display', 'none', 'important');
+    const xml = '<nfeProc><NFe><infNFe Id="NFe43260912345678000112550010000012341000012345"><ide><nNF>1234</nNF><dhEmi>2026-09-20T10:00:00-03:00</dhEmi></ide><emit><xNome>ACO EXEMPLO LTDA</xNome></emit><total><ICMSTot><vNF>15320.50</vNF></ICMSTot></total></infNFe></NFe></nfeProc>';
+    const b64 = s => 'data:text/xml;base64,' + btoa(s);
+    const anexos = { f1: { nome: 'a.pdf', tipo: 'application/pdf', dados: 'data:application/pdf;base64,JVBERi0=' },
+      f2: { nome: 'NF1234.xml', tipo: 'text/xml', dados: b64(xml) },
+      f3: { nome: 'nota cimento.pdf', tipo: 'application/pdf', dados: 'data:application/pdf;base64,JVBERi0=' } };
+    fdb = { ref: p => ({ once: () => Promise.resolve({ val: () => /obras_rm_anexos\/o1$/.test(p) ? anexos : null }), on() {}, off() {},
+      transaction(fn, cb) { cb && cb(null, true, { val: () => null }); }, set() { return Promise.resolve(); }, remove() { return Promise.resolve(); } }) };
+    S.obras = [{ id: 'o1', nome: 'Obra Teste', cliente: '', valor: 0, notaAcordada: 0, status: 'andamento', parcelas: [], _open: true,
+      fornecedores: [{ id: 'f1', nome: 'Existente', valor: 1, numeroNF: '1', dataNF: '', chave: '', anexo: { nome: 'a.pdf', tipo: 'application/pdf', synced: true } }] }];
+    render(); await esp(100);
+    if (typeof procuraNotasPerdidas !== 'function') return { erro: 'sem a busca de notas perdidas' };
+    if (typeof renderObras === 'function') renderObras();
+    const bt = [...document.querySelectorAll('button')].find(x => /Procurar notas perdidas/.test(x.textContent));
+    await procuraNotasPerdidas('o1'); await esp(200);
+    const linhas = document.querySelectorAll('#perdidasOv [data-perd]').length;
+    restauraPerdidas(); await esp(100);
+    const fs = S.obras[0].fornecedores, f2 = fs.find(x => x.id === 'f2'), f3 = fs.find(x => x.id === 'f3');
+    return { botao: !!bt, linhas, n: fs.length, f2: f2 && { nome: f2.nome, nf: f2.numeroNF, data: f2.dataNF, valor: f2.valor, chave: f2.chave, anexo: !!(f2.anexo && f2.anexo.dados && f2.anexo.synced) }, f3: f3 && { nome: f3.nome, anexo: !!(f3.anexo && f3.anexo.dados) } };
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r);
+  t.ok('botão na obra e lista só os órfãos (2)', !r.erro && r.botao && r.linhas === 2, J);
+  t.ok('XML: volta com fornecedor, número, data, valor e chave', !r.erro && r.f2 && r.f2.nome === 'ACO EXEMPLO LTDA' && r.f2.nf === '1234' && r.f2.data === '2026-09-20' && r.f2.valor === 15320.5 && r.f2.chave.length === 44 && r.f2.anexo, J);
+  t.ok('PDF: volta com o arquivo, para completar', !r.erro && r.f3 && /Recuperada/.test(r.f3.nome) && r.f3.anexo && r.n === 3, J);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
+teste('almocos-troca', async (b, t) => {
+  // clicar numa célula já marcada (só para conferir) trocava a marcação na
+  // hora; agora mesmo estado não muda nada e outro estado pergunta antes
+  if (!fs.existsSync(path.join(RAIZ, 'almo-os'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'almo-os' });
+  const r = await pg.evaluate(async () => {
+    const l = document.getElementById('loginScreen'); if (l) l.style.setProperty('display', 'none', 'important');
+    DB.funcionarios = [{ id: 'z1', nome: 'TESTE UM', setor: 'Produção', admissao: '2000-01-01' }];
+    const M = curMonth(), d = activeDays().find(x => !M.dias[x].fer);
+    M.marc.z1 = {}; M.marc.z1[d] = 'PEGOU'; render();
+    const cel = () => document.querySelector('#grid tbody tr').querySelectorAll('td')[activeDays().indexOf(d) + 1].querySelector('.cell');
+    const o = {};
+    brush = 'PEGOU'; cel().click(); o.mesmoSemJanela = !document.querySelector('.modal.open');
+    brush = 'PAGAR'; cel().click(); o.pergunta = !!document.querySelector('.modal.open'); o.antes = M.marc.z1[d];
+    document.querySelector('.modal.open .btn:not(.primary)').click(); o.cancelado = M.marc.z1[d];
+    cel().click(); document.querySelector('.modal.open .btn.primary').click(); o.trocado = M.marc.z1[d];
+    return o;
+  }).catch(e => ({ erro: e.message }));
+  t.ok('troca de marcação pede confirmação', !r.erro && r.mesmoSemJanela && r.pergunta && r.antes === 'PEGOU' && r.cancelado === 'PEGOU' && r.trocado === 'PAGAR' && !erros.length, JSON.stringify(r) + ' ' + erros.join(' | '));
+  await ctx.close();
+});
+
+teste('almocos-equipe', async (b, t) => {
+  // a aba Equipe foi extinta: a lista vem do Recibos (recibos_diretorio) e
+  // quem não está mais na equipe some da grade
+  if (!fs.existsSync(path.join(RAIZ, 'almo-os'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'almo-os' });
+  const r = await pg.evaluate(() => {
+    const l = document.getElementById('loginScreen'); if (l) l.style.setProperty('display', 'none', 'important');
+    DB.mesAtual = '2026-09'; ensureMonth('2026-09'); ensureMonth('2026-08');
+    DB.funcionarios = [{ id: 'a', nome: 'ANA TESTE SOUZA' }, { id: 'b', nome: 'BRUNO TESTE LIMA' },
+      { id: 'c', nome: 'CARLOS SEM FICHA' }, { id: 'd', nome: 'DANIEL SEM FICHA' }];
+    DB.meses['2026-08'].marc.b = { '2026-08-03': 'PEGOU' };
+    DB.meses['2026-09'].marc.d = { '2026-09-01': 'PEGOU' };
+    const vazio = aplicarDiretorioRecibos({});
+    const res = aplicarDiretorioRecibos({
+      r1: { nome: 'Ana Teste Souza', funcao: 'Montador', dtInicio: '2020-01-02', status: 'ativo' },
+      r2: { nome: 'Bruno Teste Lima', status: 'desligado', dtDesligamento: '2026-08-20' },
+      r3: { nome: 'Eva Nova Silva', funcao: 'Soldador', status: 'teste' },
+      r4: { nome: 'Xavier Saiu Antes', status: 'demissao', dtDesligamento: '2025-01-01' } });
+    render();
+    const nomes = [...document.querySelectorAll('#grid tbody tr:not(.divgrp) .namecell')].map(x => x.textContent);
+    const F = id => DB.funcionarios.find(f => f.id === id) || {};
+    return { vazio: vazio.mudou, res, nomes, ana: [F('a').reciboId, F('a').setor], bruno: [F('b').motivo, F('b').desligamento],
+      eva: DB.funcionarios.some(f => f.reciboId === 'r3' && f.teste), xavier: DB.funcionarios.some(f => /XAVIER|Xavier/.test(f.nome)),
+      semAba: !document.getElementById('btnEmp') && !document.getElementById('mEmp') };
+  }).catch(e => ({ erro: e.message }));
+  const tem = n => (r.nomes || []).some(x => x.includes(n));
+  const ok = !r.erro && r.vazio === 0 && r.ana[0] === 'r1' && r.ana[1] === 'Montador' && r.bruno[0] === 'desligamento' && r.bruno[1] === '2026-08-20'
+    && r.eva && !r.xavier && r.semAba && tem('Ana') && tem('Eva') && tem('Daniel') && !tem('Bruno') && !tem('Carlos');
+  t.ok('equipe vem do Recibos; quem saiu some da grade', ok && !erros.length, JSON.stringify(r) + ' ' + erros.join(' | '));
+  await ctx.close();
+});
+
+teste('almocos-afastado-recibos', async (b, t) => {
+  // afastado no Recibos (status "afast", INSS/cárcere) não chegava ao
+  // Almoços: a sincronização só conhecia ativo, teste e desligado. E quem já
+  // tinha sido desligado e voltou ficava com a data de saída velha -- no mês
+  // seguinte, sem marcação, sumia da grade
+  if (!fs.existsSync(path.join(RAIZ, 'almo-os'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'almo-os' });
+  const r = await pg.evaluate(() => {
+    const l = document.getElementById('loginScreen'); if (l) l.style.setProperty('display', 'none', 'important');
+    DB.mesAtual = '2026-10'; ensureMonth('2026-10');
+    DB.funcionarios = [
+      { id: 'v', nome: 'VITOR TESTE AFASTADO', motivo: 'inss', desligamento: '2026-07-10' },
+      { id: 'w', nome: 'WALTER TESTE LIMA' },
+      { id: 'z', nome: 'ZECA TESTE LEGADO', motivo: 'inss' }];
+    const dir = {
+      r1: { nome: 'Vitor Teste Afastado', status: 'afast', afastMotivo: 'inss' },
+      r2: { nome: 'Walter Teste Lima', status: 'afast' },
+      r3: { nome: 'Zeca Teste Legado', status: 'ativo' } };
+    aplicarDiretorioRecibos(dir); render();
+    const grade = () => [...document.querySelectorAll('#grid tbody tr:not(.divgrp) .namecell')].map(x => x.textContent.replace(/\s+/g, ' '));
+    const ord1 = displayOrder(), g1 = grade();
+    const grupo = (o, id) => o.ativos.some(f => f.id === id) ? 'ativo' : o.afast.some(f => f.id === id) ? 'afast' : 'fora';
+    const antes = { v: grupo(ord1, 'v'), w: grupo(ord1, 'w'), z: grupo(ord1, 'z'), vNaGrade: g1.some(n => /Vitor/.test(n)),
+      tagV: (g1.find(n => /Vitor/.test(n)) || ''), tagW: (g1.find(n => /Walter/.test(n)) || '') };
+    // Walter volta a trabalhar: no Recibos fica ativo
+    dir.r2.status = 'ativo'; aplicarDiretorioRecibos(dir); render();
+    const ord2 = displayOrder();
+    return { antes, depois: { w: grupo(ord2, 'w'), z: grupo(ord2, 'z') } };
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r);
+  t.ok('afastado no Recibos aparece no grupo Afastados', !r.erro && r.antes.v === 'afast' && r.antes.vNaGrade && r.antes.w === 'afast', J);
+  t.ok('com o motivo do Recibos (INSS) ou "Afastado"', !r.erro && /INSS/i.test(r.antes.tagV) && /Afastado/i.test(r.antes.tagW), J);
+  t.ok('voltou a ativo no Recibos: volta aos ativos', !r.erro && r.depois.w === 'ativo', J);
+  t.ok('afastamento lançado só no Almoços continua', !r.erro && r.antes.z === 'afast' && r.depois.z === 'afast', J);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
+teste('almocos-fora-folha', async (b, t) => {
+  // sócio almoça mas não tem ficha no Recibos: a sincronização o marcava
+  // "sem ficha no Recibos" e ele caía nos afastados (ou sumia do mês).
+  // Em Config → "Fora da folha" ele é marcado e continua na lista de ativos.
+  if (!fs.existsSync(path.join(RAIZ, 'almo-os'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'almo-os' });
+  const r = await pg.evaluate(() => {
+    const l = document.getElementById('loginScreen'); if (l) l.style.setProperty('display', 'none', 'important');
+    DB.mesAtual = '2026-09'; ensureMonth('2026-09');
+    DB.funcionarios = [{ id: 'a', nome: 'ANA TESTE SOUZA' }, { id: 's', nome: 'SOCIO TESTE LIMA' }, { id: 'x', nome: 'EX TESTE SAIU' }];
+    const dir = { r1: { nome: 'Ana Teste Souza', funcao: 'Montador', status: 'ativo' } };
+    aplicarDiretorioRecibos(dir);
+    const F = id => DB.funcionarios.find(f => f.id === id) || {};
+    const antes = isAfastado(F('s'));
+    openCfg();
+    const cx = document.querySelector('#cfgForaFolha [data-forafolha="s"]');
+    if (!cx) return { erro: 'sem a opção "Fora da folha" em Config', antes };
+    cx.click();
+    aplicarDiretorioRecibos(dir);   // abre de novo: a próxima sincronização não pode desfazer
+    closeModal('mCfg'); render();
+    const ord = displayOrder();
+    const nomes = [...document.querySelectorAll('#grid tbody tr:not(.divgrp) .namecell')].map(x => x.textContent);
+    return { antes, semFolha: !!F('s').semFolha, foraRecibos: !!F('s').foraRecibos, afast: isAfastado(F('s')),
+      ativo: ord.ativos.some(f => f.id === 's'), naGrade: nomes.some(n => /Socio Teste/i.test(n)),
+      tag: nomes.some(n => /Socio Teste/i.test(n) && /fora da folha/i.test(n)),
+      exContinuaFora: !!F('x').foraRecibos && !ord.ativos.some(f => f.id === 'x') };
+  }).catch(e => ({ erro: e.message }));
+  const ok = !r.erro && r.antes === true && r.semFolha && !r.foraRecibos && !r.afast && r.ativo && r.naGrade && r.tag && r.exContinuaFora;
+  t.ok('sócio fora da folha fica na lista de ativos', ok && !erros.length, JSON.stringify(r) + ' ' + erros.join(' | '));
+  await ctx.close();
+});
+
+teste('central-fundos', async (b, t) => {
+  // todo fundo que tem botão nas Preferências tem de ser aceito e desenhar
+  // alguma coisa (a Treliça já teve botão e caía sempre na grade)
+  if (!fs.existsSync(path.join(RAIZ, 'central_rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'central_rm' });
+  const r = await pg.evaluate(() => {
+    const falhas = [], chips = [...document.querySelectorAll('[data-wallpaper-chip]')].map(x => x.getAttribute('data-wallpaper-chip'));
+    const w = document.querySelector('.content-watermark');
+    chips.forEach(v => {
+      setWallpaper(v);
+      const cs = getComputedStyle(w, '::before');
+      const desenha = (cs.webkitMaskImage && cs.webkitMaskImage !== 'none') || (cs.maskImage && cs.maskImage !== 'none') || cs.backgroundImage !== 'none';
+      if (document.body.getAttribute('data-wallpaper') !== v || !desenha) falhas.push(v);
+    });
+    return { chips, falhas };
+  }).catch(e => ({ erro: e.message }));
+  t.ok('cada fundo das Preferências é aceito e desenha', !r.erro && r.chips.includes('trama') && !r.falhas.length && !erros.length, JSON.stringify(r) + ' ' + erros.join(' | '));
+  await ctx.close();
+});
+
+teste('fundo-movimento', async (b, t) => {
+  // pedido: um fundo com vida, como o do Claude -- a obra se montando atrás
+  // da tela e o clique com cara de CAD. Vem desligado; ligado na Central vale
+  // para todos os sistemas; para quando não aparece; não sai na impressão;
+  // com "reduzir movimento" nada se mexe.
+  if (!fs.existsSync(path.join(RAIZ, 'central_rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'central_rm' });
+  const espera = ms => pg.waitForTimeout(ms);
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms)), o = {};
+    const pinta = () => { const c = document.getElementById('rmMovimento'); if (!c) return -1; const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data; let n = 0; for (let i = 3; i < d.length; i += 16) if (d[i]) n++; return n; };
+    o.inicio = Object.assign({}, window.rmMovimento && window.rmMovimento.estado(), { camada: !!document.getElementById('rmMovimento') });
+    // já entrou: com a porta na tela o desenho fica nela (outro teste cobre)
+    const porta = document.getElementById('lock-screen'); if (porta) porta.classList.add('hidden');
+    // um sistema no quadro: pergunta ao abrir e recebe quando muda
+    const cam = document.createElement('div'); cam.className = 'iframe-layer'; document.body.appendChild(cam);
+    const fr = document.createElement('iframe'); fr.srcdoc = '<script>window.__rec=[];addEventListener("message",e=>__rec.push(e.data));parent.postMessage({rm:"movimento?"},"*");<\/script>';
+    cam.appendChild(fr); await esp(300);
+    setMovimento('mov', true); setMovimento('toque', true); await esp(1500);
+    o.ligado = Object.assign({}, window.rmMovimento.estado(), { comum: localStorage.getItem('rm_mov') + '|' + localStorage.getItem('rm_toque'), pintou: pinta(),
+      botoes: [...document.querySelectorAll('#seg-mov .active, #seg-toque .active')].map(x => x.textContent.trim()).join(',') });
+    o.quadro = fr.contentWindow.__rec.filter(m => m && m.rm === 'movimento').map(m => m.mov + '|' + m.toque);
+    // com um sistema aberto por cima, a Central para de desenhar
+    cam.classList.add('active'); await esp(100);
+    const c = document.getElementById('rmMovimento'); c.getContext('2d').clearRect(0, 0, c.width, c.height); await esp(400);
+    o.parado = pinta(); cam.classList.remove('active'); await esp(400); o.volta = pinta();
+    // o clique: snap com a coordenada
+    document.body.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, clientX: 300, clientY: 200, button: 0 }));
+    const tq = document.querySelector('.rm-toque'); o.toque = tq ? tq.textContent : '';
+    await esp(1000); o.toqueSome = !document.querySelector('.rm-toque');
+    return o;
+  }).catch(e => ({ erro: e.message }));
+  await pg.emulateMedia({ media: 'print' });
+  r.impressao = await pg.evaluate(() => { const c = document.getElementById('rmMovimento'); return c ? getComputedStyle(c).display : 'sem'; }).catch(e => e.message);
+  await pg.emulateMedia({ media: 'screen', reducedMotion: 'reduce' }); await espera(200);
+  r.reduz = await pg.evaluate(() => window.rmMovimento.estado().desenhando).catch(e => e.message);
+  await pg.emulateMedia({ media: 'screen', reducedMotion: 'no-preference' }); await espera(200);
+  r.desliga = await pg.evaluate(() => { setMovimento('mov', false); return [window.rmMovimento.estado().desenhando, !!document.getElementById('rmMovimento')]; }).catch(e => e.message);
+  // a câmera fica no alto: o que está longe sobe na tela e o que está no alto
+  // fica mais perto (estava de baixo para cima e a cobertura parecia invertida)
+  r.camera = await pg.evaluate(() => {
+    const v = (p) => window.rmMovimento.vista(p, 20), cantos = [[-10, 0, -15], [10, 0, -15], [-10, 0, 15], [10, 0, 15]].map(v);
+    const longe = cantos.reduce((a, c) => c[2] > a[2] ? c : a), perto = cantos.reduce((a, c) => c[2] < a[2] ? c : a);
+    const base = v([0, 0, 0]), cumeeira = v([0, 8, 0]);
+    return { longeEmCima: longe[1] < perto[1], altoMaisPerto: cumeeira[2] < base[2], cumeeiraEmCima: cumeeira[1] < base[1] };
+  }).catch(e => ({ erro: e.message }));
+  r.erros = erros;
+  await ctx.close();
+  // um sistema aberto sozinho lê a escolha guardada
+  const s = await abre(b, { 'sis.local': 'controle_obras' }, 'index.html', { antes: () => { try { localStorage.setItem('rm_mov', 'cotas'); } catch (e) {} } });
+  r.sistema = await s.pg.evaluate(() => window.rmMovimento && window.rmMovimento.estado().desenhando).catch(e => e.message);
+  r.sistemaErros = s.erros; await s.ctx.close();
+  const J = JSON.stringify(r);
+  t.ok('vem desligado', !r.erro && r.inicio.mov === '' && r.inicio.toque === '' && !r.inicio.camada, J);
+  t.ok('ligado nas Preferências: desenha, grava para o conjunto e avisa o sistema no quadro', !r.erro && r.ligado.desenhando && r.ligado.pintou > 50
+    && r.ligado.comum === 'cotas|1' && r.ligado.botoes === 'Ligado,Ligado' && r.quadro.includes('cotas|1'), J);
+  t.ok('com um sistema aberto por cima, a Central para de desenhar', !r.erro && r.parado === 0 && r.volta > 50, J);
+  t.ok('clique: snap com a coordenada, que some sozinho', !r.erro && /X 3000 · Y 2000/.test(r.toque) && r.toqueSome, J);
+  t.ok('não sai na impressão; "reduzir movimento" para tudo; desligar tira a camada', r.impressao === 'none' && r.reduz === false && JSON.stringify(r.desliga) === '[false,false]', J);
+  t.ok('a câmera olha de cima: longe sobe na tela, o alto fica mais perto', r.camera && r.camera.longeEmCima && r.camera.altoMaisPerto && r.camera.cumeeiraEmCima, JSON.stringify(r.camera));
+  t.ok('o sistema aberto sozinho segue a escolha guardada', r.sistema === true && !r.erros.length && !r.sistemaErros.length, J);
+});
+
+teste('central-protetor-de-tela', async (b, t) => {
+  // pedido: o fundo com movimento como proteção de tela do PC, sobre o papel
+  // de parede da RM (logo menor no canto esquerdo de baixo). O Windows abre
+  // o "RM Central.scr" (ligação para o programa) com /s, /p ou /c.
+  const arq = path.join(RAIZ, 'central_rm', 'electron', 'protetor.js');
+  if (!fs.existsSync(arq)) { t.ok('electron/protetor.js existe', false, arq); return; }
+  delete require.cache[require.resolve(arq)];
+  const P = require(arq), EE = require('events');
+  const modos = [[['x.scr', '/s'], 'x.scr'], [['x.scr', '/S'], 'x.scr'], [['x.scr', '/p', '1234'], 'x.scr'], [['x.scr', '/c:5678'], 'x.scr'], [['x.scr'], 'C:\\RMCENT~1\\RMCENT~1.SCR'],
+    [['RM Central.exe'], 'RM Central.exe'], [['RM Central.exe', '--algo'], 'RM Central.exe'], [['electron', '.', '/s'], 'electron']].map(([a, e]) => P.modo(a, e));
+  t.ok('modo do Windows: /s mostra, /p miniatura, /c ou duplo clique no .scr ajustes; o programa normal não entra',
+    JSON.stringify(modos) === JSON.stringify(['s', 's', 'p', 'c', 'c', null, null, 's']), JSON.stringify(modos));
+  const idx = fs.readFileSync(path.join(RAIZ, 'central_rm', 'index.html'), 'utf8'), bloco = P.extraiBloco(idx);
+  t.ok('o movimento vem do bloco comum que está no index.html da Central (uma fonte só)', /window\.rmMovimento = \{/.test(bloco) && !/<\/?script>/.test(bloco), String(bloco.length));
+  // abre: uma janela por monitor, em tela cheia, com o bloco injetado; tecla ou mouse saem
+  const janelas = []; let saiu = 0;
+  class Janela extends EE { constructor(o) { super(); this.o = o; janelas.push(this);
+    this.webContents = Object.assign(new EE(), { executeJavaScript: (c) => { this.injetado = c; return Promise.resolve(); } }); }
+    setAlwaysOnTop(a, n) { this.nivel = n; } loadFile(f) { this.arquivo = f; } show() {} focus() {} }
+  const app = { quit: () => { saiu++; } };
+  const r = P.abre({ app, BrowserWindow: Janela, fs, path, raiz: path.join(RAIZ, 'central_rm'),
+    screen: { getAllDisplays: () => [{ bounds: { x: 0, y: 0, width: 1920, height: 1080 } }, { bounds: { x: 1920, y: 0, width: 1280, height: 1024 } }] } });
+  janelas.forEach(w => w.webContents.emit('did-finish-load'));
+  t.ok('uma janela por monitor, tela cheia, por cima de tudo, com a protetor.html', janelas.length === 2 && janelas[1].o.x === 1920 && janelas[1].o.width === 1280
+    && janelas.every(w => w.o.fullscreen && w.o.frame === false && w.nivel === 'screen-saver' && /protetor\.html$/.test(w.arquivo) && w.o.webPreferences.contextIsolation && !w.o.webPreferences.nodeIntegration), JSON.stringify(janelas.map(w => w.o)));
+  t.ok('o movimento entra com a montagem à esquerda e sem pausar', r.temMovimento && janelas.every(w => /RM_MOVIMENTO_OPCOES=\{"ox":0\.3/.test(w.injetado || '') && /"sempre":true/.test(w.injetado) && /aplica\(\{mov:'cotas'/.test(w.injetado)), (janelas[0].injetado || '').slice(0, 120));
+  janelas[0].webContents.emit('before-input-event', {}, { type: 'keyUp' }); const antes = saiu;
+  janelas[0].webContents.emit('before-input-event', {}, { type: 'keyDown' });
+  janelas[1].webContents.emit('page-title-updated', {}, 'rm-sair');
+  t.ok('apertar tecla ou mexer o mouse fecha (uma vez só)', antes === 0 && saiu === 1, 'saiu=' + saiu);
+  // a ponte das Preferências
+  const h = {}, chamadas = [], pasta = fs.mkdtempSync(path.join(require('os').tmpdir(), 'rm-prot-'));
+  P.instalaPonte({ ipcMain: { handle: (c, f) => { h[c] = f; } }, app: { isPackaged: true }, fs, path, execPath: path.join(pasta, 'RM Central.exe'),
+    spawn: (exe, args) => { chamadas.push([path.basename(exe), args.map(a => a.startsWith(pasta) ? path.basename(a) : a).join(' ')]); return { unref() {} }; } });
+  const sem = await h['rm:protetor-usar'](), est0 = await h['rm:protetor-estado']();
+  fs.writeFileSync(path.join(pasta, 'RM Central.scr'), 'x');
+  const com = await h['rm:protetor-usar'](), est1 = await h['rm:protetor-estado'](); await h['rm:protetor-ver']();
+  fs.rmSync(pasta, { recursive: true, force: true });
+  t.ok('"Usar no Windows" chama o InstallScreenSaver do Windows com o .scr; sem o .scr avisa; "Ver agora" abre com /s',
+    !sem.ok && sem.erro === 'sem-scr' && !est0.pronto && com.ok && est1.pronto && JSON.stringify(chamadas) === JSON.stringify([['rundll32.exe', 'desk.cpl,InstallScreenSaver RM Central.scr'], ['RM Central.exe', '/s']]), JSON.stringify({ sem, com, chamadas }));
+  // o instalador faz o .scr; o main não abre a Central nem pega a trava no modo proteção
+  const nsh = fs.existsSync(path.join(RAIZ, 'central_rm', 'build', 'installer.nsh')) ? fs.readFileSync(path.join(RAIZ, 'central_rm', 'build', 'installer.nsh'), 'utf8') : '';
+  const pkg = JSON.parse(fs.readFileSync(path.join(RAIZ, 'central_rm', 'package.json'), 'utf8')), main = fs.readFileSync(path.join(RAIZ, 'central_rm', 'electron', 'main.js'), 'utf8');
+  t.ok('o instalador deixa o RM Central.scr (ligação, ou cópia) e tira ao desinstalar', /customInstall[\s\S]*mklink \/H "\$INSTDIR\\RM Central\.scr" "\$INSTDIR\\RM Central\.exe"[\s\S]*CopyFiles[\s\S]*customUnInstall[\s\S]*Delete "\$INSTDIR\\RM Central\.scr"/.test(nsh)
+    && pkg.build.nsis.include === 'build/installer.nsh' && pkg.build.productName === 'RM Central', nsh.slice(0, 80));
+  t.ok('no modo proteção o programa não pega a trava, não abre a Central e não apaga os documentos dela', /modoProtetor \? false : app\.requestSingleInstanceLock\(\)/.test(main) && /if \(modoProtetor\) \{\s*protetor\.roda\(/.test(main)
+    && /will-quit[\s\S]{0,200}protetor'\)\.modo\(process\.argv, process\.execPath\)\) return;/.test(main), '');
+  // a tela: o papel de parede da RM, a logo no canto e o movimento
+  const ctx = await b.newContext({ viewport: { width: 1600, height: 900 } }); const pg = await ctx.newPage(); const erros = [];
+  pg.on('pageerror', e => erros.push(e.message.slice(0, 160)));
+  await pg.route('**/*', rq => rq.request().url().startsWith('file:') ? rq.continue() : rq.abort());
+  await pg.goto('file://' + path.join(RAIZ, 'central_rm', 'electron', 'protetor.html'));
+  await pg.evaluate(P.codigo(bloco)); await pg.waitForTimeout(1500);
+  const tela = await pg.evaluate(() => {
+    const lg = document.querySelector('#papel .marca').getBoundingClientRect(), c = document.getElementById('rmMovimento');
+    let n = 0; if (c) { const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data; for (let i = 3; i < d.length; i += 64) if (d[i]) n++; }
+    return { contornos: document.querySelectorAll('#papel .contorno').length, logo: [Math.round(lg.left), Math.round(lg.bottom), Math.round(lg.height)], pintou: n, cursor: getComputedStyle(document.body).cursor };
+  });
+  await pg.mouse.move(400, 400); await pg.mouse.move(402, 401); const tremido = await pg.title();
+  await pg.mouse.move(460, 430); const mexeu = await pg.title();
+  await ctx.close();
+  t.ok('papel de parede da RM: símbolo em contorno, logo pequena no canto esquerdo de baixo, sem cursor', tela.contornos === 3 && tela.logo[0] < 160 && tela.logo[1] > 900 * 0.8 && tela.logo[2] < 60 && tela.cursor === 'none', JSON.stringify(tela));
+  t.ok('a obra se montando por cima do papel de parede', tela.pintou > 100 && !erros.length, JSON.stringify(tela) + ' ' + erros.join(' | '));
+  t.ok('tremido do mouse não fecha; mexer de verdade fecha', tremido !== 'rm-sair' && mexeu === 'rm-sair', tremido + ' / ' + mexeu);
+  // papel de parede com movimento (Lively Wallpaper): a mesma tela, buscando o
+  // bloco no index.html da Central, sem fechar com o mouse; endereço curto
+  const pp = await abre(b, { 'sis.local': 'central_rm' }, 'papel-de-parede.html', { espera: 3500 });
+  const papel = await pp.pg.evaluate(() => { const c = document.getElementById('rmMovimento');
+    let n = 0; if (c) { const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data; for (let i = 3; i < d.length; i += 64) if (d[i]) n++; }
+    return { url: location.pathname + location.search, pintou: n, contornos: document.querySelectorAll('#papel .contorno').length }; }).catch(e => ({ erro: e.message }));
+  await pp.pg.mouse.move(100, 100); await pp.pg.mouse.move(600, 500); await pp.pg.mouse.down(); await pp.pg.mouse.up();
+  papel.titulo = await pp.pg.title(); papel.erros = pp.erros; await pp.ctx.close();
+  t.ok('papel de parede com movimento: endereço curto, a mesma tela e o movimento, sem fechar com o mouse', !papel.erro && papel.url === '/electron/protetor.html?papel'
+    && papel.pintou > 100 && papel.contornos === 3 && papel.titulo !== 'rm-sair' && !papel.erros.length, JSON.stringify(papel));
+  // as Preferências: a seção só no programa que sabe fazer
+  if (!fs.existsSync(path.join(FB, 'firebase-app-compat.js'))) return;
+  const pref = async (com) => {
+    const s = await abre(b, { 'sis.local': 'central_rm' }, 'index.html', { antes: com ? () => { window.__pu = 0; window.rmDesktop = { protetorEstado: async () => ({ pronto: true }), protetorUsar: async () => { window.__pu++; return { ok: true }; }, protetorVer: async () => ({ ok: true }) }; } : null });
+    const v = await s.pg.evaluate(async () => { const sec = document.getElementById('sec-protetor'); const vis = !!sec && !sec.hidden;
+      if (vis) { await protetorUsar(); } return { vis, usou: window.__pu || 0 }; }).catch(e => ({ erro: e.message }));
+    v.erros = s.erros; await s.ctx.close(); return v;
+  };
+  const p1 = await pref(true), p0 = await pref(false);
+  t.ok('Preferências: "Proteção de tela do Windows" só no programa que tem a ponte', p1.vis && p1.usou === 1 && !p0.vis && !p1.erros.length && !p0.erros.length, JSON.stringify({ p1, p0 }));
+});
+
+teste('recibos-indicacao-nomes', async (b, t) => {
+  // "padroniza os nomes em letra caixa baixa como os outros campos": a lista
+  // de quem indicou / quem foi indicado mostrava o nome como está no
+  // cadastro (uns em MAIÚSCULAS, outros não), enquanto a tabela e as outras
+  // listas já escreviam "Nome Sobrenome". Só na tela: o cadastro não muda.
+  if (!fs.existsSync(path.join(RAIZ, 'recibos_rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'recibos_rm' });
+  await semLogin(pg);
+  const r = await pg.evaluate(() => {
+    state.employees.push({ id: 'ni1', nome: 'FULANO DE TAL DA SILVA', status: 'ativo', salario: 1 }, { id: 'ni2', nome: 'beltrano souza', status: 'ativo', salario: 1 },
+      { id: 'ni3', nome: 'CICLANO DOS SANTOS', status: 'desligado', salario: 1 });
+    openIndic();
+    const op = id => [...document.querySelectorAll('#inIndicador option, #inIndicado option')].filter(o => o.value === id).map(o => o.textContent);
+    return { a: op('ni1'), b: op('ni2'), c: op('ni3'), cad: state.employees.find(e => e.id === 'ni1').nome };
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  t.ok('quem indicou / indicado em "Nome Sobrenome", como o resto; o cadastro fica como está', !r.erro && JSON.stringify(r.a) === JSON.stringify(['Fulano de Tal da Silva', 'Fulano de Tal da Silva'])
+    && r.b[0] === 'Beltrano Souza' && r.c[0] === 'Ciclano dos Santos (desligado)' && r.cad === 'FULANO DE TAL DA SILVA' && !erros.length, J);
+  await ctx.close();
+});
+
+teste('recibo-rescisao-sem-frase-repetida', async (b, t) => {
+  // sem motivo escrito o recibo de rescisão dizia "referente a rescisão do
+  // contrato de trabalho, por ocasião do encerramento do contrato de
+  // trabalho": o padrão vinha com o mesmo fim da frase fixa. Nenhum motivo
+  // pode deixar "contrato de trabalho" duas vezes, e o motivo escrito
+  // continua no texto.
+  if (!fs.existsSync(path.join(RAIZ, 'recibos_rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'recibos_rm' });
+  await semLogin(pg);
+  const r = await pg.evaluate(() => {
+    const base = { nome: 'FULANA DE TESTE', docTipo: 'CPF', doc: '000.000.000-00', valor: 1000, data: '2026-10-16' };
+    const txt = m => { const d = document.createElement('div'); d.innerHTML = reciboRescisaoHTML(Object.assign({}, base, { motivo: m }), 1); return d.querySelector('.corpo').textContent.replace(/\s+/g, ' '); };
+    return ['', 'rescisão do contrato de trabalho', 'Rescisão do contrato de trabalho.', 'verbas rescisórias (pedido de demissão)', 'saldo de salário e férias proporcionais'].map(m => ({ m, t: txt(m) }));
+  }).catch(e => [{ erro: e.message }]);
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  const vezes = x => (x.t || '').toLowerCase().split('contrato de trabalho').length - 1;
+  t.ok('nenhum motivo repete "contrato de trabalho"', !r[0].erro && r.every(x => vezes(x) === 1), J);
+  t.ok('sem motivo: verbas rescisórias, por ocasião do encerramento do contrato', !r[0].erro && /referente a verbas rescisórias, por ocasião do encerramento do contrato de trabalho, dando plena quitação/.test(r[0].t), J);
+  t.ok('o motivo escrito continua no texto, com o complemento quando não fala do contrato', !r[0].erro && /referente a saldo de salário e férias proporcionais, por ocasião do encerramento do contrato de trabalho, dando/.test(r[4].t) && /referente a Rescisão do contrato de trabalho, dando/.test(r[2].t), J);
+  await ctx.close();
+});
+
+teste('contas-a-pagar-contas', async (b, t) => {
+  // Contas a Pagar tinha 2 testes para um sistema de dinheiro. Aqui as contas
+  // dele: valor digitado ("1234.56" virava R$ 123.456), parcelas a partir do
+  // dia 31 (a 2ª ia para 03/03 e fevereiro sumia), painel, situação, marcar
+  // paga e filtro.
+  if (!fs.existsSync(path.join(RAIZ, 'rm_contas'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'rm_contas' }, 'index.html', { relogio: '2026-10-17T15:00:00Z', fuso: 'America/Sao_Paulo' });
+  await semLogin(pg);
+  const r = await pg.evaluate(async () => {
+    const grav = []; fb = { db: { ref: (p) => ({ update: async (u) => { grav.push([p, Object.keys(u).length]); } }) } };
+    S.contas = {};
+    const v = (id, x) => { document.getElementById(id).value = x; };
+    const valores = ['1.234,56', '1234,56', '1234.56', '10.5', 'R$ 99,90', '1.234', '1.234.567,8'].map(parseVal);
+    v('c_forn', 'FORNECEDOR TESTE'); v('c_valor', '1.000,00'); v('c_venc', '2026-01-31'); v('c_parc', '4');
+    await saveConta();
+    const parc = Object.values(S.contas).sort((a, c) => a.parcela - c.parcela);
+    const parcelas = parc.map(c => c.venc), somaParc = Math.round(parc.reduce((s, c) => s + c.valor, 0) * 100) / 100;
+    S.contas = {
+      a: { id: 'a', fornecedor: 'A', valor: 100, venc: '2026-10-10', pago: false },
+      b: { id: 'b', fornecedor: 'B', valor: 200, venc: '2026-10-20', pago: false },
+      c: { id: 'c', fornecedor: 'C', valor: 50.5, venc: '2026-11-30', pago: false },
+      d: { id: 'd', fornecedor: 'D', valor: 70, venc: '2026-10-01', pago: true, dataPagamento: '2026-10-05' },
+      e: { id: 'e', fornecedor: 'E', valor: 999, venc: '2026-09-01', pago: true, dataPagamento: '2026-09-20' } };
+    bootUI();
+    const cards = () => [...document.querySelectorAll('#cards .card .v')].map(x => x.textContent.replace(/\s/g, ' '));
+    const c1 = cards(), st = ['a', 'b', 'c', 'd'].map(k => statusOf(S.contas[k]));
+    togglePago('b'); bootUI();
+    const pagoB = [S.contas.b.pago, S.contas.b.dataPagamento], c2 = cards();
+    v('f_status', 'vencido'); render(); const vencidas = document.querySelectorAll('#rows tr').length;
+    v('f_status', 'pago'); render(); const pagas = document.querySelectorAll('#rows tr').length;
+    return { valores, parcelas, somaParc, c1, st, pagoB, c2, vencidas, pagas, grav: grav.length };
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  t.ok('valor digitado: vírgula ou ponto como casa decimal, ponto de milhar', !r.erro && JSON.stringify(r.valores) === JSON.stringify([1234.56, 1234.56, 1234.56, 10.5, 99.9, 1234, 1234567.8]), J);
+  t.ok('parcelas a partir de 31/01: último dia de cada mês, sem pular fevereiro, somando o total', !r.erro && JSON.stringify(r.parcelas) === JSON.stringify(['2026-01-31', '2026-02-28', '2026-03-31', '2026-04-30']) && r.somaParc === 1000 && r.grav > 0, J);
+  t.ok('painel: em aberto, vencidas, 7 dias e pago no mês', !r.erro && /350,50/.test(r.c1[0]) && /100,00/.test(r.c1[1]) && /200,00/.test(r.c1[2]) && /70,00/.test(r.c1[3])
+    && JSON.stringify(r.st) === '["vencido","pendente","pendente","pago"]', J);
+  t.ok('marcar paga: data de hoje e o painel muda', !r.erro && r.pagoB[0] === true && r.pagoB[1] === '2026-10-17' && /150,50/.test(r.c2[0]) && /270,00/.test(r.c2[3]), J);
+  t.ok('filtro: vencidas e pagas', !r.erro && r.vencidas === 1 && r.pagas === 3 && !erros.length, J);
+  await ctx.close();
+});
+
+teste('contas-anexos-na-nuvem', async (b, t) => {
+  // a nota anexada a uma conta ficava só no aparelho onde foi anexada (em
+  // outro computador não abria e ficava fora da cópia). Agora sobe para a
+  // nuvem num nó à parte, abre em outro aparelho, o anexo antigo só local
+  // sobe sozinho, e excluir a conta apaga o arquivo de lá.
+  if (!fs.existsSync(path.join(RAIZ, 'rm_contas'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'rm_contas' });
+  await semLogin(pg);
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    const banco = {};
+    fb = { db: { ref: (p) => ({
+      set: async (v) => { banco[p] = JSON.parse(JSON.stringify(v)); },
+      update: async () => {},
+      remove: async () => { delete banco[p]; },
+      once: async () => ({ val: () => banco[p] || null }) }) } };
+    window.confirm = () => true;
+    let aberto = 0; window.open = () => { aberto++; return null; };
+    S.contas = {};
+    const v = (id, x) => { document.getElementById(id).value = x; };
+    // 1) conta nova com anexo
+    v('c_forn', 'FORNECEDOR TESTE'); v('c_valor', '100,00'); v('c_venc', '2026-11-10'); v('c_parc', '1');
+    pendingAnexo = { blob: new Blob(['%PDF-1.4 nota de teste'], { type: 'application/pdf' }), nome: 'nota.pdf', tipo: 'application/pdf', tam: 22 }; anexoState = 'new';
+    await saveConta(); await esp(100);
+    const c = Object.values(S.contas)[0], chave = c.anexoKey;
+    const subiu = banco['contas_pagar_anexos/' + chave] || null;
+    // 2) outro aparelho: sem a cópia local, abre buscando da nuvem
+    await IDB.del(chave);
+    await openAnexo(chave); await esp(50);
+    const voltouLocal = !!(await IDB.get(chave));
+    // 3) anexo antigo, só local: sobe sozinho
+    await IDB.put('antigo1', new Blob(['nota antiga'], { type: 'application/pdf' }));
+    S.contas.v = { id: 'v', fornecedor: 'ANTIGO', valor: 5, venc: '2026-01-01', pago: true, anexoKey: 'antigo1', anexoNome: 'antiga.pdf', anexoTipo: 'application/pdf', anexoTam: 11 };
+    const n = await subirAnexosPendentes();
+    // 4) excluir a conta apaga o arquivo da nuvem
+    await delConta(c.id); await esp(50);
+    return { subiu: subiu && { nome: subiu.nome, temDados: /^data:application\/pdf;base64,/.test(subiu.dados || '') }, marcada: c.anexoNuvem, aberto, voltouLocal,
+      n, antigoNaNuvem: !!banco['contas_pagar_anexos/antigo1'], antigoMarcado: S.contas.v.anexoNuvem, apagado: !banco['contas_pagar_anexos/' + chave] };
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  t.ok('anexo novo sobe para a nuvem e a conta fica marcada', !r.erro && r.subiu && r.subiu.nome === 'nota.pdf' && r.subiu.temDados && r.marcada === true, J);
+  t.ok('em outro aparelho (sem cópia local) a nota abre buscando da nuvem, e fica guardada', !r.erro && r.aberto === 1 && r.voltouLocal, J);
+  t.ok('anexo antigo que só estava neste aparelho sobe sozinho', !r.erro && r.n === 1 && r.antigoNaNuvem && r.antigoMarcado === true, J);
+  t.ok('excluir a conta apaga o arquivo da nuvem', !r.erro && r.apagado && !erros.length, J);
+  await ctx.close();
+});
+
+teste('contas-link-curto', async (b, t) => {
+  // o link do acompanhamento leva o nome da conta do GitHub no endereço. Com
+  // um link curto salvo nas configurações, o Copiar e o WhatsApp mandam ele.
+  if (!fs.existsSync(path.join(RAIZ, 'rm_contas'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'rm_contas' });
+  await semLogin(pg);
+  const r = await pg.evaluate(async () => {
+    const grav = []; fb = { db: { ref: (p) => ({ update: async (u) => { grav.push([p, u.linkCurto]); } }) } };
+    let aberto = ''; window.open = (u) => { aberto = decodeURIComponent(u); return null; };
+    acompAbrirJanela(); const antes = acompUrlEnvio();
+    document.getElementById('acompCurto').value = 'https://evertonluis4523-afk.github.io/rm_contas/aberto.html'; acompSalvaCurto();
+    const recusou = acompUrlEnvio() === antes;
+    document.getElementById('acompCurto').value = 'https://tinyurl.com/rm-teste'; acompSalvaCurto();
+    acompLink('whats');
+    return { antes, recusou, depois: acompUrlEnvio(), tela: document.getElementById('acompUrl').textContent, aberto, grav };
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  t.ok('sem link curto, envia o endereço de sempre; o próprio endereço do GitHub não vale como curto', !r.erro && /github\.io/.test(r.antes) && r.recusou, J);
+  t.ok('com o link curto salvo (nas configurações da nuvem), a janela e o WhatsApp usam ele', !r.erro && r.depois === 'https://tinyurl.com/rm-teste' && r.tela === r.depois
+    && /tinyurl\.com\/rm-teste/.test(r.aberto) && !/github\.io/.test(r.aberto) && r.grav.some(g => g[0] === 'contas_pagar' && g[1] === 'https://tinyurl.com/rm-teste') && !erros.length, J);
+  await ctx.close();
+});
+
+teste('cheques-contas', async (b, t) => {
+  // Cheques tinha 2 testes. Aqui: lote gerado pelo valor total (soma exata,
+  // datas mensais a partir do dia 31), painel, baixas, devolução em massa
+  // (o motivo sumia da lista e da planilha) e a junção com a nuvem quando
+  // dois aparelhos mexem ao mesmo tempo.
+  if (!fs.existsSync(path.join(RAIZ, 'controle_cheques'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'controle_cheques' }, 'index.html', { relogio: '2026-10-17T15:00:00Z', fuso: 'America/Sao_Paulo' });
+  await semLogin(pg);
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    window.confirm = () => true;
+    db = { lotes: [{ id: 'L1', cliente: 'CLIENTE TESTE', desc: '', data: '2026-10-01', criadoEm: 1 }], cheques: [] };
+    app.openBatch('L1');
+    const v = (id, x) => { document.getElementById(id).value = x; };
+    v('genQtd', '3'); v('genValor', '1000'); v('genData', '2026-01-31'); v('genPeriod', 'month'); app.setGenMode('total');
+    app.generateRows(); app.saveBatch(); await esp(50);
+    const gerados = db.cheques.map(c => [c.valor, c.bomPara]), soma = Math.round(db.cheques.reduce((s, c) => s + c.valor, 0) * 100) / 100;
+    db.cheques = [
+      { id: 'c1', loteId: 'L1', numero: '1', valor: 100, bomPara: '2026-10-10', status: 'carteira', hist: [] },
+      { id: 'c2', loteId: 'L1', numero: '2', valor: 200, bomPara: '2026-10-20', status: 'carteira', hist: [] },
+      { id: 'c3', loteId: 'L1', numero: '3', valor: 300, bomPara: '2026-12-01', status: 'carteira', hist: [] },
+      { id: 'c4', loteId: 'L1', numero: '4', valor: 400, bomPara: '2026-09-01', status: 'repassado', fornecedor: 'F', hist: [] }];
+    render();
+    const cards = () => [...document.querySelectorAll('#cards .card .val')].map(x => x.textContent.replace(/\s/g, ' '));
+    const c1 = cards();
+    ui.selected = new Set(['c1', 'c4']); app.askDevolucaoLote(); v('aMotivo', 'Conta encerrada'); document.getElementById('actConfirm').click(); await esp(30);
+    ui.tab = 'flat'; render();
+    const lista = document.body.textContent.includes('Conta encerrada');
+    let csv = ''; const db0 = window.downloadBlob; window.downloadBlob = (bl) => { bl.text().then(x => { csv = x; }); }; app.exportCSV(); await esp(50); window.downloadBlob = db0;
+    const c4 = db.cheques.find(c => c.id === 'c4'), c1d = db.cheques.find(c => c.id === 'c1');
+    app.reabrir('c1');
+    const reaberto = [c1d.status, motivoDe(c1d)];
+    // junção com a nuvem: base = o que esta tela viu; local = o que ela tem; remoto = o que outro aparelho deixou
+    const base = { lotes: [], cheques: [{ id: 'x', valor: 1 }, { id: 'y', valor: 2 }, { id: 'z', valor: 3 }] };
+    const local = { lotes: [], cheques: [{ id: 'x', valor: 10 }, { id: 'z', valor: 3 }, { id: 'n', valor: 5 }] };   // mudei x, apaguei y, criei n
+    const remoto = { lotes: [], cheques: [{ id: 'x', valor: 1 }, { id: 'y', valor: 2 }, { id: 'z', valor: 33 }, { id: 'o', valor: 7 }] };   // outro mudou z, criou o
+    const junto = mesclaDB(base, local, remoto).cheques.map(c => c.id + ':' + c.valor).sort();
+    return { gerados, soma, c1, lista, csvMotivo: /Conta encerrada/.test(csv), c4: [c4.status, motivoDe(c4)], reaberto, junto };
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  t.ok('lote pelo valor total: soma exata e datas mensais a partir do dia 31 (fevereiro no último dia)', !r.erro && r.soma === 1000 && JSON.stringify(r.gerados.map(g => g[1])) === '["2026-01-31","2026-02-28","2026-03-31"]', J);
+  t.ok('painel: em carteira, a vencer em 7 dias, vencidos e repassado', !r.erro && /600,00/.test(r.c1[0]) && /200,00/.test(r.c1[1]) && /100,00/.test(r.c1[2]) && /400,00/.test(r.c1[3]), J);
+  t.ok('devolução em massa: o motivo aparece na lista e na planilha', !r.erro && r.lista && r.csvMotivo && JSON.stringify(r.c4) === '["devolvido","Conta encerrada"]', J);
+  t.ok('reabrir volta à carteira sem o motivo', !r.erro && JSON.stringify(r.reaberto) === '["carteira",""]', J);
+  t.ok('dois aparelhos: fica o que cada um mudou, sai o que foi apagado aqui, entra o que o outro criou', !r.erro && JSON.stringify(r.junto) === '["n:5","o:7","x:10","z:33"]' && !erros.length, J);
+  await ctx.close();
+});
+
+teste('ligacao-almocos-folha', async (b, t) => {
+  // as ligações entre sistemas quebravam caladas: o Almoços não dizia se o
+  // mês estava fechado, a Folha fechava o pagamento com almoço de mês aberto
+  // ou com valor diferente do de lá (importação esquecida), e a lista de
+  // funcionários lida da Folha falhava sem ninguém saber.
+  if (!fs.existsSync(path.join(RAIZ, 'almo-os')) || !fs.existsSync(path.join(RAIZ, 'recibos_rm'))) return;
+  const a = await abre(b, { 'sis.local': 'almo-os' });
+  await semLogin(a.pg);
+  const ra = await a.pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    const pub = []; let modo = 'falha';
+    firebase.database = () => ({ ref: (p) => ({ set: async (v) => { pub.push([p, JSON.parse(JSON.stringify(v))]); },
+      once: async () => { if (modo === 'falha') throw new Error('PERMISSION_DENIED'); return { val: () => ({ r1: { nome: 'FULANO TESTE', status: 'ativo' } }) }; } }) });
+    try { localStorage.removeItem('almo_equipe_sync'); } catch (e) {}
+    publicarTotaisMes();
+    const aberto = (pub[0] || [])[1]; const M = DB.meses[DB.mesAtual];
+    M.fechado = { em: '2026-10-31', por: 'teste' }; publicarTotaisMes(); const fechado = (pub[1] || [])[1]; delete M.fechado;
+    fbEnabled = () => true; fbAuthed = true;
+    await sincronizarEquipe(); renderForaFolhaCfg();
+    const falha = document.getElementById('cfgEquipeSync').textContent;
+    modo = 'ok'; await sincronizarEquipe(); renderForaFolhaCfg();
+    const ok = document.getElementById('cfgEquipeSync').textContent;
+    return { mesAberto: aberto && aberto._mes, mesFechado: fechado && fechado._mes, falha, ok };
+  }).catch(e => ({ erro: e.message }));
+  await a.ctx.close();
+  const Ja = JSON.stringify(ra) + ' ' + a.erros.join(' | ');
+  t.ok('Almoços publica a situação do mês junto dos totais (aberto / fechado em)', !ra.erro && ra.mesAberto && ra.mesAberto.fechado === null && ra.mesFechado && ra.mesFechado.fechado === '2026-10-31', Ja);
+  t.ok('Almoços mostra na Config quando a lista da Folha não pôde ser lida, e a última leitura boa', !ra.erro && /Não consegui ler a lista/.test(ra.falha) && /Última leitura da Folha: hoje/.test(ra.ok) && /1 pessoa/.test(ra.ok) && !/Não consegui/.test(ra.ok), Ja);
+
+  const f = await abre(b, { 'sis.local': 'recibos_rm' }, 'index.html', { relogio: '2026-10-17T15:00:00Z', fuso: 'America/Sao_Paulo' });
+  await semLogin(f.pg);
+  const rf = await f.pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    const totais = { _mes: { fechado: null, publicado: '2026-10-17T10:00:00Z' }, a: { nome: 'FULANO TESTE', valor: 100 }, b: { nome: 'CICLANO TESTE', valor: 50 } };
+    firebase.database = () => ({ ref: () => ({ once: async () => ({ val: () => totais }) }) });
+    state.employees.push({ id: 'zA', nome: 'FULANO TESTE', status: 'ativo', salario: 2000, base: 2000, almoco: 100, valPagamento: 1900, admissao: '2020-01-01' },
+      { id: 'zB', nome: 'CICLANO TESTE', status: 'ativo', salario: 2000, base: 2000, almoco: 0, valPagamento: 2000, admissao: '2020-01-01' });
+    const c = await almocosConferencia('2026-10');
+    const msgs = []; window.confirm = (m) => { msgs.push(m); return false; }; window.alert = (m) => { msgs.push('ALERTA: ' + m); };
+    if (![...$('#salMes').options].some(x => x.value === '9')) $('#salMes').insertAdjacentHTML('beforeend', '<option value="9">outubro</option>');
+    if ($('#salAno').tagName === 'SELECT' && ![...$('#salAno').options].some(x => x.value === '2026')) $('#salAno').insertAdjacentHTML('beforeend', '<option>2026</option>');
+    $('#salMes').value = '9'; $('#salAno').value = '2026';
+    await fecharCompetencia('pagamento');
+    abrirImportAlmocos(); $('#almImpMes').value = '9'; $('#almImpAno').value = '2026';
+    await importarAlmocos(); await esp(50);
+    const notaAberto = ($('#almImportList .alm-imp-mes') || {}).textContent || '';
+    totais._mes.fechado = '2026-10-31'; await importarAlmocos(); await esp(50);
+    const notaFechado = ($('#almImportList .alm-imp-mes') || {}).textContent || '';
+    return { c, primeiro: msgs[0] || '', notaAberto, notaFechado };
+  }).catch(e => ({ erro: e.message }));
+  await f.ctx.close();
+  const Jf = JSON.stringify(rf) + ' ' + f.erros.join(' | ');
+  t.ok('Folha confere: mês aberto no Almoços e quem está com almoço diferente', !rf.erro && rf.c && rf.c.fechado === null && JSON.stringify(rf.c.diferentes) === '["Ciclano Teste"]', Jf);
+  t.ok('fechar o pagamento avisa antes de arquivar (e não fecha se a pessoa cancelar)', !rf.erro && /ABERTOS no sistema de Almoços/.test(rf.primeiro) && /1 pessoa\(s\) com almoço diferente.*Ciclano Teste/.test(rf.primeiro), Jf);
+  const sem = await abre(b, { 'sis.local': 'recibos_rm' });
+  await semLogin(sem.pg);
+  const rs = await sem.pg.evaluate(async () => {
+    firebase.database = () => ({ ref: () => ({ once: () => new Promise(() => {}) }) });   // sem conexão: nunca responde
+    const t0 = Date.now(); const c = await almocosConferencia('2026-10'); return { c, ms: Date.now() - t0 };
+  }).catch(e => ({ erro: e.message }));
+  await sem.ctx.close();
+  t.ok('sem conexão a conferência desiste em poucos segundos e o fechamento segue (não trava o botão)', !rs.erro && rs.c === null && rs.ms < 6000, JSON.stringify(rs));
+  t.ok('importar almoços diz se o mês está aberto ou fechado lá', !rf.erro && /ainda está aberto/.test(rf.notaAberto) && /fechado no sistema de Almoços em 31\/10\/2026/.test(rf.notaFechado) && !f.erros.length, Jf);
+});
+
+teste('nomes-nome-sobrenome-em-todos', async (b, t) => {
+  // "Nome Sobrenome" valia só no Recibos e no Almoços; Obras, Compras,
+  // Cheques e Contas mostravam o nome como foi digitado (em caixa alta). A
+  // peça comum rmNomePt formata só na tela: o cadastro fica como veio, as
+  // siglas de empresa (LTDA, ME, S/A) e as iniciais ficam.
+  const forma = async (r, prep) => {
+    if (!fs.existsSync(path.join(RAIZ, r))) return null;
+    const { ctx, pg, erros } = await abre(b, { 'sis.local': r });
+    await semLogin(pg);
+    const x = await pg.evaluate(prep).catch(e => ({ erro: e.message }));
+    await ctx.close(); x.erros = erros; return x;
+  };
+  const base = await forma('rm_contas', () => ['FULANO DA SILVA', 'PERFITEC COMERCIO LTDA ME', 'J.R. FERRAGENS', 'Joao da Silva', 'ACO FORTE S/A', 'POSTO BR 386'].map(rmNomePt));
+  t.ok('a regra: de/da minúsculos, siglas de empresa e iniciais ficam, caixa mista digitada com cuidado fica', base && JSON.stringify(base.slice ? base.slice(0, 6) : base)
+    === JSON.stringify(['Fulano da Silva', 'Perfitec Comercio LTDA ME', 'J.R. Ferragens', 'Joao da Silva', 'Aco Forte S/A', 'Posto BR 386']), JSON.stringify(base));
+  const contas = await forma('rm_contas', () => {
+    fb = { db: { ref: () => ({ update: async () => {} }) } };
+    S.contas = { x: { id: 'x', fornecedor: 'FORNECEDOR TESTE LTDA', valor: 10, venc: '2030-10-20', pago: false } };
+    bootUI(); document.getElementById('f_status').value = ''; render();
+    const opt = [...document.getElementById('f_forn').options].find(o => o.value === 'FORNECEDOR TESTE LTDA');
+    return { tela: document.getElementById('rows').textContent, opt: opt ? opt.textContent : '', cadastro: S.contas.x.fornecedor };
+  });
+  t.ok('Contas a Pagar: fornecedor em "Nome Sobrenome" na lista e no filtro; o cadastro e o valor do filtro ficam como vieram', contas && /Fornecedor Teste LTDA/.test(contas.tela) && !/FORNECEDOR TESTE/.test(contas.tela)
+    && contas.opt === 'Fornecedor Teste LTDA' && contas.cadastro === 'FORNECEDOR TESTE LTDA' && !contas.erros.length, JSON.stringify(contas));
+  const cheques = await forma('controle_cheques', () => {
+    db = { lotes: [{ id: 'L', cliente: 'CLIENTE TESTE DA SILVA', desc: '', data: '2026-10-01', criadoEm: 1 }],
+      cheques: [{ id: 'c', loteId: 'L', numero: '1', emitente: 'EMITENTE TESTE', valor: 10, bomPara: '2030-01-01', status: 'repassado', fornecedor: 'DESTINO TESTE ME', hist: [] }] };
+    ui.openLotes = new Set(['L']); ui.tab = 'flat'; render(); const plano = document.getElementById('content') ? document.getElementById('content').textContent : document.body.textContent;
+    ui.tab = 'lotes'; render();
+    return { tela: plano + ' ' + document.body.textContent };
+  });
+  t.ok('Cheques: cliente, emitente e destino em "Nome Sobrenome"', cheques && /Cliente Teste da Silva/.test(cheques.tela) && /Emitente Teste/.test(cheques.tela) && /Destino Teste ME/.test(cheques.tela)
+    && !/EMITENTE TESTE|CLIENTE TESTE DA SILVA/.test(cheques.tela) && !cheques.erros.length, JSON.stringify(cheques).slice(0, 600));
+  const compras = await forma('controle_compras', () => {
+    DB.compras = [{ id: 'k', fornecedor: 'FORNECEDOR COMPRA TESTE ME', descricao: 'Teste', valor: 10, dataCompra: '2026-10-01', parcelas: [] }];
+    render(); return { tela: document.body.textContent };
+  });
+  t.ok('Compras: fornecedor em "Nome Sobrenome"', compras && /Fornecedor Compra Teste ME/.test(compras.tela) && !/FORNECEDOR COMPRA TESTE/.test(compras.tela) && !compras.erros.length, JSON.stringify(compras).slice(0, 400));
+  const obras = await forma('controle_obras', () => {
+    S.obras = [{ id: 'o1', nome: 'Obra teste', cliente: 'CLIENTE DA OBRA TESTE', data: '', valor: 1000, notaAcordada: 0, status: 'andamento', parcelas: [], obs: '', fornecedores: [] }];
+    render(); return { tela: document.body.textContent };
+  });
+  t.ok('Obras: cliente em "Nome Sobrenome"', obras && /Cliente da Obra Teste/.test(obras.tela) && !/CLIENTE DA OBRA TESTE/.test(obras.tela) && !obras.erros.length, JSON.stringify(obras).slice(0, 400));
+});
+
+teste('recibos-terceiro-editar-recibo', async (b, t) => {
+  // o recibo de terceiro, depois de emitido, não tinha como ser corrigido: a
+  // conferência mexe só no pagamento efetivo. Agora o 📝 da linha edita o que
+  // sai no papel -- o número fica, o relatório (histórico) e a 2ª via
+  // acompanham, a auditoria anota, e recibo já pago com valor novo fica
+  // divergente.
+  if (!fs.existsSync(path.join(RAIZ, 'recibos_rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'recibos_rm' });
+  await semLogin(pg);
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    const ter = { id: 'tz1', nome: 'FULANO TESTE SERVICOS', docTipo: 'CNPJ', doc: '', servico: 'solda', metodo: 'pix' };
+    state.terceiros.push(ter);
+    const m = registrarPagamentoTerceiro({ valor: 1000, servico: 'solda', obra: 'Obra A', tipoPagamento: 'parcial' }, ter, '2026-03-10', 'Estrela', '007');
+    registrarHistorico('terceiros', 2026, 2, '2026-03-10', [{ id: ter.id, nome: m.nome, doc: '', valor: 1000, servico: 'solda', obs: '', obra: 'Obra A', referencia: '', tipoPagamento: 'parcial', metodo: 'pix', movId: m.id, numeroRecibo: '007' }]);
+    renderTercLanc(); await esp(100);
+    const bt = document.querySelector('#tercPendBody [data-recedit="' + m.id + '"]'); if (!bt) return { erro: 'sem o botão de editar na linha' };
+    bt.click(); await esp(100);
+    const aberto = document.getElementById('recTercEditModal').classList.contains('open');
+    const v = (id, x) => { const e = document.getElementById(id); e.value = x; e.dispatchEvent(new Event('input', { bubbles: true })); };
+    v('rteValor', '1.250,50'); v('rteServico', 'solda e montagem'); v('rteDoc', '00.000.000/0001-00'); v('rteObra', 'Obra B');
+    document.getElementById('rteSalvar').click(); await esp(100);
+    const papel = (() => { const d = document.createElement('div'); d.innerHTML = reciboTercHTML(pagTercDoMov(m)); return d.textContent.replace(/\s+/g, ' '); })();
+    const h1 = state.historico['2026-03-terceiros'], it1 = h1 && h1.itens.find(x => x.movId === m.id);
+    const passo1 = { aberto, valor: m.valorPrevisto, num: m.numeroRecibo, papel, hist: it1 && [it1.valor, it1.servico, it1.obra, it1.doc], total: h1 && h1.total, aud: (m.auditoria[0] || {}).acao };
+    // pago e depois corrigido de novo, mudando a data de mês: fica divergente e o relatório muda de mês
+    confirmaMovTerc(m);
+    abrirEdicaoRecTerc(m.id); await esp(50);
+    const aviso = !document.getElementById('rteAviso').hidden;
+    v('rteValor', '1.300,00'); v('rteData', '2026-04-02');
+    document.getElementById('rteSalvar').click(); await esp(100);
+    const h2 = state.historico['2026-04-terceiros'];
+    return { passo1, aviso, status: m.status, comp: m.competencia, saiuDeMarco: !state.historico['2026-03-terceiros'] || !state.historico['2026-03-terceiros'].itens.some(x => x.movId === m.id),
+      abril: h2 && h2.itens.filter(x => x.movId === m.id).map(x => x.valor), pagoFica: m.valorPago };
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  const p1 = r.passo1 || {};
+  t.ok('a linha do recibo tem o 📝 e abre a edição', !r.erro && p1.aberto, J);
+  t.ok('o papel sai corrigido com o mesmo número (valor, serviço e documento novos)', !r.erro && p1.num === '007' && p1.valor === 1250.5
+    && /Nº 007/.test(p1.papel) && /R\$1\.250,50/.test(p1.papel) && /referente a solda e montagem/.test(p1.papel) && /CNPJ 00\.000\.000\/0001-00/.test(p1.papel), J);
+  t.ok('o relatório (histórico) acompanha e a auditoria anota o que mudou', !r.erro && JSON.stringify(p1.hist) === JSON.stringify([1250.5, 'solda e montagem', 'Obra B', '00.000.000/0001-00'])
+    && p1.total === 1250.5 && /Recibo 007 editado: .*valor.*serviço.*documento.*obra/.test(p1.aud || '') && /R\$ 1\.000,00 para R\$ 1\.250,50/.test(p1.aud || ''), J);
+  t.ok('recibo já pago: avisa, mudar o valor deixa divergente e o valor pago não muda', !r.erro && r.aviso && r.status === 'divergente' && r.pagoFica === 1250.5, J);
+  t.ok('mudar a data de mês leva a linha do relatório junto', !r.erro && r.comp === '2026-04' && r.saiuDeMarco && JSON.stringify(r.abril) === '[1300]' && !erros.length, J);
+  await ctx.close();
+});
+
+teste('recibos-nomes-terceiros-clientes', async (b, t) => {
+  // o mesmo "Nome Sobrenome" dos funcionários valia para terceiro e cliente
+  // nos títulos, nos avisos e na busca, mas a tabela de terceiros, a de
+  // pagamentos, a de clientes e o corpo do recibo de terceiro e de cliente
+  // mostravam o nome como está no cadastro (em MAIÚSCULAS). Só na tela e no
+  // texto: o cadastro não muda, e a linha da assinatura continua em caixa
+  // alta, como em todos os recibos.
+  if (!fs.existsSync(path.join(RAIZ, 'recibos_rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'recibos_rm' });
+  await semLogin(pg);
+  const r = await pg.evaluate(() => {
+    state.terceiros.push({ id: 'nt1', nome: 'ZEBEDEU QUINTINO SERVICOS', docTipo: 'CNPJ', doc: '', servico: 'solda', metodo: 'pix' });
+    state.clientes.push({ id: 'nc1', nome: 'ZORAIDE QUEVEDO', docTipo: 'CPF', doc: '', data: rmDiaISO(), itens: [{ desc: 'Teste', valor: 10 }] });
+    renderTerc(); renderCli();
+    const linha = (sel, id) => [...document.querySelectorAll(sel + ' tr')].map(tr => tr.textContent).find(x => /zebedeu|zoraide/i.test(x)) || '';
+    const terc = reciboTercHTML({ nome: 'ZEBEDEU QUINTINO SERVICOS', docTipo: 'CNPJ', doc: '', valor: 100, servico: 'solda' });
+    const cli = reciboClienteHTML(state.clientes.find(c => c.id === 'nc1'), 1);
+    const corpo = h => { const d = document.createElement('div'); d.innerHTML = h; return [(d.querySelector('.corpo') || {}).textContent || '', (d.querySelector('.ass .nm') || {}).textContent || '']; };
+    return { tTab: linha('#tercBody'), cTab: linha('#cliBody'), terc: corpo(terc), cli: corpo(cli), cad: state.terceiros.find(x => x.id === 'nt1').nome };
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  t.ok('tabela de terceiros e de clientes em "Nome Sobrenome"', !r.erro && /Zebedeu Quintino Servicos/.test(r.tTab) && !/ZEBEDEU/.test(r.tTab) && /Zoraide Quevedo/.test(r.cTab) && !/ZORAIDE/.test(r.cTab), J);
+  t.ok('recibo de terceiro e de cliente: nome no texto como o dos outros recibos; a assinatura em caixa alta; o cadastro intacto', !r.erro
+    && /Zebedeu Quintino Servicos/.test(r.terc[0]) && /Zoraide Quevedo/.test(r.cli[0]) && r.terc[1] === 'ZEBEDEU QUINTINO SERVICOS' && r.cad === 'ZEBEDEU QUINTINO SERVICOS' && !erros.length, J);
+  await ctx.close();
+});
+
+teste('recibos-card-aniv', async (b, t) => {
+  // card de aniversário: o botão da lista traz nome e data do cadastro e a
+  // imagem sai desenhada (1080 x 1350), com o nome do arquivo certo
+  if (!fs.existsSync(path.join(RAIZ, 'recibos_rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'recibos_rm' });
+  const r = await pg.evaluate(async () => {
+    const l = document.getElementById('loginScreen'); if (l) l.style.setProperty('display', 'none', 'important');
+    const m = String(new Date().getMonth() + 1).padStart(2, '0');
+    state.employees = [{ id: 'a1', nome: 'TESTE CARD SILVA', status: 'ativo', salario: 1, nascimento: '1990-' + m + '-17' }];
+    document.querySelector('[data-v="aniv"]').click();
+    await new Promise(r => setTimeout(r, 300));
+    const bt = document.querySelector('#anivBody button'); if (!bt) return { erro: 'sem botão Card' };
+    bt.click(); await new Promise(r => setTimeout(r, 400));
+    const cv = document.getElementById('caCanvas'), px = cv.getContext('2d').getImageData(540, 675, 1, 1).data;
+    // texto editado fica guardado na configuração (vale para os próximos cards)
+    const ch = document.getElementById('caChamada'); const padrao = ch.value;
+    ch.value = 'Chamada de teste'; ch.dispatchEvent(new Event('input')); await new Promise(r => setTimeout(r, 1000));
+    const guardado = state.cfg.cardAniv && state.cfg.cardAniv.chamada;
+    document.getElementById('caTextosPadrao').click();
+    return { nome: document.getElementById('caNome').value, data: document.getElementById('caData').value,
+      tam: [cv.width, cv.height], pintado: px[3] === 255, arquivo: caNomeArquivo(),
+      padrao, guardado, restaurado: ch.value };
+  }).catch(e => ({ erro: e.message }));
+  const mes = ['janeiro','fevereiro','março','abril','maio','junho','julho','agosto','setembro','outubro','novembro','dezembro'][new Date().getMonth()];
+  const ok = !r.erro && r.nome === 'Teste' && r.data === '17 de ' + mes && r.tam[0] === 1080 && r.tam[1] === 1350 && r.pintado && r.arquivo === 'Aniversario Teste 17 de ' + mes + '.png'
+    && r.padrao === 'Feliz aniversário' && r.guardado === 'Chamada de teste' && r.restaurado === 'Feliz aniversário';
+  t.ok('card de aniversário preenche pelo cadastro e desenha', ok && !erros.length, JSON.stringify(r) + ' ' + erros.join(' | '));
+  await ctx.close();
+});
+
+teste('nuvem-sem-atropelar', async (b, t) => {
+  // duas pessoas mexendo ao mesmo tempo: o que cada uma fez tem de ficar
+  const J = 'JSON.parse(JSON.stringify(%s))';
+  const casos = {
+    controle_cheques: `(()=>{
+      const A={id:'A',v:1},B={id:'B',v:1};
+      const base={lotes:[],cheques:[A,B]};
+      let rem={lotes:[],cheques:[{id:'A',v:1},{id:'B',v:2},{id:'D',v:1}]};   // la': mudou B, criou D
+      baseNuvem=${J.replace('%s', 'base')}; db={lotes:[],cheques:[{id:'A',v:2},{id:'B',v:1},{id:'C',v:1}]};   // aqui: mudou A, criou C
+      let saiu=null; dbRef={transaction(fn,cb){saiu=fn(${J.replace('%s', 'rem')});cb&&cb(null,true);},set(){saiu='SET';return Promise.resolve();}};
+      storageMode='cloud'; cloudInit=true; saveDB();
+      if(saiu==='SET'||!saiu) return 'gravou o banco inteiro';
+      const m={}; saiu.cheques.forEach(c=>m[c.id]=c.v);
+      const ok1=m.A===2&&m.B===2&&m.C===1&&m.D===1;
+      // apagou aqui um que ninguem mexeu: sai; la' apagou um que aqui nao mexi: continua fora
+      baseNuvem={lotes:[],cheques:[{id:'A',v:1},{id:'B',v:1}]}; db={lotes:[],cheques:[{id:'A',v:1}]};
+      rem={lotes:[],cheques:[{id:'B',v:1}]}; saveDB();
+      const ok2=saiu.cheques.length===0;
+      return ok1&&ok2 ? true : JSON.stringify({m,ok2,saiu});
+    })()`,
+    'Controle-estoque-maquinas': `(()=>{
+      const base={setores:[{id:'s1',nome:'S'}],maquinas:[{id:'m1',qtd:1},{id:'m2',qtd:1}],auditorias:[],iniciado:true};
+      const rem={setores:[{id:'s1',nome:'S'}],maquinas:[{id:'m1',qtd:1},{id:'m2',qtd:5},{id:'m9',qtd:1}],auditorias:[{id:'a9'}],iniciado:true};
+      fdbBase=${J.replace('%s', 'base')};
+      db={setores:[{id:'s1',nome:'S'}],maquinas:[{id:'m1',qtd:3},{id:'m2',qtd:1},{id:'m3',qtd:1}],auditorias:[{id:'a1'}],iniciado:true};
+      let saiu=null; fdb={transaction(fn,cb){saiu=fn(${J.replace('%s', 'rem')});cb&&cb(null,true);},set(){saiu='SET';return Promise.resolve();},off(){}};
+      fdbLido=true; salvar();
+      if(saiu==='SET'||!saiu) return 'gravou o banco inteiro';
+      const q={}; saiu.maquinas.forEach(m=>q[m.id]=m.qtd); const au=saiu.auditorias.map(a=>a.id).sort().join(',');
+      return (q.m1===3&&q.m2===5&&q.m3===1&&q.m9===1&&au==='a1,a9') ? true : JSON.stringify({q,au});
+    })()`,
+    'almo-os': `(()=>{
+      DB.mesAtual='2026-09'; ensureMonth('2026-09');
+      DB.meses['2026-09'].marc={a:{'2026-09-01':'PEGOU'}};
+      fbBaseMeses={'2026-09':JSON.parse(JSON.stringify(DB.meses['2026-09']))};
+      DB.meses['2026-09'].marc.b={'2026-09-02':'PAGAR'};           // aqui: marcou o b
+      let env=null; fbRef={update(p){env=p;return Promise.resolve();}}; fbReady=true; fbSync();
+      if(!env) return 'nada gravado';
+      const ks=Object.keys(env);
+      if(ks.indexOf('meses/2026-09')>=0) return 'gravou o mês inteiro';
+      const novo=env['meses/2026-09/marc/b/2026-09-02']==='PAGAR'||(env['meses/2026-09/marc/b']||{})['2026-09-02']==='PAGAR';
+      if(!novo||ks.some(k=>k.indexOf('marc/a')>=0)) return JSON.stringify(ks);
+      // mais um dia para quem já tinha marcação: vai só aquele dia
+      DB.meses['2026-09'].marc.a['2026-09-03']='PAGAR'; env=null; fbSync();
+      const ks2=Object.keys(env||{}).filter(k=>k.indexOf('meses/')===0);
+      return ks2.length===1&&ks2[0]==='meses/2026-09/marc/a/2026-09-03' ? true : JSON.stringify(ks2);
+    })()`,
+  };
+  /* Controle de Obras: o celular com a cópia ANTIGA da obra abriu o sistema
+     e regravou a obra inteira por cima -- as notas lançadas no PC sumiram
+     (obra do Carlos, 30/09/2026). Agora cada aparelho guarda a "base" (o que
+     ele sabe que está na nuvem) e grava por transação, mesclando nota por
+     nota e parcela por parcela. */
+  casos.controle_obras = `(async()=>{
+    const esp=ms=>new Promise(x=>setTimeout(x,ms));
+    const ob=(fs,ps,extra)=>Object.assign({id:'o1',nome:'Obra X',cliente:'C',valor:100,notaAcordada:0,status:'andamento',obs:'',
+      parcelas:ps||[{id:'p1',desc:'Entrada',data:'2026-09-01',valor:50,recebida:false}],fornecedores:fs},extra||{});
+    const f=(id,v)=>({id,nome:'Forn '+id,valor:v||10,numeroNF:'',dataNF:'',chave:'',anexo:null});
+    const escritos=[], cbs={};
+    const ref=p=>({on(ev,cb){cbs[ev]=cb;},off(){},remove(){escritos.push(['REMOVE',p]);return Promise.resolve();},
+      set(v){escritos.push(['SET',p,v]);return Promise.resolve();},
+      once(){return Promise.resolve({val:()=>null});},
+      transaction(fn,cb){const v=fn(JSON.parse(JSON.stringify(window.__rem[p.split('/').pop()]||null)));escritos.push(['TX',p,v]);
+        if(v!==undefined) window.__rem[p.split('/').pop()]=v; cb&&cb(null,v!==undefined,{val:()=>window.__rem[p.split('/').pop()]});return Promise.resolve();}});
+    window.fdb={ref}; fdb=window.fdb;
+    const snap=d=>({key:d.id,val:()=>JSON.parse(JSON.stringify(d))});
+    // 1) celular velho: local = base = obra com 1 nota; nuvem tem 3 notas e a parcela recebida
+    const velho=ob([f('f1')]);
+    S.obras=[JSON.parse(JSON.stringify(velho))]; S.nuvemBase={o1:JSON.parse(JSON.stringify(velho))};
+    window.__rem={o1:Object.assign(ob([f('f1'),f('f2'),f('f3')],[{id:'p1',desc:'Entrada',data:'2026-09-01',valor:50,recebida:true}]),{updatedAt:Date.now()})};
+    cloudListen(); await cloudPush(false); await esp(20);
+    cbs.child_added&&cbs.child_added(snap(window.__rem.o1)); await esp(1200); await cloudPush(false); await esp(50);
+    if(escritos.some(e=>e[0]==='SET'&&/obras_rm\\/o1$/.test(e[1]))) return 'regravou a obra inteira com set()';
+    const nuvem=window.__rem.o1, local=S.obras[0];
+    const ids=o=>(o.fornecedores||[]).map(x=>x.id).sort().join(',');
+    const ids2=o=>(o.fornecedores||[]).map(x=>x.id).join(',');
+    if(ids(nuvem)!=='f1,f2,f3') return 'a nuvem perdeu notas: '+ids(nuvem);
+    if(ids(local)!=='f1,f2,f3') return 'o aparelho não recebeu as notas: '+ids(local);
+    if(!local.parcelas[0].recebida) return 'a parcela recebida voltou a pendente';
+    // 2) mudança aqui (nota nova) e lá (outra nota nova): as duas ficam
+    S.obras[0].fornecedores.push(f('f9')); window.__rem.o1.fornecedores.push(f('f7')); window.__rem.o1.updatedAt=Date.now()+5;
+    await cloudPush(false); await esp(50);
+    if(ids(window.__rem.o1)!=='f1,f2,f3,f7,f9') return 'mescla perdeu nota: '+ids(window.__rem.o1);
+    // 2b) "Ordenar por data" aqui: nenhuma nota mudou, só a ordem -- a ordem daqui vai para a nuvem e não volta
+    S.obras[0].fornecedores=S.obras[0].fornecedores.slice().reverse();
+    const ordemAqui=ids2(S.obras[0]);
+    await cloudPush(false); await esp(50);
+    if(ids2(window.__rem.o1)!==ordemAqui||ids2(S.obras[0])!==ordemAqui) return 'a ordenação voltou: aqui '+ids2(S.obras[0])+' / nuvem '+ids2(window.__rem.o1);
+    // 3) aparelho ainda sem base (primeira vez depois da atualização): a nuvem vale no que os dois têm, e nada some
+    S.obras=[ob([f('f1',10)])]; S.nuvemBase={};
+    window.__rem={o1:Object.assign(ob([f('f1',20),f('f2')]),{updatedAt:Date.now()})};
+    await cloudPush(false); await esp(50);
+    const r3=window.__rem.o1;
+    if(ids(r3)!=='f1,f2') return 'sem base: '+ids(r3);
+    if(r3.fornecedores.find(x=>x.id==='f1').valor!==20) return 'sem base: a cópia velha passou por cima do valor';
+    return true;
+  })()`;
+  for (const r of Object.keys(casos)) {
+    if (!fs.existsSync(path.join(RAIZ, r))) continue;
+    const { ctx, pg } = await abre(b, { 'sis.local': r });
+    await semLogin(pg);
+    let ok, det = '';
+    try { ok = await pg.evaluate(casos[r]); } catch (e) { ok = false; det = e.message.slice(0, 160); }
+    t.ok(r, ok === true, det || String(ok)); await ctx.close();
+  }
+});
+
+teste('obras-protecao-nuvem', async (b, t) => {
+  // notas sumindo: (A) tela velha aberta regravava a obra inteira -- agora
+  // toda gravação leva o contrato _v e a regra do Firebase recusa sem ele, e
+  // a tela recarrega quando sai versão nova; (B) "Restaurar backup" apagava
+  // as notas lançadas depois do arquivo -- agora só devolve; (C) não havia
+  // registro -- agora cada obra tem histórico e lixeira
+  if (!fs.existsSync(path.join(RAIZ, 'controle_obras'))) return;
+  const regras = JSON.parse(fs.readFileSync(path.join(RAIZ, 'central_rm', 'ferramentas', 'regras_firebase.json'), 'utf8')).rules;
+  const regraObra = JSON.stringify(regras.obras_rm || {});
+  t.ok('regra do Firebase: obra só entra com o contrato _v', /\$obra/.test(regraObra) && /_v/.test(regraObra), regraObra);
+  t.ok('regra do Firebase: histórico das obras', !!regras.obras_rm_historico, Object.keys(regras).join(','));
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'controle_obras' });
+  await semLogin(pg);
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    if (typeof OB_ESCRITA === 'undefined' || typeof abrirHistorico !== 'function') return { erro: 'sem as proteções' };
+    const f = (id, v) => ({ id, nome: 'Forn ' + id, valor: v || 10, numeroNF: 'N' + id, dataNF: '2026-09-10', chave: '', anexo: null });
+    const ob = (fs, extra) => Object.assign({ id: 'o1', nome: 'Obra X', cliente: 'C', valor: 100, notaAcordada: 0, status: 'andamento', obs: '',
+      parcelas: [{ id: 'p1', desc: 'Entrada', data: '2026-09-01', valor: 50, recebida: false }], fornecedores: fs }, extra || {});
+    const rem = {}, hist = {}, tx = [];
+    const ref = p => ({ on() {}, off() {}, remove() { return Promise.resolve(); }, set() { return Promise.resolve(); },
+      limitToLast() { return this; },
+      once() { const k = p.split('/').pop(); return Promise.resolve({ val: () => (p.indexOf('obras_rm_historico') === 0 ? (hist[k] || null) : null) }); },
+      push(v) { const k = p.split('/').pop(); (hist[k] = hist[k] || {})['h' + Object.keys(hist[k] || {}).length] = v; return Promise.resolve(); },
+      transaction(fn, cb) { const k = p.split('/').pop(); const v = fn(JSON.parse(JSON.stringify(rem[k] || null))); tx.push(v);
+        if (v !== undefined) rem[k] = v; cb && cb(null, v !== undefined, { val: () => rem[k] }); return Promise.resolve(); } });
+    window.fdb = { ref }; fdb = window.fdb;
+    // A) gravação leva o contrato
+    const base = ob([f('f1'), f('f2')]);
+    S.obras = [JSON.parse(JSON.stringify(base))]; S.nuvemBase = { o1: JSON.parse(JSON.stringify(base)) };
+    rem.o1 = Object.assign(JSON.parse(JSON.stringify(base)), { updatedAt: 1 });
+    // C) aqui: tira f2, muda o valor de f1, lança f3
+    const o = S.obras[0]; o.fornecedores = [f('f1', 15), f('f3')];
+    await cloudPush(false); await esp(50);
+    const gravou = tx.filter(v => v !== undefined).pop() || {};
+    // A2) nada mudou aqui: não grava de novo
+    const n = tx.length; await cloudPush(false); await esp(30);
+    const regravou = tx.length > n && tx.slice(n).some(v => v !== undefined);
+    const versao = obVersaoDe("const APP_VER='v99';");
+    const H = Object.values(hist.o1 || {});
+    // histórico na tela, e a lixeira devolve a nota
+    await abrirHistorico('o1'); await esp(100);
+    const tela = (document.getElementById('histOv') || {}).textContent || '';
+    const bt = document.querySelector('#histOv [data-hrest]');
+    if (bt) bt.click(); await esp(50);
+    const voltou = (S.obras[0].fornecedores || []).some(x => x.id === 'f2');
+    // B) restaurar backup antigo: devolve o que falta, não apaga nem troca
+    window.confirm = () => true;
+    const arq = new File([JSON.stringify({ obras: [ob([f('f1', 10), f('f9')]), ob([f('g1')], { id: 'o2', nome: 'Obra Y' })] })], 'b.json');
+    importJSON({ target: { files: [arq], value: '' } }); await esp(300);
+    const o1 = S.obras.find(x => x.id === 'o1'), ids = (o1.fornecedores || []).map(x => x.id).sort().join(',');
+    return { v: gravou._v, regravou, versao, H: H.map(h => [h.tipo, h.id, !!h.item, h.aparelho ? 1 : 0, (h.campos || []).join(';')]),
+      tela: tela.replace(/\s+/g, ' ').slice(0, 600), voltou, ids, f1: (o1.fornecedores.find(x => x.id === 'f1') || {}).valor, o2: !!S.obras.find(x => x.id === 'o2') };
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r).slice(0, 1400);
+  const tem = (tp, id) => !r.erro && r.H.some(h => h[0] === tp && h[1] === id);
+  t.ok('A: toda gravação leva o contrato de escrita', !r.erro && r.v >= 2, J);
+  t.ok('A: sem mudança aqui não regrava', !r.erro && !r.regravou, J);
+  t.ok('A: lê a versão publicada para recarregar', !r.erro && r.versao === 'v99', J);
+  t.ok('C: histórico registra nota lançada, alterada e removida (com o item, e o aparelho)', tem('add', 'f3') && tem('mud', 'f1') && tem('rem', 'f2')
+    && r.H.find(h => h[1] === 'f2')[2] && r.H.every(h => h[3]) && /valor/.test(r.H.find(h => h[1] === 'f1')[4]), J);
+  t.ok('C: a tela mostra o histórico e a lixeira devolve a nota', !r.erro && /Lixeira/.test(r.tela) && /removid/i.test(r.tela) && r.voltou, J);
+  t.ok('B: restaurar backup só devolve (não apaga, não troca)', !r.erro && r.ids === 'f1,f2,f3,f9' && r.f1 === 15 && r.o2, J);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
+teste('obras-listas-recolhidas', async (b, t) => {
+  // abrir a obra mostrava todas as notas e parcelas em escada. Agora só a
+  // última de cada lista fica à mostra; as outras abrem num clique, e
+  // fecham de novo quando a obra é reaberta
+  if (!fs.existsSync(path.join(RAIZ, 'controle_obras'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'controle_obras' });
+  await semLogin(pg);
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    const f = (id, d) => ({ id, nome: 'Forn ' + id, valor: 100, numeroNF: 'N' + id, dataNF: d, chave: '', anexo: null });
+    const p = (id, d) => ({ id, desc: 'Parcela ' + id, data: d, valor: 1000, recebida: true });
+    S.obras = [{ id: 'o1', nome: 'Obra Teste', cliente: 'C', valor: 5000, status: 'andamento', _open: true,
+      parcelas: [p('p1', '01/08/2026'), p('p2', '01/09/2026'), p('p3', '01/10/2026')],
+      fornecedores: [f('f1', '05/08/2026'), f('f2', '06/08/2026'), f('f3', '07/09/2026')] }];
+    VIEW = 'detalhe'; render(); await esp(50);
+    const card = () => document.getElementById('card_o1');
+    const vis = sel => [...card().querySelectorAll(sel)].filter(e => e.offsetParent !== null);
+    const nfs = () => vis('.ob2-nf input[placeholder="Nome do fornecedor"]').map(i => i.value);
+    const parcs = () => vis('.ob2-p input[placeholder^="ex.: Entrada"]').map(i => i.value);
+    const antes = { nfs: nfs(), parcs: parcs(), botao: (card().querySelector('[data-mais="fornecedores"]') || {}).textContent || '' };
+    card().querySelector('[data-mais="fornecedores"]').click(); await esp(30);
+    const aberto = nfs();
+    // nota nova: aparece, e a lista continua aberta enquanto a obra está aberta
+    addForn('o1'); await esp(30);
+    const comNova = nfs().length;
+    // fecha e reabre a obra: volta recolhida
+    toggleObra('o1'); toggleObra('o1'); await esp(30);
+    const reaberta = nfs();
+    return { antes, aberto, comNova, reaberta };
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r);
+  t.ok('ao abrir: só a última nota e a última parcela', !r.erro && r.antes.nfs.join() === 'Forn f3' && r.antes.parcs.join() === 'Parcela p3', J);
+  t.ok('o botão diz quantas estão recolhidas', !r.erro && /2 notas/.test(r.antes.botao), J);
+  t.ok('um clique mostra todas para editar', !r.erro && r.aberto.length === 3 && r.comNova === 4, J);
+  t.ok('reabrir a obra recolhe de novo', !r.erro && r.reaberta.length === 1, J);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
+teste('recibos-rescisao-documentos', async (b, t) => {
+  // "Em cada rescisão recebemos os documentos para o funcionário assinar e uma
+  // lista de quantas vias ficam para a empresa e para ele; às vezes confunde a
+  // quantidade." Os PDFs da contabilidade entram de uma vez, cada um é
+  // reconhecido, e sai UM PDF por pastas (empresa, depois funcionário), cada
+  // pasta com folha de rosto e cada folha com a via marcada no canto.
+  // "Crie uma aba só pra isso": Recibos › Documentos Rescisão, e não um botão
+  // escondido na lista de Recibos Rescisão.
+  // Documentos FICTÍCIOS, gerados aqui -- nada de rescisão de verdade.
+  if (!fs.existsSync(path.join(RAIZ, 'recibos_rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'recibos_rm' });
+  await semLogin(pg);
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    state.employees.push({ id: 'ek1', nome: 'FUNCIONARIO EXEMPLO DA SILVA', status: 'demissao', dtDesligamento: '2026-03-01', funcao: 'Montador', salario: 2000 },
+      { id: 'ek2', nome: 'OUTRO FICTICIO SOUZA', status: 'ativo', funcao: 'Montador', salario: 2000 });
+    state.rescisoes = [{ id: 'rk1', empId: 'ek1', nome: 'FUNCIONARIO EXEMPLO DA SILVA', docTipo: 'CPF', doc: '000.000.000-00', valor: 1000, motivo: 'Rescisão', metodo: 'banco', data: '2026-03-01', cidade: 'Estrela', numero: 1, ts: Date.now() }];
+    renderResc();
+    const aba = document.querySelector('.vtab[data-v="rescdoc"]');
+    if (!aba) return { erro: 'sem a aba Documentos Rescisão' };
+    const abaTxt = aba.textContent.trim(), grupoAba = (document.querySelector('.gtab[data-g="cli"]') || {}).textContent || '';
+    aba.click(); await esp(100);
+    const botaoNaLista = !!document.querySelector('#rescBody [data-rskit]');
+    if (typeof PDFLib === 'undefined') await kitLoadPdfLib();
+    const { PDFDocument, StandardFonts } = PDFLib;
+    const fazPdf = async (titulo, paginas) => { const d = await PDFDocument.create(); const f = await d.embedFont(StandardFonts.Helvetica);
+      for (let i = 0; i < (paginas || 1); i++) { const p = d.addPage([595, 842]); p.drawText(titulo + ' - folha ' + (i + 1), { x: 40, y: 800, size: 12, font: f }); }
+      return new File([await d.save()], 'arq.pdf', { type: 'application/pdf' }); };
+    const nomeado = async (nome, titulo) => { const x = await fazPdf(titulo); return new File([await x.arrayBuffer()], nome, { type: 'application/pdf' }); };
+    const arqs = [
+      await nomeado('Recibo_de_Rescisao_Fulano.pdf', 'TERMO DE RESCISÃO DO CONTRATO DE TRABALHO - Funcionário Exemplo da Silva'),
+      await nomeado('Ficha_de_Empregado.pdf', 'REGISTRO DE EMPREGADO'),
+      await nomeado('PPP.pdf', 'Perfil Profissiográfico Previdenciário'),
+      await nomeado('Comprovante.pdf', 'COMPROVANTE DE RENDIMENTOS PAGOS'),
+      await nomeado('Extrato_Fulano.pdf', ''),                 // sem texto (como o da Caixa): pelo nome
+      await nomeado('Modelo_termo_de_quitacao.pdf', ''),       // imagem escaneada: pelo nome
+      await nomeado('Termo_de_quitacao.pdf', ''),
+      await nomeado('qualquer_coisa.pdf', 'texto sem titulo')
+    ];
+    // o comprovante tem 2 folhas
+    arqs[3] = new File([await (await fazPdf('COMPROVANTE DE RENDIMENTOS PAGOS', 2)).arrayBuffer()], 'Comprovante.pdf', { type: 'application/pdf' });
+    await kitAdiciona(arqs); await esp(200);
+    const tipos = KIT.arqs.map(a => a.nome.replace(/\.pdf$/, '') + ':' + a.tipo).join(',');
+    const tela = document.getElementById('v-rescdoc').innerText;
+    const escolhido = document.getElementById('kitEmp').value;
+    // o que não foi reconhecido fica de fora até escolher o tipo
+    const desconhecido = KIT.arqs.find(a => a.nome === 'qualquer_coisa.pdf');
+    kitTipo(desconhecido.id, ''); await esp(20);
+    const bytes = await kitMontaPdf();
+    const doc = await pdfjsLib.getDocument({ data: bytes.slice() }).promise;
+    const folhas = [];
+    for (let i = 1; i <= doc.numPages; i++) { const pgx = await doc.getPage(i); const tc = await pgx.getTextContent(); folhas.push(tc.items.map(x => x.str).join(' ').replace(/\s+/g, ' ')); }
+    const resumo = folhas.map(f => {
+      if (/Pasta da empresa/i.test(f)) return 'ROSTO-EMP';
+      if (/Pasta do funcion/i.test(f)) return 'ROSTO-FUNC';
+      const via = /VIA DA EMPRESA/.test(f) ? 'E' : /MODELO/.test(f) ? 'M' : (/VIA DO FUNCIONÁRIO( · (\d) DE (\d))?/.exec(f) || [])[0] ? 'F' + (((/(\d) DE (\d)/.exec(f)) || [])[0] || '').replace(' DE ', '/') : '?';
+      const doc = /RESCISÃO DO CONTRATO/.test(f) ? 'trct' : /REGISTRO DE EMPREGADO/.test(f) ? 'reg' : /Profissiogr/.test(f) ? 'ppp' : /COMPROVANTE/.test(f) ? 'inf' : 'x';
+      return via + ':' + doc;
+    });
+    const rostoFunc = folhas.find(f => /Pasta do funcion/i.test(f)) || '';
+    // a via fica no canto, sem cobrir o documento: o conteúdo encolhe e a faixa de cima fica livre
+    const pg1 = await doc.getPage(2); const tc1 = await pg1.getTextContent();
+    const marca = tc1.items.find(x => /VIA DA EMPRESA/.test(x.str)), corpo = tc1.items.find(x => /RESCIS/.test(x.str));
+    const posicao = marca && corpo ? { marcaY: Math.round(marca.transform[5]), corpoY: Math.round(corpo.transform[5]), marcaX: Math.round(marca.transform[4]) } : null;
+    // IMPRIMIR vai direto para a janela de impressão. Abrir o PDF numa janela
+    // nova (window.open de um blob:) não funciona no programa instalado: o
+    // Windows recebe "blob:..." e pergunta que aplicativo abre isso.
+    const antes = state.rescisoes[0].kitEm || '';
+    const abriu = []; const wo = window.open; window.open = (u) => { abriu.push(String(u).slice(0, 5)); return null; };
+    let impresso = null;
+    const hookOrig = typeof kitChamaImpressao === 'function' ? kitChamaImpressao : null;
+    window.kitChamaImpressao = f => { const im = [...f.contentDocument.querySelectorAll('img')]; impresso = { n: im.length, carregadas: im.filter(x => x.complete && x.naturalWidth > 1000).length, css: f.contentDocument.querySelector('style').textContent }; };
+    if (typeof kitImprimir === 'function') { await kitImprimir(); await esp(100); }
+    // SALVAR PDF: baixa o arquivo, com o nome do funcionário
+    const baixou = []; const ac = HTMLAnchorElement.prototype.click; HTMLAnchorElement.prototype.click = function () { baixou.push(this.download); };
+    if (typeof kitSalvar === 'function') { await kitSalvar(); await esp(50); }
+    HTMLAnchorElement.prototype.click = ac; window.open = wo; if (hookOrig) window.kitChamaImpressao = hookOrig;
+    return { tipos, faltaAntes: /não reconhecido[\s\S]*escolha/i.test(tela), total: doc.numPages, resumo: resumo.join(' '), rostoFunc, posicao, antes, kitEm: state.rescisoes[0].kitEm, abriu: abriu.join(), impresso, baixou: baixou.join(),
+      botoes: [...document.querySelectorAll('#v-rescdoc .kit-pe button')].map(x => x.textContent.trim()).join('|'),
+      abaTxt, grupoAba, botaoNaLista, escolhido, empEm: (state.employees.find(e => e.id === 'ek1') || {}).docsRescEm,
+      historico: (document.getElementById('kitHist') || {}).innerText || '',
+      lista: '' };
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(Object.assign({}, r, { rostoFunc: undefined, lista: undefined }));
+  t.ok('aba própria "Documentos Rescisão" no grupo Recibos; nada na lista de Recibos Rescisão', !r.erro && r.abaTxt === 'Documentos Rescisão' && /Recibos/.test(r.grupoAba) && !r.botaoNaLista, J);
+  t.ok('o funcionário é escolhido sozinho pelo nome no recibo de rescisão', !r.erro && r.escolhido === 'ek1', J);
+  t.ok('reconhece pelo título e, sem texto, pelo nome do arquivo', !r.erro && r.tipos === 'Recibo_de_Rescisao_Fulano:trct,Ficha_de_Empregado:registro,PPP:ppp,Comprovante:informe,Extrato_Fulano:fgts,Modelo_termo_de_quitacao:modelo,Termo_de_quitacao:quitacao,qualquer_coisa:', J);
+  t.ok('o que não reconheceu pede o tipo', !r.erro && r.faltaAntes, J);
+  // empresa 1 de cada (comprovante tem 2 folhas): 7 + rosto; funcionário: 3 trct + modelo + 3 termo + fgts + 2 inf + ppp = 11 + rosto
+  t.ok('total de folhas pela lista da contabilidade', !r.erro && r.total === 20, J);
+  t.ok('primeiro a pasta da empresa, depois a do funcionário', !r.erro && /^ROSTO-EMP E:trct E:x E:x E:inf E:inf E:ppp E:reg ROSTO-FUNC F1\/3:trct F2\/3:trct F3\/3:trct M:x F1\/3:x F2\/3:x F3\/3:x F:x F:inf F:inf F:ppp$/.test(r.resumo), J);
+  t.ok('folha de rosto do funcionário: vias e "assinar conforme o modelo"', !r.erro && /Recibo de rescisão/.test(r.rostoFunc) && /conforme o modelo/.test(r.rostoFunc) && /\b3\b/.test(r.rostoFunc) && !/Registro de empregado/.test(r.rostoFunc), r.rostoFunc);
+  t.ok('a via vai no canto de cima, acima do conteúdo', !r.erro && r.posicao && r.posicao.marcaY > r.posicao.corpoY && r.posicao.marcaY > 812 && r.posicao.marcaX > 380, J);
+  t.ok('Imprimir vai direto para a impressão, sem janela nova', !r.erro && r.abriu === '' && r.impresso && r.impresso.n === 20 && r.impresso.carregadas === 20 && /@page\s*\{[^}]*margin:\s*0/.test(r.impresso.css), J);
+  t.ok('Salvar PDF baixa o arquivo com o nome do funcionário', !r.erro && /Rescisao Funcionario Exemplo Da Silva - para assinar\.pdf/i.test(r.baixou), J);
+  t.ok('botões: Limpar, Salvar PDF e Imprimir', !r.erro && /Limpar\|Salvar PDF\|Imprimir/.test(r.botoes), J);
+  t.ok('imprimir anota a data no funcionário', !r.erro && /^\d{4}-\d{2}-\d{2}$/.test(r.empEm || ''), J);
+  t.ok('a aba lista os documentos já impressos', !r.erro && /Funcionario Exemplo da Silva/i.test(r.historico) && /\d{2}\/\d{2}\/\d{4}/.test(r.historico), r.historico);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
+teste('recibos-rescisao-documentos-clique', async (b, t) => {
+  // "clicar no campo e selecionar os arquivos da pasta não funciona": a janela
+  // abria, mas a lista de arquivos escolhidos era limpa (inp.value='') enquanto
+  // o sistema ainda carregava o leitor de PDF, e nada entrava. Arrastando
+  // funcionava. Documento FICTÍCIO, gerado aqui.
+  if (!fs.existsSync(path.join(RAIZ, 'recibos_rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'recibos_rm' });
+  await semLogin(pg);
+  const pdf = await pg.evaluate(async () => {
+    state.employees.push({ id: 'ek1', nome: 'FUNCIONARIO EXEMPLO DA SILVA', status: 'demissao', dtDesligamento: '2026-03-01', funcao: 'Montador', salario: 2000 });
+    const aba = document.querySelector('.vtab[data-v="rescdoc"]'); if (aba) aba.click();
+    // o leitor de PDF ainda não carregou: é o caso de quem abre a aba e já clica
+    const s = document.createElement('script'); s.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js';
+    await new Promise(ok => { s.onload = ok; s.onerror = ok; document.head.appendChild(s); });
+    if (typeof PDFLib === 'undefined') return null;
+    const d = await PDFLib.PDFDocument.create(); const f = await d.embedFont(PDFLib.StandardFonts.Helvetica);
+    d.addPage([595, 842]).drawText('TERMO DE RESCISÃO DO CONTRATO DE TRABALHO - Funcionario Exemplo da Silva'.replace('Ã', 'A'), { x: 40, y: 800, size: 12, font: f });
+    const by = await d.save(); delete window.PDFLib; s.remove();
+    let x = ''; by.forEach(c => { x += String.fromCharCode(c); }); return btoa(x);
+  }).catch(e => ({ erro: e.message }));
+  if (!pdf || pdf.erro) { t.ok('PDF de teste montado', false, JSON.stringify(pdf)); await ctx.close(); return; }
+  const espera = pg.waitForEvent('filechooser', { timeout: 5000 }).catch(() => null);
+  await pg.click('#kitDrop').catch(() => {});
+  const fc = await espera;
+  if (fc) await fc.setFiles([{ name: 'Recibo_de_Rescisao.pdf', mimeType: 'application/pdf', buffer: Buffer.from(pdf, 'base64') },
+    { name: 'Ficha_de_Empregado.pdf', mimeType: 'application/pdf', buffer: Buffer.from(pdf, 'base64') }]);
+  await pg.waitForTimeout(2500);
+  const r = await pg.evaluate(() => ({ n: KIT.arqs.length, nomes: KIT.arqs.map(a => a.nome).join(','), linhas: document.querySelectorAll('#kitBody tr').length,
+    tipo: (KIT.arqs[0] || {}).tipo, emp: document.getElementById('kitEmp').value })).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  t.ok('clicar no campo abre a escolha de arquivos', !!fc, J);
+  t.ok('os PDFs escolhidos entram na lista e são reconhecidos', !r.erro && r.n === 2 && r.nomes === 'Recibo_de_Rescisao.pdf,Ficha_de_Empregado.pdf' && r.tipo === 'trct' && r.emp === 'ek1' && !erros.length, J);
+  await ctx.close();
+});
+
+teste('recibos-pedido-demissao', async (b, t) => {
+  // "Hoje solicitamos que o funcionário que pede desligamento escreva tudo à
+  // mão o termo, se torna massivo e cansativo." O texto sai impresso no modelo
+  // que o RH definiu; ficam em branco, para ele escrever à mão, a data, o nome,
+  // o CPF e a admissão. Sem orientação miúda embaixo das linhas; cidade e data
+  // centralizadas; timbrado da RM.
+  // A contabilidade mandou quatro modelos -- um por situação: aviso trabalhado,
+  // não trabalhado e descontado, não trabalhado e dispensado (sem desconto) e
+  // contrato de experiência. Todos com "Ciente da empresa" e a assinatura da
+  // empresa e a do responsável legal quando o funcionário é menor. A data e o
+  // horário do pagamento, que eles também traziam, "não precisa". Dados fictícios.
+  if (!fs.existsSync(path.join(RAIZ, 'recibos_rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'recibos_rm' });
+  await semLogin(pg);
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    const iso = n => { const d = new Date(Date.now() - n * 864e5); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); };
+    state.employees.push({ id: 'pd1', nome: 'FUNCIONARIO EXEMPLO DA SILVA', docTipo: 'CPF', doc: '52998224725', status: 'ativo', dtCarteira: '2025-03-10', nascimento: '1990-05-05', funcao: 'Montador', salario: 2000 },
+      { id: 'pd2', nome: 'APRENDIZ FICTICIO NOVO', docTipo: 'CPF', doc: '11144477735', status: 'ativo', dtCarteira: iso(30), nascimento: iso(365 * 17), funcao: 'Auxiliar', salario: 1500 });
+    const aba = document.querySelector('.vtab[data-v="demis"]');
+    if (!aba) return { erro: 'sem a aba Pedido de demissão' };
+    const grupo = (document.querySelector('.gtab[data-g="doc"]') || {}).textContent || '';
+    aba.click(); await esp(80);
+    const folha = () => { const f = document.querySelector('#printScroll .folha'); const dt = f && f.querySelector('.pd-data');
+      return f ? { txt: f.innerText.replace(/\s+/g, ' '), img: f.querySelectorAll('img').length, linhas: f.querySelectorAll('.pd-lin').length,
+        dataAlinha: dt ? getComputedStyle(dt).textAlign : '', alto: Math.round(f.getBoundingClientRect().height), a4: Math.round(297 * 96 / 25.4) } : null; };
+    const fecha = () => { const o = document.getElementById('printOv'); if (o) o.classList.remove('open'); };
+    const sit = document.getElementById('pdSit');
+    const opcoes = sit ? [...sit.options].map(o => o.value).join(',') : '';
+    const padrao = sit ? sit.value : '';
+    const gera = async v => { if (v) { sit.value = v; sit.dispatchEvent(new Event('change')); } pdGerar(); await esp(50); const f = folha(); const abriu = document.getElementById('printOv').classList.contains('open'); fecha(); return Object.assign(f || {}, { abriu }); };
+    const desconto = await gera('desconto'), dispensa = await gera('dispensa'), trabalhado = await gera('trabalhado'), experiencia = await gera('experiencia');
+    // menor de idade: assinatura do responsável legal
+    document.getElementById('pdMenor').checked = true; document.getElementById('pdMenor').dispatchEvent(new Event('change'));
+    const menor = await gera('desconto');
+    document.getElementById('pdMenor').checked = false; document.getElementById('pdMenor').dispatchEvent(new Event('change'));
+    // escolher pela lista o admitido há 30 dias: experiência, menor e dados do cadastro, sozinhos
+    const n = document.getElementById('pdNome'); n.focus(); n.value = 'aprendiz'; n.dispatchEvent(new Event('input', { bubbles: true })); await esp(50);
+    const it = document.querySelector('#pdSugg .it'); if (it) it.dispatchEvent(new MouseEvent('mousedown', { bubbles: true })); await esp(50);
+    const auto = { sit: sit.value, menor: document.getElementById('pdMenor').checked, preenche: document.getElementById('pdPreenche').checked, cpf: document.getElementById('pdCpf').value };
+    const cheio = await gera(''); const nomeArq = (document.getElementById('printInfo') || {}).dataset.nome || '';
+    return { grupo, opcoes, padrao, desconto, dispensa, trabalhado, experiencia, menor, auto, cheio, nomeArq };
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(Object.assign({}, r, { desconto: undefined, dispensa: undefined, trabalhado: undefined, experiencia: undefined, menor: undefined, cheio: undefined }));
+  const d = r.desconto || {}, txt = d.txt || '';
+  t.ok('aba "Pedido de demissão" no grupo Documentos', !r.erro && /Documentos/.test(r.grupo), J);
+  t.ok('as quatro situações da contabilidade; padrão: não cumpre e desconta', !r.erro && r.opcoes === 'desconto,dispensa,trabalhado,experiencia' && r.padrao === 'desconto', J);
+  t.ok('o modelo: título, empresa com CNPJ, cargo, livre de coação', !r.erro && /PEDIDO DE DEMISSÃO/i.test(txt) && /À NUNES E KUHN ESTRUTURAS METÁLICAS LTDA CNPJ/i.test(txt) && /solicitar formalmente o meu PEDIDO DE DEMISSÃO do cargo que ocupo nesta empresa desde/.test(txt) && /livre de qualquer coação, pressão ou vício de vontade/.test(txt), txt);
+  t.ok('em branco para escrever à mão, sem orientação embaixo; cidade e data no centro', !r.erro && d.linhas >= 5 && !/escrever/i.test(txt) && !/Exemplo/i.test(txt) && d.dataAlinha === 'center', txt);
+  t.ok('desconta: ele declara e a empresa registra o desconto dos 30 dias', !r.erro && /será descontado/i.test(txt) && /Será efetuado o desconto referente ao aviso prévio de 30 dias/.test(txt), txt);
+  t.ok('dispensado: pede a dispensa, sem falar em desconto', !r.erro && /solicito a dispensa do cumprimento do aviso prévio/.test(r.dispensa.txt) && !/descont/i.test(r.dispensa.txt), r.dispensa.txt);
+  t.ok('trabalhado: cumpre os 30 dias, em caráter irrevogável', !r.erro && /30 \(trinta\) dias/.test(r.trabalhado.txt) && /irrevogável/.test(r.trabalhado.txt) && !/descont|dispensa do cumprimento/i.test(r.trabalhado.txt), r.trabalhado.txt);
+  t.ok('experiência: contrato de experiência, desligamento imediato', !r.erro && /contrato de experiência/i.test(r.experiencia.txt) && /imediatamente/.test(r.experiencia.txt), r.experiencia.txt);
+  t.ok('ciente da empresa e assinatura da empresa; uma do funcionário', !r.erro && /Ciente da empresa/.test(txt) && (txt.match(/Assinatura do\(a\) funcionário\(a\)/gi) || []).length === 1 && /Empregador/i.test(txt) && !/Responsável legal/i.test(txt) && !/Rubrica/i.test(txt), txt);
+  t.ok('sem data, horário e local do pagamento', !r.erro && !/Data do pagamento|Horário|Local:/.test(txt), txt);
+  t.ok('menor de idade: assinatura do responsável legal', !r.erro && /Responsável legal/i.test(r.menor.txt), r.menor.txt);
+  t.ok('cabe em uma folha A4', !r.erro && [r.desconto, r.dispensa, r.trabalhado, r.experiencia, r.menor].every(x => x.alto <= x.a4 + 2), JSON.stringify([r.desconto, r.dispensa, r.trabalhado, r.experiencia, r.menor].map(x => x.alto + '/' + x.a4)));
+  t.ok('no timbrado da RM', !r.erro && d.img >= 1 && d.abriu, J);
+  t.ok('escolher o admitido há 30 dias: experiência, menor e dados do cadastro', !r.erro && r.auto.sit === 'experiencia' && r.auto.menor && r.auto.preenche && r.auto.cpf === '111.444.777-35' && /APRENDIZ FICTICIO NOVO/.test((r.cheio || {}).txt || '') && /Pedido de demiss/i.test(r.nomeArq), J);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
+teste('recibos-busca-nome-visivel', async (b, t) => {
+  // Bug do pedido de demissão: a lista de funcionários abria POR TRÁS dos
+  // botões (o campo estava esmaecido, e o esmaecido cria uma camada que
+  // fica abaixo dos vizinhos) e cortada na borda da folha, que esconde o que
+  // passa dela. A lista tem de ficar por cima e inteira à vista, em toda
+  // tela que usa a busca de nome.
+  if (!fs.existsSync(path.join(RAIZ, 'recibos_rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'recibos_rm' });
+  await semLogin(pg);
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    for (let i = 0; i < 14; i++) state.employees.push({ id: 'bn' + i, nome: 'ABRAAO FICTICIO ' + String.fromCharCode(65 + i), status: 'ativo', funcao: 'Auxiliar de produção', salario: 2000 });
+    const res = {};
+    for (const [aba, campo, caixa] of [['demis', 'pdNome', 'pdSugg'], ['adv', 'adNome', 'adSugg']]) {
+      document.querySelector('.gtab[data-g="doc"]').click(); document.querySelector('.vtab[data-v="' + aba + '"]').click(); await esp(60);
+      // sem scrollIntoView: ele rola até a folha (que esconde o que passa da
+      // borda) por dentro, e escondia o defeito que este teste procura
+      const inp = document.getElementById(campo); inp.focus(); inp.value = ''; inp.dispatchEvent(new Event('input', { bubbles: true })); await esp(80);
+      const box = document.getElementById(caixa), itens = [...box.querySelectorAll('.it')];
+      const folha = box.closest('.sheet').getBoundingClientRect(), cx = box.getBoundingClientRect();
+      // a lista inteira dentro da folha (o que passa da borda some) ...
+      const inteira = cx.top >= folha.top - 1 && cx.bottom <= folha.bottom + 1;
+      // ... e por cima de tudo: no meio de cada nome à vista, quem responde é a lista
+      const porCima = itens.filter(it => { const q = it.getBoundingClientRect(); return q.bottom <= cx.bottom && q.top >= cx.top; })
+        .every(it => { const q = it.getBoundingClientRect(); const el = document.elementFromPoint(q.left + q.width / 2, q.top + q.height / 2); return !!el && box.contains(el); });
+      res[aba] = { n: itens.length, primeira: porCima, ultima: inteira, folha: [Math.round(folha.top), Math.round(folha.bottom)], caixa: [Math.round(cx.top), Math.round(cx.bottom)] };
+      inp.blur(); box.classList.remove('open');
+    }
+    return res;
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r);
+  t.ok('pedido de demissão: a lista de nomes fica por cima e inteira à vista', !r.erro && r.demis.n >= 10 && r.demis.primeira && r.demis.ultima, J);
+  t.ok('advertência: idem', !r.erro && r.adv.n >= 10 && r.adv.primeira && r.adv.ultima, J);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
+teste('obras-detalhe-ordem-e-uma-aberta', async (b, t) => {
+  // "Deixa sempre em ordem, as finalizadas na parte inferior, em andamento
+  // acima, e todas minimizadas. Abro uma para adicionar pagamento ou nota e
+  // mais obras ficam maximizadas." A lista do Detalhe seguia a ordem de
+  // cadastro, e a marca de aberta ia junto na gravação: cada obra aberta um
+  // dia voltava aberta no dia seguinte, somando com a de hoje.
+  if (!fs.existsSync(path.join(RAIZ, 'controle_obras'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'controle_obras' });
+  await semLogin(pg);
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    const ob = (id, status, aberta) => ({ id, nome: 'Obra ' + id, cliente: 'C', valor: 1000, status, parcelas: [], fornecedores: [], _open: aberta });
+    S.obras = [ob('A', 'concluida', true), ob('B', 'andamento', false), ob('C', 'aguardando', true), ob('D', 'andamento', true), ob('E', 'concluida', false)];
+    const ordem = () => [...document.querySelectorAll('#obras .obra')].map(c => c.id.replace('card_', '')).join('');
+    const abertas = () => [...document.querySelectorAll('#obras .obra.open')].map(c => c.id.replace('card_', '')).join('');
+    // a marca de aberta não atravessa a gravação: quem reabre o sistema vê tudo recolhido
+    await persist(); await load(); VIEW = 'painel'; render(); await esp(30);
+    const reaberto = S.obras.filter(o => o._open).map(o => o.id).join('');
+    S.obras.find(o => o.id === 'D')._open = true;
+    document.getElementById('tabDetalhe').click(); await esp(50);
+    const pelaAba = { ordem: ordem(), abertas: abertas() };
+    toggleObra('B'); await esp(30); const abreB = abertas();
+    toggleObra('D'); await esp(30); const abreD = abertas();
+    addParcela('D'); await esp(30); addForn('D'); await esp(30); const lancando = abertas();
+    // pelo painel: abre só a escolhida
+    setView('painel'); openDetalhe('A'); await esp(100); const pelaObra = abertas();
+    // concluir a obra aberta: desce para o fim e continua aberta
+    toggleObra('B'); setStatus('B', 'concluida'); await esp(30);
+    const concluiu = { ordem: ordem(), abertas: abertas() };
+    return { reaberto, pelaAba, abreB, abreD, lancando, pelaObra, concluiu };
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r);
+  t.ok('reabrir o sistema: nenhuma obra aberta', !r.erro && r.reaberto === '', J);
+  t.ok('em andamento em cima, aguardando no meio, concluídas embaixo', !r.erro && r.pelaAba.ordem === 'BDCAE', J);
+  t.ok('entrar pela aba Detalhe: todas recolhidas', !r.erro && r.pelaAba.abertas === '', J);
+  t.ok('abrir uma fecha a que estava aberta', !r.erro && r.abreB === 'B' && r.abreD === 'D', J);
+  t.ok('lançar parcela e nota não abre outra obra', !r.erro && r.lancando === 'D', J);
+  t.ok('vindo do Painel abre só a obra escolhida', !r.erro && r.pelaObra === 'A', J);
+  t.ok('obra concluída desce para o fim e segue aberta', !r.erro && r.concluiu.ordem === 'DCABE' && r.concluiu.abertas === 'B', J);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
+teste('obras-resumo-por-fornecedor', async (b, t) => {
+  // o resumo da obra mostra quanto saiu em nota por fornecedor (mesmo nome
+  // escrito diferente conta junto) e o total em notas tiradas; acompanha
+  // na hora quando o valor ou o nome da nota muda
+  if (!fs.existsSync(path.join(RAIZ, 'controle_obras'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'controle_obras' });
+  await semLogin(pg);
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    const f = (id, nome, valor) => ({ id, nome, valor, numeroNF: 'N' + id, dataNF: '', chave: '', anexo: null });
+    S.obras = [{ id: 'o1', nome: 'Obra Teste', cliente: 'C', valor: 5000, notaAcordada: 2000, status: 'andamento', _open: true, parcelas: [],
+      fornecedores: [f('f1', 'Aço Exemplo', 300), f('f2', 'Cimento Teste', 1000), f('f3', '  aço  exemplo ', 200), f('f4', '', 50)] }];
+    VIEW = 'detalhe'; render(); await esp(50);
+    const box = () => document.getElementById('nfforn_o1');
+    const ler = () => box() ? [...box().querySelectorAll('.ob2-fr')].map(l => [l.querySelector('.fn').textContent.trim(), l.querySelector('.fq').textContent.trim(), l.querySelector('.v').textContent.trim()]) : null;
+    const tot = () => { const e = document.getElementById('nftot_o1'); return e ? e.textContent.trim() : null; };
+    const antes = { linhas: ler(), tot: tot() };
+    setFMoney('o1', 'f2', { value: '1.500,00' }); await esp(20);
+    const valor = { linhas: ler(), tot: tot() };
+    setF('o1', 'f4', 'nome', 'Cimento teste'); await esp(20);
+    const nome = { linhas: ler(), tot: tot() };
+    const ld = document.querySelector('#card_o1 .ob2-lado').getBoundingClientRect();
+    const larg = [...box().querySelectorAll('.ob2-fr')].every(l => l.getBoundingClientRect().right <= ld.right + 1);
+    return { antes, valor, nome, larg };
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r), brl = s => s.replace(/\s/g, ' ');
+  const L = x => x && x.linhas ? x.linhas.map(l => l.map(brl).join('|')).join(' / ') : '';
+  t.ok('lista por fornecedor, maior primeiro, mesmo nome junta, sem nome à parte', !r.erro && L(r.antes) === 'Cimento Teste|1 nota|R$ 1.000,00 / Aço Exemplo|2 notas|R$ 500,00 / Sem fornecedor|1 nota|R$ 50,00', J);
+  t.ok('total em notas tiradas', !r.erro && brl(r.antes.tot || '') === 'R$ 1.550,00', J);
+  t.ok('muda o valor da nota: o sumário acompanha', !r.erro && L(r.valor) === 'Cimento Teste|1 nota|R$ 1.500,00 / Aço Exemplo|2 notas|R$ 500,00 / Sem fornecedor|1 nota|R$ 50,00' && brl(r.valor.tot) === 'R$ 2.050,00', J);
+  t.ok('muda o nome: a nota vai para o fornecedor certo', !r.erro && L(r.nome) === 'Cimento Teste|2 notas|R$ 1.550,00 / Aço Exemplo|2 notas|R$ 500,00' && brl(r.nome.tot) === 'R$ 2.050,00', J);
+  t.ok('cabe na coluna do resumo', !r.erro && r.larg, J);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
+teste('obras-parcela-forma-frio-quente', async (b, t) => {
+  // ao lado do valor da parcela: a forma em que o valor entrou (dinheiro,
+  // banco, permuta, imóvel, veículo, moto, terreno) e frio ou quente. "As
+  // opções de quente e frio, troque apenas por cor, azul e vermelho": duas
+  // bolinhas, sem a palavra na tela nem no relatório; grava e sai no relatório
+  if (!fs.existsSync(path.join(RAIZ, 'controle_obras'))) return;
+  for (const tela of [null, { width: 390, height: 844 }]) {
+    const { ctx, pg, erros } = await abre(b, { 'sis.local': 'controle_obras' }, 'index.html', tela ? { tela } : {});
+    await semLogin(pg);
+    const r = await pg.evaluate(async () => {
+      const esp = ms => new Promise(x => setTimeout(x, ms));
+      S.obras = [{ id: 'o1', nome: 'Obra Teste', cliente: 'C', valor: 5000, notaAcordada: 0, status: 'andamento', _open: true, fornecedores: [],
+        parcelas: [{ id: 'p1', desc: 'ENTRADA', data: '05/02/2026', valor: 1500, recebida: true }] }];
+      VIEW = 'detalhe'; render(); await esp(50);
+      const lin = document.querySelector('#card_o1 .ob2-p');
+      const forma = lin.querySelector('select[data-k="forma"]'), temp = lin.querySelector('.ob2-cor[data-k="temp"]');
+      if (!forma || !temp) return { erro: 'sem os campos de forma e de cor' };
+      const opcoes = [...forma.options].filter(o => o.value && o.value !== 'dividir').map(o => o.textContent.trim());
+      const vt = [...temp.querySelectorAll('button[data-cor]')].map(x => x.dataset.cor + ':' + x.title).join() + '|' + temp.innerText.trim();
+      const fundo = v => getComputedStyle(lin.querySelector('.ob2-cor [data-cor="' + v + '"]')).backgroundColor;
+      // Permuta já marca o azul sozinha; a bolinha só é tocada se ainda não estiver
+      forma.value = 'permuta'; forma.dispatchEvent(new Event('change'));
+      if (temp.dataset.v !== 'frio') temp.querySelector('[data-cor="frio"]').click(); await esp(20);
+      const corFrio = fundo('frio'), apagadaQuente = fundo('quente');
+      const p = S.obras[0].parcelas[0], gravado = { forma: p.forma, temp: p.temp };
+      temp.querySelector('[data-cor="quente"]').click(); await esp(20);
+      const corQuente = fundo('quente');
+      temp.querySelector('[data-cor="quente"]').click(); await esp(20);
+      const desmarca = p.temp + '|' + temp.dataset.v;
+      temp.querySelector('[data-cor="quente"]').click(); await esp(20);
+      const semPalavra = !/frio|quente/i.test(document.getElementById('card_o1').innerText);
+      // valor e forma lado a lado na mesma linha (no computador)
+      const rv = lin.querySelector('input[aria-label="Valor"]').getBoundingClientRect(), rf = forma.getBoundingClientRect(), rl = lin.getBoundingClientRect();
+      const dentro = [...lin.children].every(e => e.getBoundingClientRect().right <= rl.right + 1);
+      render(); await esp(30);
+      const depois = { forma: document.querySelector('#card_o1 .ob2-p select[data-k="forma"]').value, temp: document.querySelector('#card_o1 .ob2-p .ob2-cor[data-k="temp"]').dataset.v };
+      const rel = typeof obraReportSection === 'function' ? obraReportSection(S.obras[0]) : '';
+      const relTxt = rel.replace(/<style[\s\S]*?<\/style>/g, '').replace(/<[^>]+>/g, ' ');
+      return { opcoes, vt, gravado, corFrio, apagadaQuente, corQuente, desmarca, semPalavra, depois, lado: Math.abs(rv.top - rf.top) < 4 && rf.left > rv.left, dentro,
+        rel: /Permuta/.test(rel) && /class="tq quente"/.test(rel) && !/frio|quente/i.test(relTxt) };
+    }).catch(e => ({ erro: e.message }));
+    const J = JSON.stringify(r) + ' ' + erros.join(' | '), onde = tela ? 'celular: ' : 'computador: ';
+    const rgb = s => (s || '').match(/\d+/g).map(Number);
+    const azul = c => { const [R, G, B] = rgb(c); return B > R + 60 && B > G; }, verm = c => { const [R, G, B] = rgb(c); return R > G + 60 && R > B + 60; };
+    t.ok(onde + 'as 7 formas de entrada', !r.erro && r.opcoes.join() === 'Dinheiro,Banco,Permuta,Imóvel,Veículo,Moto,Terreno', J);
+    t.ok(onde + 'duas cores, azul e vermelho, sem a palavra', !r.erro && r.vt === 'frio:Azul,quente:Vermelho|' && r.semPalavra, J);
+    t.ok(onde + 'grava na parcela e volta igual', !r.erro && r.gravado.forma === 'permuta' && r.gravado.temp === 'frio' && r.depois.forma === 'permuta' && r.depois.temp === 'quente', J);
+    t.ok(onde + 'a marcada fica cheia: azul, vermelho; a outra vazia', !r.erro && azul(r.corFrio) && verm(r.corQuente) && /^rgba\(0, 0, 0, 0\)$/.test(r.apagadaQuente), J);
+    t.ok(onde + 'tocar de novo desmarca', !r.erro && r.desmarca === '|', J);
+    if (!tela) t.ok(onde + 'ao lado do valor', !r.erro && r.lado, J);
+    t.ok(onde + 'cabe na linha', !r.erro && r.dentro, J);
+    t.ok(onde + 'sai no relatório da obra, só a cor', !r.erro && r.rel, J);
+    t.ok(onde + 'sem erro na página', !erros.length, erros.join(' | '));
+    await ctx.close();
+  }
+});
+
+teste('obras-recebida-na-hora', async (b, t) => {
+  // o selo da parcela ("Recebida" / "A receber"): a cor mudava no clique, mas
+  // o texto só no próximo redesenho completo da tela -- o softRefresh não
+  // tocava nele, e por um tempo o selo dizia uma coisa com a cor da outra
+  if (!fs.existsSync(path.join(RAIZ, 'controle_obras'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'controle_obras' });
+  await semLogin(pg);
+  await pg.evaluate(() => {
+    S.obras = [{ id: 'o1', nome: 'Obra Teste', cliente: 'C', valor: 5000, notaAcordada: 0, status: 'andamento', _open: true, fornecedores: [],
+      // data no ano que vem: desmarcada, ela fica "A receber" (com data passada
+      // seria "Atrasada", em carmim -- ver obras-parcela-atrasada-a-vista)
+      parcelas: [{ id: 'p1', desc: 'ENTRADA', data: '05/02/' + (new Date().getFullYear() + 1), valor: 1500, recebida: true }] }];
+    VIEW = 'detalhe'; render();
+  });
+  const le = () => pg.evaluate(() => { const sp = document.querySelector('#card_o1 .ob2-rec span'), cb = document.querySelector('#card_o1 .ob2-rec input');
+    const cor = getComputedStyle(sp).color.match(/\d+/g).map(Number);
+    return { txt: sp.textContent.trim(), marcado: cb.checked, salvo: S.obras[0].parcelas[0].recebida, verde: cor[1] > cor[0] }; });
+  await pg.click('#card_o1 .ob2-rec'); await pg.waitForTimeout(60);
+  const a = await le();
+  await pg.click('#card_o1 .ob2-rec'); await pg.waitForTimeout(60);
+  const r2 = await le();
+  const J = JSON.stringify({ a, r2 }) + ' ' + erros.join(' | ');
+  t.ok('desmarcar: salva "a receber" e o selo já diz A receber, em laranja', !a.salvo && !a.marcado && a.txt === 'A receber' && !a.verde, J);
+  t.ok('marcar de novo: Recebida, em verde, na hora', r2.salvo && r2.marcado && r2.txt === 'Recebida' && r2.verde, J);
+  t.ok('sem erro na página', !erros.length, J);
+  await ctx.close();
+});
+
+teste('obras-parcela-dividida', async (b, t) => {
+  // o cliente paga metade da parcela em dinheiro (frio) e metade no banco
+  // (quente): a parcela se divide em partes, cada uma com valor, forma e
+  // frio/quente; avisa quando as partes não fecham com o valor; os
+  // relatórios mostram as partes e a soma de frio e de quente
+  if (!fs.existsSync(path.join(RAIZ, 'controle_obras'))) return;
+  for (const tela of [null, { width: 390, height: 844 }]) {
+    const { ctx, pg, erros } = await abre(b, { 'sis.local': 'controle_obras' }, 'index.html', tela ? { tela } : {});
+    await semLogin(pg);
+    const r = await pg.evaluate(async () => {
+      const esp = ms => new Promise(x => setTimeout(x, ms));
+      S.obras = [{ id: 'o1', nome: 'Obra Teste', cliente: 'C', valor: 500000, notaAcordada: 0, status: 'andamento', _open: true, fornecedores: [],
+        parcelas: [{ id: 'p1', desc: 'ENTRADA', data: '05/02/2026', valor: 150000, recebida: true },
+          { id: 'p2', desc: 'PARCELA 2', data: '05/03/2026', valor: 40000, recebida: true, forma: 'banco', temp: 'quente' }] }];
+      VIEW = 'detalhe'; render(); document.querySelector('#card_o1 [data-mais="parcelas"]').click(); await esp(50);
+      const lin = () => document.querySelector('#card_o1 .ob2-p[data-p="p1"]');
+      const forma = lin() && lin().querySelector('select[data-k="forma"]');
+      if (!forma) return { erro: 'linha da parcela sem data-p' };
+      const temOpcao = [...forma.options].some(o => o.value === 'dividir' && /Dividir/.test(o.textContent));
+      forma.value = 'dividir'; forma.dispatchEvent(new Event('change')); await esp(30);
+      const partes = () => [...document.querySelectorAll('#card_o1 .ob2-partes[data-p="p1"] .ob2-parte')];
+      const pp = S.obras[0].parcelas[0];
+      const metade = { n: partes().length, v: (pp.partes || []).map(x => x.valor) };
+      const poe = (i, k, v) => { const e = partes()[i].querySelector('[data-k="' + k + '"]'); if (k === 'temp') { if (e.dataset.v !== v) e.querySelector('[data-cor="' + v + '"]').click(); return; } e.value = v; e.dispatchEvent(new Event('change')); };
+      poe(0, 'forma', 'dinheiro'); poe(0, 'temp', 'frio'); poe(1, 'forma', 'banco'); poe(1, 'temp', 'quente');
+      poe(0, 'valor', '50.000,00'); await esp(20);
+      const aviso = () => { const e = document.querySelector('#card_o1 .ob2-partes[data-p="p1"] .ob2-partes-aviso'); return e && e.offsetParent !== null ? e.textContent.replace(/\s/g, ' ').trim() : ''; };
+      const falta = aviso();
+      poe(1, 'valor', '100.000,00'); await esp(20);
+      const fechou = aviso();
+      const corFrio = getComputedStyle(partes()[0].querySelector('[data-k="temp"] [data-cor="frio"]')).backgroundColor;
+      const rl = document.querySelector('#card_o1 .ob2-sec:nth-of-type(2)').getBoundingClientRect();
+      const cabe = partes().every(p => [...p.querySelectorAll('*')].every(e => e.getBoundingClientRect().right <= rl.right + 1));
+      render(); await esp(30);
+      const depois = partes().map(p => ['valor', 'forma', 'temp'].map(k => { const e = p.querySelector('[data-k="' + k + '"]'); return k === 'temp' ? e.dataset.v : e.value; }).join('|'));
+      const rel = obraReportSection(S.obras[0]);
+      const pdf = typeof docRelatorioObrasPDF === 'function' ? docRelatorioObrasPDF(S.obras, 'Relatório') : '';
+      // desfazer a divisão volta a parcela inteira
+      const bt = document.querySelector('#card_o1 .ob2-partes[data-p="p1"] [data-acao="juntar"]');
+      const okJuntar = window.confirm; window.confirm = () => true; if (bt) bt.click(); window.confirm = okJuntar; await esp(30);
+      const junta = { partes: (S.obras[0].parcelas[0].partes || []).length, linhas: partes().length, forma: S.obras[0].parcelas[0].forma || '' };
+      return { temOpcao, metade, falta, fechou, corFrio, cabe, depois, rel, pdf, junta };
+    }).catch(e => ({ erro: e.message }));
+    const J = JSON.stringify(Object.assign({}, r, { rel: undefined, pdf: undefined })) + ' ' + erros.join(' | '), onde = tela ? 'celular: ' : 'computador: ';
+    const so = s => (s || '').replace(/<[^>]+>/g, ' ').replace(/&[a-z]+;/g, ' ').replace(/\s+/g, ' ');
+    t.ok(onde + 'a forma tem "Dividir" e divide ao meio', !r.erro && r.temOpcao && r.metade.n === 2 && r.metade.v.join() === '75000,75000', J);
+    t.ok(onde + 'avisa quanto falta dividir', !r.erro && /Falta dividir R\$ 25\.000,00/.test(r.falta), J);
+    t.ok(onde + 'fechou: some o aviso', !r.erro && r.fechou === '', J);
+    t.ok(onde + 'cada parte com a sua cor', !r.erro && /29, 95, 209/.test(r.corFrio), J);
+    t.ok(onde + 'as partes cabem na tela', !r.erro && r.cabe, J);
+    t.ok(onde + 'grava e volta igual', !r.erro && r.depois.join(' / ') === '50.000,00|dinheiro|frio / 100.000,00|banco|quente', J);
+    for (const [nome, h] of [['relatório', r.rel], ['PDF', r.pdf]]) {
+      const tx = so(h);
+      const txs = so((h || '').replace(/<style[\s\S]*?<\/style>/g, ''));
+      t.ok(onde + nome + ': parcela com as duas partes', !r.erro && /Parte 1 R\$ 50\.000,00 Dinheiro ●/.test(tx) && /Parte 2 R\$ 100\.000,00 Banco ●/.test(tx) && /class="tq frio"/.test(h) && /class="tq quente"/.test(h), tx.slice(0, 600));
+      t.ok(onde + nome + ': soma de cada cor', !r.erro && /● R\$ 50\.000,00 · ● R\$ 140\.000,00/.test(tx), tx.slice(0, 900));
+      t.ok(onde + nome + ': sem a palavra frio nem quente', !r.erro && !/frio|quente/i.test(txs), txs.slice(0, 900));
+    }
+    t.ok(onde + 'desfazer a divisão volta a parcela inteira', !r.erro && r.junta.partes === 0 && r.junta.linhas === 0 && r.junta.forma === 'dinheiro', J);
+    t.ok(onde + 'sem erro na página', !erros.length, erros.join(' | '));
+    await ctx.close();
+  }
+});
+
+teste('obras-parcela-forma-auto-e-igual', async (b, t) => {
+  // escolher a forma já marca frio/quente (Banco = quente; Dinheiro,
+  // Veículo, Moto, Terreno, Permuta, Imóvel = frio), dá para trocar à mão
+  // depois; e a parcela dividida tem "Dividir igual" (metade e metade)
+  if (!fs.existsSync(path.join(RAIZ, 'controle_obras'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'controle_obras' });
+  await semLogin(pg);
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    S.obras = [{ id: 'o1', nome: 'Obra Teste', cliente: 'C', valor: 500000, notaAcordada: 0, status: 'andamento', _open: true, fornecedores: [],
+      parcelas: [{ id: 'p1', desc: 'ENTRADA', data: '05/02/2026', valor: 150000, recebida: true },
+        { id: 'p2', desc: 'PARCELA 2', data: '05/03/2026', valor: 100000, recebida: true }] }];
+    VIEW = 'detalhe'; render(); document.querySelector('#card_o1 [data-mais="parcelas"]').click(); await esp(50);
+    const row = pid => document.querySelector('#card_o1 .ob2-p[data-p="' + pid + '"]');
+    const muda = (e, v) => { e.value = v; e.dispatchEvent(new Event('change')); };
+    const P = pid => S.obras[0].parcelas.find(x => x.id === pid);
+    const auto = {};
+    for (const f of ['banco', 'dinheiro', 'veiculo', 'moto', 'terreno', 'permuta', 'imovel']) {
+      muda(row('p1').querySelector('select[data-k="forma"]'), f); await esp(5);
+      const c = row('p1').querySelector('.ob2-cor[data-k="temp"]');
+      auto[f] = P('p1').temp + '/' + c.dataset.v + '/' + c.className;
+    }
+    // trocar à mão depois continua valendo
+    row('p1').querySelector('.ob2-cor [data-cor="quente"]').click(); await esp(5);
+    const manual = P('p1').temp;
+    // partes: a forma também marca, e "Dividir igual" acerta metade e metade
+    muda(row('p1').querySelector('select[data-k="forma"]'), 'dividir'); await esp(30);
+    const partes = pid => [...document.querySelectorAll('#card_o1 .ob2-partes[data-p="' + pid + '"] .ob2-parte')];
+    muda(partes('p1')[1].querySelector('[data-k="forma"]'), 'banco'); await esp(5);
+    const parteAuto = P('p1').partes[1].temp + '/' + partes('p1')[1].querySelector('[data-k="temp"]').dataset.v;
+    muda(partes('p1')[0].querySelector('[data-k="valor"]'), '50.000,00'); await esp(5);
+    const bt = document.querySelector('#card_o1 .ob2-partes[data-p="p1"] [data-acao="igual"]');
+    if (!bt) return { erro: 'sem o Dividir igual', auto, manual, parteAuto };
+    bt.click(); await esp(30);
+    const igual = P('p1').partes.map(x => x.valor).join(',') + ' | ' + partes('p1').map(x => x.querySelector('[data-k="valor"]').value).join(',');
+    const aviso = document.querySelector('#card_o1 .ob2-partes[data-p="p1"] .ob2-partes-aviso').hidden;
+    const formas = P('p1').partes.map(x => x.forma + ':' + x.temp).join(',');
+    // em 3 partes, os centavos que sobram ficam na última
+    muda(row('p2').querySelector('select[data-k="forma"]'), 'dividir'); await esp(30);
+    document.querySelector('#card_o1 .ob2-partes[data-p="p2"] .ob2-partes-pe .linkbtn').click(); await esp(30);
+    document.querySelector('#card_o1 .ob2-partes[data-p="p2"] [data-acao="igual"]').click(); await esp(30);
+    const tres = P('p2').partes.map(x => x.valor).join(',');
+    return { auto, manual, parteAuto, igual, aviso, formas, tres };
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  const a = r.auto || {};
+  t.ok('Banco marca quente', !r.erro && /^quente\/quente\/.*t-quente/.test(a.banco), J);
+  t.ok('Dinheiro, Veículo, Moto, Terreno, Permuta e Imóvel marcam frio', !r.erro && ['dinheiro', 'veiculo', 'moto', 'terreno', 'permuta', 'imovel'].every(f => /^frio\/frio\/.*t-frio/.test(a[f])), J);
+  t.ok('dá para trocar à mão depois', !r.erro && r.manual === 'quente', J);
+  t.ok('na parte da parcela também marca', !r.erro && r.parteAuto === 'quente/quente', J);
+  t.ok('"Dividir igual": metade e metade, e some o aviso', !r.erro && r.igual === '75000,75000 | 75.000,00,75.000,00' && r.aviso === true, J);
+  t.ok('"Dividir igual" mexe só nos valores', !r.erro && /,banco:quente$/.test(r.formas), J);
+  t.ok('em 3 partes, centavos na última', !r.erro && r.tres === '33333.33,33333.33,33333.34', J);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
+/* COR FORA DO TEMA. Mede um elemento por vez (escondido também: a cor
+   calculada não depende de estar à vista) e devolve o que não se lê:
+   texto abaixo de 4,5:1 (3:1 no grande) e, no escuro, campo ou caixa que
+   ficou clara -- o fundo do navegador, que o tema não enxerga, ou regra que
+   escapou da tradução. Fora: a porta de entrada (tem teste dela), o papel
+   (recibo na tela é folha branca de propósito) e as miniaturas de tema e de
+   fundo da Central, que mostram o claro de propósito. */
+/* SONDA DO CELULAR: o que, numa tela estreita, a pessoa nao consegue ler
+   ou alcancar -- a pagina que vaza para o lado, o que fica fora da tela sem
+   rolagem que leve ate ele, e o texto cortado com "..." sem outro jeito de
+   ver o resto (o modelo do veiculo na Central). */
+const SONDA_CELULAR = () => {
+  const out = [], W = innerWidth;
+  const nome = e => { let s = e.tagName.toLowerCase(); if (e.id) s += '#' + e.id; const c = (e.getAttribute('class') || '').trim().split(/\s+/).filter(Boolean).slice(0, 2); if (c.length) s += '.' + c.join('.'); return s; };
+  const cam = e => { const a = []; for (let x = e; x && x !== document.body && a.length < 4; x = x.parentElement) a.unshift(nome(x)); return a.join(' > '); };
+  const fora = e => e.closest('#loginScreen,#lock-screen,[aria-hidden="true"],.rm-dagua,#printArea,#relPrintArea,#printRoot,.print-only,canvas,svg,.folha,.print-ov,.recibo,#rmMovimento');
+  const vis = e => { const r = e.getBoundingClientRect(); if (r.width < 2 || r.height < 2) return false; for (let x = e; x; x = x.parentElement) { const s = getComputedStyle(x); if (s.display === 'none' || s.visibility === 'hidden' || +s.opacity < 0.05) return false; } return true; };
+  const rolavel = e => { for (let x = e.parentElement; x && x !== document.body; x = x.parentElement) { const s = getComputedStyle(x); if (/(auto|scroll)/.test(s.overflowX) && x.scrollWidth > x.clientWidth + 1) return true; } return false; };
+  if (document.documentElement.scrollWidth > W + 1) out.push({ k: 'página vaza para o lado', el: 'html', txt: document.documentElement.scrollWidth + ' px numa tela de ' + W });
+  const vistos = new Set();
+  for (const e of document.querySelectorAll('body *')) {
+    if (fora(e) || !e.childElementCount && !(e.textContent || '').trim() && !e.matches('input,select,textarea,button,img')) continue;
+    const r = e.getBoundingClientRect(); if (r.width < 2 || r.height < 2) continue;
+    /* inteiro fora da tela e' gaveta fechada (menu lateral, painel recolhido),
+       de proposito; o defeito e' o que fica PELA METADE */
+    if (r.right <= 1 || r.left >= W - 1) continue;
+    if ((r.right > W + 2 || r.left < -2) && e.matches('button,input,select,textarea,a,[onclick],label,td,th,.card,h1,h2,h3,p,span,b') && !rolavel(e)) {
+      if (getComputedStyle(e).position === 'fixed' && (r.left > W || r.right < 0)) continue;   // gaveta fechada fora da tela
+      if (!vis(e)) continue;
+      const k = cam(e); if (vistos.has(k)) continue; vistos.add(k);
+      out.push({ k: 'fora da tela', el: k, txt: (e.textContent || e.value || e.placeholder || '').trim().slice(0, 40), v: Math.round(r.left) + '..' + Math.round(r.right) });
+      continue;
+    }
+    const s = getComputedStyle(e);
+    if (s.textOverflow === 'ellipsis' && e.scrollWidth > e.clientWidth + 1 && !e.title && !(e.closest('[title]')) && vis(e)) {
+      const k = cam(e); if (vistos.has(k)) continue; vistos.add(k);
+      out.push({ k: 'texto cortado', el: k, txt: (e.textContent || '').trim().slice(0, 50) });
+    }
+  }
+  return out.slice(0, 40);
+};
+
+const SONDA_CORES = (escuro) => {
+  const cv = document.createElement('canvas').getContext('2d', { willReadFrequently: true });
+  const rgba = c => { cv.clearRect(0, 0, 1, 1); cv.fillStyle = '#000'; cv.fillStyle = c; cv.fillRect(0, 0, 1, 1); const d = cv.getImageData(0, 0, 1, 1).data; return [d[0], d[1], d[2], d[3] / 255]; };
+  const L = c => { const f = v => { v /= 255; return v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); }; return 0.2126 * f(c[0]) + 0.7152 * f(c[1]) + 0.0722 * f(c[2]); };
+  const fundo = el => { for (; el && el.nodeType === 1; el = el.parentElement) { const s = getComputedStyle(el); if (s.backgroundImage && s.backgroundImage !== 'none' && !/gradient/.test(s.backgroundImage)) return null; const c = rgba(s.backgroundColor); if (c[3] > 0.6) return L(c); } return escuro ? 0.01 : 1; };
+  const nome = e => { let s = e.tagName.toLowerCase(); if (e.id) s += '#' + e.id; const c = (e.getAttribute('class') || '').trim().split(/\s+/).filter(Boolean).slice(0, 3); if (c.length) s += '.' + c.join('.'); return s; };
+  const cam = e => { const a = []; for (let x = e; x && x !== document.body && a.length < 4; x = x.parentElement) a.unshift(nome(x)); return a.join(' > '); };
+  const out = [], fora = e => e.closest('#loginScreen,#lock-screen,[aria-hidden="true"],.rm-dagua,#printArea,#relPrintArea,canvas,.recibo,.folha,.print-ov,#theme-grid,#rm-seg-estilo,#wallpaper-grid');
+  const w = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT); let x;
+  while ((x = w.nextNode())) {
+    const txt = x.textContent.trim(); if (txt.length < 2) continue; const e = x.parentElement;
+    if (!e || fora(e) || e.closest('svg,select,option,script,style,template')) continue;
+    const s = getComputedStyle(e), c = rgba(s.color); if (c[3] < 0.5) continue;
+    const bg = fundo(e); if (bg == null) continue; const lc = L(c);
+    const cr = (Math.max(lc, bg) + 0.05) / (Math.min(lc, bg) + 0.05);
+    const grande = parseFloat(s.fontSize) >= 18.5 || (parseFloat(s.fontSize) >= 14 && +s.fontWeight >= 700);
+    if (cr < (grande ? 3 : 4.5) - 0.01) out.push({ k: 'contraste', el: cam(e), txt: txt.slice(0, 30), v: cr.toFixed(2) });
+  }
+  if (escuro) document.querySelectorAll('body *').forEach(e => {
+    if (fora(e) || e.closest('svg,template') || e.matches('input[type=checkbox],input[type=radio],input[type=range],input[type=color],input[type=hidden]')) return;
+    const s = getComputedStyle(e), c = rgba(s.backgroundColor); if (c[3] < 0.6 || L(c) < 0.42) return;
+    const ctl = e.matches('input,select,textarea,button'), sat = Math.max(...c.slice(0, 3)) - Math.min(...c.slice(0, 3));
+    if (sat > 40) return;   // cor de verdade (marca, status, a bolinha de cor marcada) pode ficar; a letra em cima é medida no contraste
+    out.push({ k: ctl ? 'campo/botão claro' : 'caixa clara', el: cam(e), txt: (e.value || e.textContent || '').trim().slice(0, 30), v: s.backgroundColor });
+  });
+  const vistos = new Set();
+  return out.filter(y => { const k = y.k + y.el; if (vistos.has(k)) return false; vistos.add(k); return true; });
+};
+
+teste('cores-todas-as-telas', async (b, t) => {
+  // "tela sem cor padrão": o contraste-toque mede só o que está à vista na
+  // abertura, e os defeitos moravam nas outras telas -- o campo do login do
+  // Obras e o "Isento de INSS" do Recibos brancos no escuro, os custos do
+  // Corte com o fundo do navegador, o "Adicionar" do Contas com letra preta
+  // no escuro, os botões da Central a 2,8:1. Aqui entra cada tela, aba e
+  // janela do sistema, no claro e nos três escuros.
+  // a página de cada sistema e as outras páginas inteiras dele (a medição da PU)
+  const pags = r => ['index.html'].concat(fs.readdirSync(path.join(RAIZ, r)).filter(n => n.endsWith('.html') && n !== 'index.html'
+    && fs.readFileSync(path.join(RAIZ, r, n), 'utf8').includes('var RM_FONTE="@font-face')));
+  for (const r of repos()) for (const pag of pags(r)) for (const [tn, tom] of [['claro', null], ['forte', 'forte'], ['suave', 'suave'], ['nitido', 'nitido']]) {
+    const antes = new Function("try{" + (tom ? "localStorage.setItem('rm_tema','escuro');localStorage.setItem('rm_tom','" + tom + "');" : "localStorage.setItem('rm_tema','claro');") + "}catch(e){}");
+    const { ctx, pg } = await abre(b, { 'sis.local': r }, pag, { antes });
+    await pg.evaluate(() => { document.querySelectorAll('#loginScreen,#lock-screen').forEach(e => e.style.setProperty('display', 'none', 'important'));
+      try { if (typeof CURRENT_EMAIL !== 'undefined') { CURRENT_EMAIL = 'teste@teste'; render(); } } catch (e) {} }).catch(() => {});
+    await pg.waitForTimeout(600);
+    const res = await pg.evaluate(SONDA_CORES, !!tom).catch(e => [{ k: 'avaliação', txt: e.message }]);
+    t.ok(r + (pag === 'index.html' ? '' : '/' + pag) + ' (' + tn + ')', !res.length, res.slice(0, 6).map(y => y.k + ' ' + y.el + ' "' + (y.txt || '') + '" ' + (y.v || '')).join(' | '));
+    await ctx.close();
+  }
+});
+
+teste('tema-escuro-estilo-no-elemento', async (b, t) => {
+  // cor escrita pelo script no atributo style, com o escuro ligado: o tema
+  // traduz numa passada. Duas mudanças no mesmo instante (o selo de nuvem
+  // pinta a palavra e a bolinha juntos) e só a primeira era reconhecida --
+  // a outra voltava ao estilo antigo guardado. E trocar UMA cor de um
+  // atributo já traduzido não pode traduzir de novo as outras.
+  const r0 = repos().find(x => x !== 'central_rm'); if (!r0) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': r0 }, 'index.html', { antes: () => { try { localStorage.setItem('rm_tema', 'escuro'); localStorage.setItem('rm_tom', 'nitido'); } catch (e) {} } });
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms)), L = c => { const m = c.match(/\d+/g).map(Number); return (0.2126 * m[0] + 0.7152 * m[1] + 0.0722 * m[2]) / 255; };
+    const a = document.createElement('div'), c = document.createElement('div'), ref = document.createElement('div');
+    a.style.cssText = 'background:#ffffff;color:#16171a'; c.style.cssText = 'color:#16171a';
+    // a referência já nasce com a cor nova: é como as duas têm de ficar
+    ref.style.cssText = 'color:#B3123C';
+    document.body.append(a, c, ref); await esp(400);
+    const fundo1 = getComputedStyle(a).backgroundColor;
+    // duas mudanças de uma vez, em elementos diferentes
+    a.style.color = '#B3123C'; c.style.color = '#B3123C'; await esp(400);
+    const ca = getComputedStyle(a).color, cc = getComputedStyle(c).color, cr = getComputedStyle(ref).color, fundo2 = getComputedStyle(a).backgroundColor;
+    return { ca, cc, cr, fundo1, fundo2, lf: L(fundo2) };
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  t.ok('as duas cores trocadas juntas viram a cor nova traduzida (e não a antiga)', !r.erro && r.ca === r.cr && r.cc === r.cr, J);
+  t.ok('o fundo já traduzido não é traduzido de novo (continua escuro e igual)', !r.erro && r.fundo1 === r.fundo2 && r.lf < 0.2 && !erros.length, J);
+  await ctx.close();
+});
+
+teste('abre-no-escuro-sem-clarao', async (b, t) => {
+  // "tela sem cor padrão" também no instante de abrir: o escuro só é
+  // traduzido com a página inteira lida, e o navegador já pintava antes o
+  // que tinha lido -- ao passar do Painel para a Medição da PU o cartão de
+  // login piscava BRANCO por um décimo de segundo (o bloco do tema morava no
+  // fim do <body> dela), e os campos animavam do branco ao escuro. Aqui cada
+  // página é reaberta no escuro e cada quadro pintado é medido: nenhum pode
+  // ter mais área clara que a tela pronta.
+  const pags = r => ['index.html'].concat(fs.readdirSync(path.join(RAIZ, r)).filter(n => n.endsWith('.html') && n !== 'index.html'
+    && fs.readFileSync(path.join(RAIZ, r, n), 'utf8').includes('var RM_FONTE="@font-face')));
+  const mede = async imgs => {
+    const c2 = await b.newContext(), p2 = await c2.newPage();
+    const r = await p2.evaluate(async lst => {
+      const cv = document.createElement('canvas'), g = cv.getContext('2d'), out = [];
+      for (const d of lst) {
+        const im = new Image(); im.src = 'data:image/jpeg;base64,' + d; await im.decode();
+        cv.width = im.width; cv.height = im.height; g.drawImage(im, 0, 0);
+        const px = g.getImageData(0, 0, cv.width, cv.height).data; let n = 0;
+        for (let i = 0; i < px.length; i += 4) if (0.2126 * px[i] + 0.7152 * px[i + 1] + 0.0722 * px[i + 2] > 200) n++;
+        out.push(n / (px.length / 4));
+      }
+      return out;
+    }, imgs);
+    await c2.close(); return r;
+  };
+  for (const r of repos()) for (const pag of pags(r)) {
+    const { ctx, pg } = await abre(b, { 'sis.local': r }, pag, { antes: () => { try { localStorage.setItem('rm_tema', 'escuro'); localStorage.setItem('rm_tom', 'nitido'); } catch (e) {} } });
+    const cdp = await ctx.newCDPSession(pg), q = [];
+    cdp.on('Page.screencastFrame', f => { q.push({ t: Date.now(), d: f.data }); cdp.send('Page.screencastFrameAck', { sessionId: f.sessionId }).catch(() => {}); });
+    await cdp.send('Page.startScreencast', { format: 'jpeg', quality: 40, maxWidth: 420, maxHeight: 270, everyNthFrame: 1 });
+    // aparelho lento (CPU 6x): é nele que o navegador pinta no meio da leitura
+    // do cabecalho -- a Central piscava branca assim, e na máquina rápida não
+    await cdp.send('Emulation.setCPUThrottlingRate', { rate: 6 }).catch(() => {});
+    await pg.waitForTimeout(400); const n0 = q.length, t0 = Date.now();
+    await pg.evaluate(() => location.reload()).catch(() => {});
+    await pg.waitForTimeout(4500);
+    await cdp.send('Page.stopScreencast').catch(() => {});
+    const quadros = q.slice(n0), cl = quadros.length ? await mede(quadros.map(x => x.d)) : [];
+    const fim = cl.length ? cl[cl.length - 1] : 0, pior = cl.reduce((m, v, i) => v - fim > m.v ? { v: v - fim, i } : m, { v: 0, i: -1 });
+    t.ok(r + (pag === 'index.html' ? '' : '/' + pag) + ': nenhum quadro claro ao abrir no escuro', quadros.length > 0 && pior.v < 0.02,
+      quadros.length + ' quadros; pior: +' + (pior.v * 100).toFixed(1) + '% de área clara aos ' + (pior.i >= 0 ? quadros[pior.i].t - t0 : 0) + ' ms (tela pronta: ' + (fim * 100).toFixed(1) + '%)');
+    await ctx.close();
+  }
+});
+
+teste('logo-em-arquivo-no-escuro', async (b, t) => {
+  // a Medição da PU desenha o logo com <img src="rm-logo.svg"> (arquivo, e
+  // não embutido): o tema só clareava a escrita do embutido, e no escuro o
+  // "RM Estruturas" do login saía preto no cartão escuro. No claro volta o
+  // arquivo original.
+  if (!fs.existsSync(path.join(RAIZ, 'calculadora-pu', 'medicao.html'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'calculadora-pu' }, 'medicao.html', { antes: () => {
+    // só na página principal e uma vez: um quadro interno criado depois
+    // regravaria o escuro por cima do claro que o teste escolheu
+    try { if (window === window.top && !sessionStorage.getItem('__temaTeste')) { sessionStorage.setItem('__temaTeste', '1'); localStorage.setItem('rm_tema', 'escuro'); localStorage.setItem('rm_tom', 'nitido'); } } catch (e) {} } });
+  const r = await pg.evaluate(async () => {
+    const lg = document.getElementById('loginLogo'); if (!lg) return { erro: 'sem o logo do login' };
+    const svg = s => s.indexOf('data:image/svg+xml;base64,') === 0 ? atob(s.split(',')[1]) : '';
+    const esc = lg.getAttribute('src'), txt = svg(esc);
+    window.rmTema('claro'); await new Promise(x => setTimeout(x, 200));
+    return { escuroDado: esc.slice(0, 26), clara: /#EDEDEA/i.test(txt), preta: /#141414/i.test(txt), claro: lg.getAttribute('src') };
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  t.ok('no escuro a escrita do logo em arquivo clareia', !r.erro && r.clara && !r.preta, J);
+  t.ok('no claro volta o arquivo original', !r.erro && /rm-logo\.svg$/.test(r.claro || ''), J);
+  await ctx.close();
+});
+
+teste('botoes-sem-utilidade', async (b, t) => {
+  // "até mesmo botões que existem sem utilidade": o Orçamento ainda tinha,
+  // em Configurações, um tema próprio ("experimental") que repetia o botão
+  // ◑ e gravava data-theme="light"/"dark" por cima do tema comum; o Corte
+  // tinha um botão escondido só para servir de gatilho da lista de modelos;
+  // o Cheques deixava o Backup em arquivo à vista na barra do alto (o padrão
+  // manda para o "Mais"); e o Copiar do relatório do Almoços dava erro e não
+  // fazia nada quando a área de transferência não estava disponível.
+  const esp = ms => new Promise(x => setTimeout(x, ms));
+  if (fs.existsSync(path.join(RAIZ, 'orcamento-rm'))) {
+    const { ctx, pg, erros } = await abre(b, { 'sis.local': 'orcamento-rm' }, 'index.html', { antes: () => { try { localStorage.setItem('rm_tema', 'escuro'); localStorage.setItem('rm_tom', 'nitido'); } catch (e) {} } });
+    const r = await pg.evaluate(async () => {
+      try { S.cfg.tema = 'escuro'; } catch (e) {}
+      applyCfgAppearance(); await new Promise(x => setTimeout(x, 200));
+      const host = document.createElement('div'); host.id = 'cfgHostTeste'; document.body.appendChild(host);
+      const txt = document.body.innerHTML;
+      return { attr: document.documentElement.getAttribute('data-theme'), seletor: /O escuro é experimental/.test(txt), legado: [...document.styleSheets].some(sh => { try { return [...sh.cssRules].some(r => /data-theme="dark"/.test(r.cssText)); } catch (e) { return false; } }) };
+    }).catch(e => ({ erro: e.message }));
+    t.ok('Orçamento: sem o tema próprio -- o atributo do tema comum fica, e sem as regras do escuro antigo', !r.erro && r.attr === 'escuro' && !r.seletor && !r.legado && !erros.length, JSON.stringify(r) + ' ' + erros.join(' | '));
+    await ctx.close();
+  }
+  if (fs.existsSync(path.join(RAIZ, 'leitor_dwg'))) {
+    const { ctx, pg, erros } = await abre(b, { 'sis.local': 'leitor_dwg' }, 'index.html', { antes: () => { try { localStorage.setItem('rm_pln_models_v2', JSON.stringify([{ name: 'Modelo teste', state: { nome: 'Peça do modelo' } }])); } catch (e) {} } });
+    const r = await pg.evaluate(async () => {
+      const a = document.querySelector('#abas .aba[data-aba="pln"]'); if (a) a.click(); await new Promise(x => setTimeout(x, 300));
+      const sel = document.getElementById('pwModels'); if (!sel) return { erro: 'sem a lista de modelos' };
+      if (![...sel.options].some(o => o.value === '0')) sel.insertAdjacentHTML('beforeend', '<option value="0">Modelo teste</option>');
+      sel.value = '0'; sel.dispatchEvent(new Event('change', { bubbles: true })); await new Promise(x => setTimeout(x, 300));
+      return { escondido: !!document.getElementById('pwLoad'), status: (document.getElementById('pwStatus') || {}).textContent || '' };
+    }).catch(e => ({ erro: e.message }));
+    t.ok('Corte: escolher o modelo na lista carrega, sem botão escondido de gatilho', !r.erro && !r.escondido && /Modelo "Modelo teste" carregado/.test(r.status) && !erros.length, JSON.stringify(r) + ' ' + erros.join(' | '));
+    await ctx.close();
+  }
+  if (fs.existsSync(path.join(RAIZ, 'controle_cheques'))) {
+    const { ctx, pg, erros } = await abre(b, { 'sis.local': 'controle_cheques' });
+    await semLogin(pg);
+    const r = await pg.evaluate(async () => {
+      const vis = e => { const q = e.getBoundingClientRect(); return q.width > 1 && q.height > 1; };
+      const barra = document.querySelector('.appbar');
+      const naBarra = [...barra.querySelectorAll('button,summary')].filter(vis).map(e => e.textContent.trim());
+      const mais = barra.querySelector('.ch-mais'); if (!mais) return { naBarra, erro: 'sem o Mais' };
+      mais.querySelector('summary').click(); await new Promise(x => setTimeout(x, 100));
+      const item = [...mais.querySelectorAll('.ch-mais-menu button')].find(e => /Backup/.test(e.textContent));
+      item.click(); await new Promise(x => setTimeout(x, 200));
+      const modal = [...document.querySelectorAll('h2')].find(h => /Backup e restauração/.test(h.textContent));
+      return { naBarra, abriu: !!modal && vis(modal), fechou: !mais.open };
+    }).catch(e => ({ erro: e.message }));
+    t.ok('Cheques: o Backup em arquivo sai da barra e fica no "Mais", que abre o backup', !r.erro && !r.naBarra.includes('Backup') && r.naBarra.some(x => /Mais/.test(x)) && r.abriu && r.fechou && !erros.length, JSON.stringify(r) + ' ' + erros.join(' | '));
+    await ctx.close();
+  }
+  if (fs.existsSync(path.join(RAIZ, 'almo-os'))) {
+    const { ctx, pg, erros } = await abre(b, { 'sis.local': 'almo-os' }, 'index.html', { antes: () => { try { Object.defineProperty(navigator, 'clipboard', { value: undefined, configurable: true }); } catch (e) {} } });
+    const r = await pg.evaluate(async () => {
+      DB.funcionarios = [{ id: 'k1', nome: 'TESTE COPIA' }]; try { render(); } catch (e) {} openRep(); await new Promise(x => setTimeout(x, 200));
+      document.getElementById('repCopy').click(); await new Promise(x => setTimeout(x, 300));
+      return { toast: [...document.querySelectorAll('.toast,#toast,[class*="toast"]')].map(e => e.textContent.trim()).join(' | ') };
+    }).catch(e => ({ erro: e.message }));
+    t.ok('Almoços: Copiar sem a área de transferência moderna não dá erro e avisa', !r.erro && /copiad|Não deu para copiar/i.test(r.toast) && !erros.length, JSON.stringify(r) + ' ' + erros.join(' | '));
+    await ctx.close();
+  }
+});
+
+teste('cores-depois-de-usar', async (b, t) => {
+  // as telas que só nascem com uso: o total do relatório do Almoços (1:1 no
+  // claro, a linha TOTAIS sumia), a situação "Em andamento" do Obras (2,2:1,
+  // cor solta fora da paleta da casa) e o selo de nuvem depois de trocar de
+  // estado no escuro (o cinza do claro voltava, 3,7:1)
+  const mede = async (r, tom, prepara) => {
+    const antes = new Function("try{" + (tom ? "localStorage.setItem('rm_tema','escuro');localStorage.setItem('rm_tom','" + tom + "');" : "localStorage.setItem('rm_tema','claro');") + "}catch(e){}");
+    const { ctx, pg, erros } = await abre(b, { 'sis.local': r }, 'index.html', { antes });
+    await pg.evaluate(() => { document.querySelectorAll('#loginScreen,#lock-screen').forEach(e => e.style.setProperty('display', 'none', 'important')); }).catch(() => {});
+    const x = await pg.evaluate(prepara).catch(e => ({ erro: e.message }));
+    await pg.waitForTimeout(400);
+    const res = await pg.evaluate(SONDA_CORES, !!tom).catch(e => [{ k: 'avaliação', txt: e.message }]);
+    await ctx.close(); return { x, res, erros };
+  };
+  const txt = o => JSON.stringify(o.x) + ' ' + o.res.slice(0, 6).map(y => y.k + ' ' + y.el + ' "' + (y.txt || '') + '" ' + (y.v || '')).join(' | ') + ' ' + o.erros.join(' | ');
+  if (fs.existsSync(path.join(RAIZ, 'almo-os'))) {
+    const o = await mede('almo-os', null, async () => { DB.funcionarios = [{ id: 'c1', nome: 'TESTE COR' }]; try { render(); } catch (e) {} openRep(); await new Promise(r => setTimeout(r, 300));
+      return { tot: document.querySelectorAll('table.rep tr.tot').length }; });
+    t.ok('Almoços: a linha TOTAIS do relatório se lê no claro', o.x.tot > 0 && !o.res.length, txt(o));
+  }
+  if (fs.existsSync(path.join(RAIZ, 'controle_obras'))) for (const tom of [null, 'nitido']) {
+    const o = await mede('controle_obras', tom, async () => { const bt = [...document.querySelectorAll('button')].find(e => /Nova obra/.test(e.textContent)); if (bt) bt.click();
+      await new Promise(r => setTimeout(r, 300)); return { status: [...document.querySelectorAll('.stobra,.pg-rot')].map(e => e.textContent.trim()) }; });
+    t.ok('Obras: a situação "Em andamento" na paleta da casa e legível (' + (tom || 'claro') + ')', o.x.status && o.x.status.some(s => /andamento/i.test(s)) && !o.res.length, txt(o));
+  }
+  for (const r of repos().filter(x => x !== 'central_rm')) {
+    const o = await mede(r, 'nitido', async () => { if (!window.rmNuvem) return { sem: 1 };
+      for (const e of ['ligando', 'local', 'ligada', 'erro', 'ligando', 'local']) { window.rmNuvem(e); await new Promise(r => setTimeout(r, 60)); }
+      const s = document.getElementById('rm-nuvem'); return { estado: window.rmNuvem(), inline: s ? s.getAttribute('style') || '' : 'sem selo' }; });
+    if (o.x && o.x.sem) continue;
+    const ruim = o.res.filter(y => /rm-nuvem/.test(y.el));
+    t.ok(r + ': selo de nuvem legível no escuro depois de trocar de estado', o.x.estado === 'local' && !ruim.length && !/color/.test(o.x.inline), txt(o));
+  }
+});
+
+teste('celular-nada-pela-metade', async (b, t) => {
+  // em 360 px: menu "Mais" que abria pela metade fora da tela (Cheques,
+  // Obras, Orçamento), abas e cartões passando da largura, o formulário de
+  // lembrete da Central, o pedido de chapas do Corte, a tabela de avulsos do
+  // Orçamento e textos cortados com "..." sem outro jeito de ler.
+  const passos = {
+    central_rm: [() => { const bt = [...document.querySelectorAll('button')].find(x => /Contatos de aviso|Contatos/.test(x.textContent) && x.offsetParent); if (bt) bt.click(); },
+      () => { const bt = document.querySelector('#btn-notif'); if (bt) bt.click(); }],
+    controle_cheques: [() => { const d = document.querySelector('details.ch-mais'); if (d) d.open = true; }],
+    controle_obras: [() => { const d = document.querySelector('details.ob-mais'); if (d) d.open = true; },
+      () => { S.obras = [{ id: 'o1', nome: 'OBRA DE TESTE COM UM NOME BEM COMPRIDO PARA O CELULAR', cliente: '', data: '', valor: 0, notaAcordada: 0, status: 'andamento', parcelas: [], obs: '', fornecedores: [] }]; render(); }],
+    'orcamento-rm': [() => { const bt = [...document.querySelectorAll('button')].find(x => /Item avulso/.test(x.textContent)); if (bt) bt.click(); }],
+    recibos_rm: [() => { const bt = document.querySelector('.vtab[data-v="rel"]'); if (bt) bt.click(); }],
+    leitor_dwg: [() => { const bt = [...document.querySelectorAll('#abas .aba,.aba')].find(x => /chapas/i.test(x.textContent)); if (bt) bt.click(); }],
+  };
+  for (const r of repos()) {
+    const { ctx, pg, erros } = await abre(b, { 'sis.local': r }, 'index.html', { tela: { width: 360, height: 760 } });
+    await pg.evaluate(() => { document.querySelectorAll('#loginScreen,#lock-screen').forEach(e => e.style.setProperty('display', 'none', 'important'));
+      try { if (typeof CURRENT_EMAIL !== 'undefined') { CURRENT_EMAIL = 'teste@teste'; render(); } } catch (e) {} }).catch(() => {});
+    await pg.waitForTimeout(500);
+    const ach = [...await pg.evaluate(SONDA_CELULAR).catch(e => [{ k: 'erro', el: e.message }])];
+    for (const p of (passos[r] || [])) {
+      await pg.evaluate(p).catch(() => {}); await pg.waitForTimeout(350);
+      ach.push(...await pg.evaluate(SONDA_CELULAR).catch(e => [{ k: 'erro', el: e.message }]));
+    }
+    t.ok(r + ': nada pela metade fora da tela nem texto cortado em 360 px', !ach.length, ach.slice(0, 5).map(x => x.k + ' ' + x.el + ' "' + (x.txt || '') + '" ' + (x.v || '')).join(' | '));
+    await ctx.close();
+  }
+});
+
+teste('zz-auditoria', async (b, t) => {
+  // ferramenta de auditoria (não é teste): AUD_DIR=pasta AUD_MODO=cores|cliques|efeitos|nomes [AUD_SO=a,b]
+  const SAIDA = process.env.AUD_DIR, MODO = process.env.AUD_MODO; if (!SAIDA || !MODO) return;
+  const SO = process.env.AUD_SO ? process.env.AUD_SO.split(',') : null;
+  const ESCOLHE = (fecharPorUltimo) => {
+    window.__audVistos = window.__audVistos || new Set(); window.__audUlt = window.__audUlt || new Set();
+    const vis = e => { const r = e.getBoundingClientRect(); if (r.width < 2 || r.height < 2) return false; const s = getComputedStyle(e); return s.visibility !== 'hidden' && s.display !== 'none' && +s.opacity > 0.05; };
+    const assin = e => { const t = (e.textContent || e.title || e.getAttribute('aria-label') || '').trim().replace(/\s+/g, ' ').slice(0, 40).replace(/\d+/g, '#');
+      let p = e.parentElement, cx = ''; for (let i = 0; i < 2 && p; i++, p = p.parentElement) cx = (p.id || (p.getAttribute('class') || '').split(' ')[0] || p.tagName) + '/' + cx;
+      return cx + e.tagName + (e.id ? '#' + e.id : '') + '.' + (e.getAttribute('class') || '').split(' ')[0] + ':' + t; };
+    const pula = /^(sair|atualizar|recarregar)$/i;
+    const cands = [...document.querySelectorAll('body *')].filter(e => !e.matches('input,select,textarea,option,label,canvas,html,body')
+      && !e.closest('svg,#loginScreen,#lock-screen,.rm-bt-tema,#theme-grid,#rm-seg-estilo,#wallpaper-grid')
+      && (e.matches('button,[role=button],[role=tab],summary,[onclick],a[href^="#"]') || (getComputedStyle(e).cursor === 'pointer' && e.parentElement && getComputedStyle(e.parentElement).cursor !== 'pointer'))
+      && vis(e) && !e.disabled && !pula.test((e.textContent || '').trim()));
+    const ks = cands.map(assin), fecha = /fechar|cancelar|concluir|voltar|^\s*[✕×]\s*$/i;
+    const ord = cands.map((e, i) => ({ e, k: ks[i], novo: !window.__audUlt.has(ks[i]), fim: fecha.test((e.textContent || '') + ' ' + (e.title || '') + ' ' + (e.getAttribute('aria-label') || '')) }))
+      .filter(o => !window.__audVistos.has(o.k));
+    ord.sort((a, c) => (c.novo - a.novo) || (a.fim - c.fim));
+    /* o último clique abriu coisa nova? então ele é navegação (aba, grupo):
+       dá para voltar por ele quando o resto acabar */
+    window.__audNav = window.__audNav || [];
+    if (window.__audUltEl && cands.some((e, i) => !window.__audUlt.has(ks[i])) && !window.__audNav.some(n => n.k === window.__audUltEl.k)) window.__audNav.push(Object.assign({ n: 0 }, window.__audUltEl));
+    window.__audUlt = new Set(ks);
+    const zera = () => { if (window.__ef) Object.keys(window.__ef).forEach(x => { window.__ef[x] = 0; }); };
+    const o = ord[0];
+    if (!o) {
+      /* nada novo à vista: volta por uma aba que ainda pode ter coisa dentro */
+      const nv = window.__audNav.find(n => n.n < 2 && ks.includes(n.k));
+      if (!nv) return null;
+      nv.n++; const el = cands[ks.indexOf(nv.k)]; window.__audUltEl = null; zera(); try { el.click(); } catch (er) {} return 'volta:' + nv.k;
+    }
+    window.__audVistos.add(o.k); window.__audUltEl = { k: o.k }; zera();
+    try { o.e.click(); } catch (er) {} return o.k;
+  };
+  const SONDA = SONDA_CORES;
+  const ACHA_NOME = () => {
+    const out = [], re = /\b(ZEFERINO|QUIRINO|ZULMIRA|QUITERIA|ZACARIAS|QUELUZ|ZEBEDEU|QUINTINO|ZORAIDE|QUEVEDO)\b/;
+    const nome = e => { let s = e.tagName.toLowerCase(); if (e.id) s += '#' + e.id; const c = (e.getAttribute('class') || '').trim().split(/\s+/).filter(Boolean).slice(0, 2); if (c.length) s += '.' + c.join('.'); return s; };
+    const cam = e => { const a = []; for (let x = e; x && x !== document.body && a.length < 4; x = x.parentElement) a.unshift(nome(x)); return a.join(' > '); };
+    const vis = e => { const r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0; };
+    const w = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT); let x;
+    while ((x = w.nextNode())) { const e = x.parentElement; if (!e || e.closest('script,style')) continue;
+      const up = getComputedStyle(e).textTransform === 'uppercase';
+      if ((re.test(x.textContent) || (up && /zeferino|zulmira|zacarias|zebedeu|zoraide/i.test(x.textContent))) && (e.tagName === 'OPTION' || vis(e)))
+        out.push({ el: cam(e), txt: x.textContent.trim().slice(0, 60), tt: up }); }
+    return out;
+  };
+  const SEMENTE = {
+    recibos_rm: () => {
+      const m = String(new Date().getMonth() + 1).padStart(2, '0');
+      state.employees.push({ id: 'z1', nome: 'ZEFERINO QUIRINO DA SILVA', status: 'ativo', salario: 2500, nascimento: '1990-' + m + '-17', admissao: '2020-01-02', funcao: 'MONTADOR', metodo: 'banco', docTipo: 'CPF', doc: '' },
+        { id: 'z2', nome: 'ZULMIRA QUITERIA DOS SANTOS', status: 'afastado', salario: 2100, afastDesde: '2026-01-10', admissao: '2021-03-01', docTipo: 'CPF', doc: '' },
+        { id: 'z3', nome: 'ZACARIAS QUELUZ', status: 'desligado', salario: 1900, admissao: '2019-05-01', docTipo: 'CPF', doc: '' });
+      (state.terceiros = state.terceiros || []).push({ id: 'zt1', nome: 'ZEBEDEU QUINTINO SERVICOS', docTipo: 'CNPJ', doc: '', servico: 'SOLDA', metodo: 'pix' });
+      (state.clientes = state.clientes || []).push({ id: 'zc1', nome: 'ZORAIDE QUEVEDO', docTipo: 'CPF', doc: '', data: rmDiaISO(), itens: [{ desc: 'Teste', valor: 10 }] });
+      try { render(); } catch (e) {} },
+    'almo-os': () => { DB.funcionarios = [{ id: 'z1', nome: 'ZEFERINO QUIRINO DA SILVA', setor: 'PRODUÇÃO' }, { id: 'z2', nome: 'ZULMIRA QUITERIA DOS SANTOS' }]; try { render(); } catch (e) {} try { renderAll(); } catch (e) {} } };
+  const ANTES = (tema, tom) => 'try{' + (tom ? "localStorage.setItem('rm_tema','escuro');localStorage.setItem('rm_tom','" + tom + "');" : "localStorage.setItem('rm_tema','" + (tema || 'claro') + "');") + '}catch(e){}'
+    + 'window.__ef={mut:0,ls:0,print:0,open:0,dl:0,dlg:0};window.print=function(){window.__ef.print++};window.open=function(){window.__ef.open++;return null};'
+    + "['alert','confirm','prompt'].forEach(function(k){window[k]=function(){window.__ef.dlg++;return k==='confirm'?false:null}});"
+    + 'var si=Storage.prototype.setItem;Storage.prototype.setItem=function(){window.__ef.ls++;return si.apply(this,arguments)};'
+    + 'var ri=Storage.prototype.removeItem;Storage.prototype.removeItem=function(){window.__ef.ls++;return ri.apply(this,arguments)};'
+    + 'var ac=HTMLAnchorElement.prototype.click;HTMLAnchorElement.prototype.click=function(){if(this.download||/^blob:|^data:/.test(this.href)){window.__ef.dl++;return}return ac.apply(this,arguments)};'
+    + "document.addEventListener('DOMContentLoaded',function(){new MutationObserver(function(ms){ms.forEach(function(m){var t=m.target;if(t.nodeType===1&&t.closest&&t.closest('#rmMovimento,#rm-tema-escuro,.rm-toque'))return;window.__ef.mut++;})}).observe(document.documentElement,{subtree:true,childList:true,attributes:true,characterData:true})});";
+  const abreSis = async (r, tema, tom) => {
+    const x = await abre(b, { 'sis.local': r }, 'index.html', { antes: new Function(ANTES(tema, tom)) });
+    x.arq = 0; x.pg.on('filechooser', f => { x.arq++; f.setFiles([]).catch(() => {}); });
+    await x.pg.evaluate(() => { document.querySelectorAll('#loginScreen,#lock-screen').forEach(e => e.style.setProperty('display', 'none', 'important'));
+      try { if (typeof CURRENT_EMAIL !== 'undefined') { CURRENT_EMAIL = 'teste@teste'; render(); } } catch (e) {} }).catch(() => {});
+    await x.pg.waitForTimeout(700); return x;
+  };
+  const explora = async (x, cada, limite) => {
+    const t0 = Date.now(), cl = [];
+    for (let n = 0; n < 500 && Date.now() - t0 < (limite || 150000); n++) {
+      const a0 = x.arq, alvo = await x.pg.evaluate(ESCOLHE).catch(() => 'nav'); if (!alvo) break;
+      cl.push(alvo); await x.pg.waitForTimeout(260); await cada(alvo, a0);
+    }
+    return cl;
+  };
+  const sai = {};
+  for (const r of repos()) {
+    if (SO && !SO.includes(r)) continue;
+    if (MODO === 'cores') for (const [tn, tom] of [['claro', null], ['forte', 'forte'], ['suave', 'suave'], ['nitido', 'nitido']]) {
+      const x = await abreSis(r, 'claro', tom); sai[r + '|' + tn] = { achados: await x.pg.evaluate(SONDA, !!tom).catch(e => [{ k: 'erro', txt: e.message }]), erros: x.erros }; await x.ctx.close();
+    }
+    if (MODO === 'celular') {
+      const x = await abre(b, { 'sis.local': r }, 'index.html', { tela: { width: 360, height: 760 }, antes: new Function(ANTES('claro', null)) });
+      x.arq = 0; x.pg.on('filechooser', f => { x.arq++; f.setFiles([]).catch(() => {}); });
+      await x.pg.evaluate(() => { document.querySelectorAll('#loginScreen,#lock-screen').forEach(e => e.style.setProperty('display', 'none', 'important'));
+        try { if (typeof CURRENT_EMAIL !== 'undefined') { CURRENT_EMAIL = 'teste@teste'; render(); } } catch (e) {} }).catch(() => {});
+      await x.pg.waitForTimeout(700);
+      const ach = new Map(); const anota = (lst, d) => lst.forEach(y => { const k = y.k + '|' + y.el; if (!ach.has(k)) ach.set(k, Object.assign({ depois: d }, y)); });
+      anota(await x.pg.evaluate(SONDA_CELULAR).catch(() => []), 'início');
+      const cl = await explora(x, async a => anota(await x.pg.evaluate(SONDA_CELULAR).catch(() => []), a), 120000);
+      sai[r] = { n: cl.length, achados: [...ach.values()], erros: x.erros }; await x.ctx.close();
+    }
+    if (MODO === 'cliques') for (const [tn, tom] of [['nitido', 'nitido'], ['claro', null]]) {
+      const x = await abreSis(r, 'claro', tom), ach = new Map();
+      const anota = (lst, d) => lst.forEach(y => { const k = y.k + '|' + y.el; if (!ach.has(k)) ach.set(k, Object.assign({ depois: d }, y)); });
+      anota(await x.pg.evaluate(SONDA, !!tom).catch(() => []), 'início');
+      const cl = await explora(x, async a => anota(await x.pg.evaluate(SONDA, !!tom).catch(() => []), a));
+      sai[r + '|' + tn] = { n: cl.length, achados: [...ach.values()], erros: x.erros }; await x.ctx.close();
+    }
+    if (MODO === 'efeitos') {
+      const x = await abreSis(r, 'claro'), nulos = [];
+      const cl = await explora(x, async (a, a0) => { await x.pg.waitForTimeout(150); const ef = await x.pg.evaluate(() => Object.assign({}, window.__ef)).catch(() => ({ nav: 1 }));
+        ef.arq = x.arq - a0; if (!Object.values(ef).some(v => v)) nulos.push(a); });
+      sai[r] = { n: cl.length, nulos, erros: x.erros }; await x.ctx.close();
+    }
+    if (MODO === 'nomes' && SEMENTE[r]) {
+      const x = await abreSis(r, 'claro'), ach = new Map();
+      await x.pg.evaluate(SEMENTE[r]).catch(e => console.log('semente', r, e.message)); await x.pg.waitForTimeout(400);
+      const anota = (lst, d) => lst.forEach(y => { const k = y.el + '|' + y.txt.replace(/\d+/g, ''); if (!ach.has(k)) ach.set(k, Object.assign({ depois: d }, y)); });
+      anota(await x.pg.evaluate(ACHA_NOME).catch(() => []), 'início');
+      const cl = await explora(x, async a => anota(await x.pg.evaluate(ACHA_NOME).catch(() => []), a), 240000);
+      sai[r] = { n: cl.length, achados: [...ach.values()], erros: x.erros, cl }; await x.ctx.close();
+    }
+  }
+  fs.writeFileSync(path.join(SAIDA, MODO + (SO ? '-' + SO.join('_') : '') + '.json'), JSON.stringify(sai, null, 1));
+  t.ok('auditoria gravada', true, '');
+});
+
+teste('contraste-toque', async (b, t) => {
+  // texto legível (4,5:1; 3:1 no texto grande) e botão com área de toque de
+  // pelo menos 24 px, no claro e no escuro. A caixinha dentro de um <label>
+  // conta pelo rótulo inteiro, que também marca.
+  const SONDA = () => {
+    const cv = document.createElement('canvas').getContext('2d', { willReadFrequently: true });
+    const rgba = c => { cv.clearRect(0, 0, 1, 1); cv.fillStyle = '#000'; cv.fillStyle = c; cv.fillRect(0, 0, 1, 1); const d = cv.getImageData(0, 0, 1, 1).data; return [d[0], d[1], d[2], d[3] / 255]; };
+    const L = c => { const f = v => { v /= 255; return v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); }; return 0.2126 * f(c[0]) + 0.7152 * f(c[1]) + 0.0722 * f(c[2]); };
+    const vis = e => { const r = e.getBoundingClientRect(); if (r.width < 1 || r.height < 1) return false; const s = getComputedStyle(e); return s.visibility !== 'hidden' && s.display !== 'none' && +s.opacity > 0.05; };
+    const fundo = el => { for (; el && el.nodeType === 1; el = el.parentElement) { const s = getComputedStyle(el); if (s.backgroundImage && s.backgroundImage !== 'none' && !/gradient/.test(s.backgroundImage)) return null; const c = rgba(s.backgroundColor); if (c[3] > 0.6) return L(c); } return 1; };
+    const ruins = [], w = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT); let x;
+    while ((x = w.nextNode())) {
+      const txt = x.textContent.trim(); if (txt.length < 2) continue; const e = x.parentElement;
+      if (!e || !vis(e) || e.closest('#loginScreen,#lock-screen,[aria-hidden="true"],.rm-dagua')) continue;
+      const s = getComputedStyle(e), c = rgba(s.color); if (c[3] < 0.5) continue;
+      const bg = fundo(e); if (bg == null) continue; const lc = L(c);
+      const cr = (Math.max(lc, bg) + 0.05) / (Math.min(lc, bg) + 0.05);
+      const grande = parseFloat(s.fontSize) >= 18.5 || (parseFloat(s.fontSize) >= 14 && +s.fontWeight >= 700);
+      if (cr < (grande ? 3 : 4.5) - 0.01) ruins.push('"' + txt.slice(0, 18) + '" ' + cr.toFixed(2));
+    }
+    document.querySelectorAll('button,a[href],select,input[type=checkbox]').forEach(e => {
+      if (!vis(e) || e.closest('#loginScreen,#lock-screen')) return;
+      if (e.type === 'checkbox' && e.closest('label')) return;
+      const r = e.getBoundingClientRect();
+      if (r.width < 23.5 || r.height < 23.5) ruins.push('toque ' + Math.round(r.width) + 'x' + Math.round(r.height) + ' "' + ((e.textContent || e.title || e.id) + '').trim().slice(0, 14) + '"');
+    });
+    return [...new Set(ruins)].slice(0, 6);
+  };
+  for (const r of repos()) for (const tema of ['claro', 'escuro']) {
+    const antes = tema === 'escuro' ? () => { try { if (!localStorage.getItem('rm_tom')) { localStorage.setItem('rm_tema', 'escuro'); localStorage.setItem('rm_tom', 'forte'); } } catch (e) {} } : undefined;
+    const { ctx, pg } = await abre(b, { 'sis.local': r }, 'index.html', { antes });
+    await pg.evaluate(() => { document.querySelectorAll('#loginScreen,#lock-screen').forEach(e => e.style.setProperty('display', 'none', 'important'));
+      try { if (typeof CURRENT_EMAIL !== 'undefined') { CURRENT_EMAIL = 'teste@teste'; render(); } } catch (e) {} });
+    await pg.waitForTimeout(700);
+    const res = await pg.evaluate(SONDA).catch(e => ['avaliação: ' + e.message]);
+    t.ok(r + ' (' + tema + ')', !res.length, res.join(' | '));
+    await ctx.close();
+  }
+  // Cheques: um indicador de nuvem só (o padrão), não dois
+  if (fs.existsSync(path.join(RAIZ, 'controle_cheques'))) {
+    const { ctx, pg } = await abre(b, { 'sis.local': 'controle_cheques' });
+    const n = await pg.evaluate(() => ({ padrao: document.querySelectorAll('#rm-nuvem').length, antigo: !!document.getElementById('storageTxt') })).catch(e => ({ erro: e.message }));
+    t.ok('Cheques: um indicador de nuvem', n.padrao === 1 && !n.antigo, JSON.stringify(n));
+    await ctx.close();
+  }
+});
+
+teste('backup-todos-os-nos', async (b, t) => {
+  // o backup automático da Central tem de levar todo nó que as regras do
+  // Firebase guardam -- menos os que o PADRAO_RM.md exclui de propósito:
+  // orcamentos_versoes (já é histórico) e caepi_consulta (cópia de consulta).
+  // users e rm_contas_usuarios são do app Minhas Contas, pessoal: só o dono
+  // de cada conta lê -- a Central não consegue ler, então não há o que copiar.
+  const c = path.join(RAIZ, 'central_rm');
+  if (!fs.existsSync(path.join(c, 'ferramentas', 'regras_firebase.json'))) return;
+  const regras = Object.keys(JSON.parse(fs.readFileSync(path.join(c, 'ferramentas', 'regras_firebase.json'), 'utf8')).rules).filter(k => k[0] !== '.');
+  const h = fs.readFileSync(path.join(c, 'index.html'), 'utf8');
+  const lista = n => { const m = h.match(new RegExp('const ' + n + '\\s*=\\s*\\[([^\\]]*)\\]')); return m ? (m[1].match(/'([^']+)'/g) || []).map(x => x.slice(1, -1)) : []; };
+  const noBackup = lista('NOS_DADOS').concat(lista('NOS_ANEXOS'));
+  // as exceções moram na própria Central, cada uma com o motivo (NOS_FORA_DO_BACKUP)
+  const mf = h.match(/const NOS_FORA_DO_BACKUP = \{([^}]*)\}/), excecoes = mf ? (mf[1].match(/\b([a-z_]+):/g) || []).map(x => x.slice(0, -1)) : [];
+  const fora = regras.filter(n => excecoes.indexOf(n) < 0 && noBackup.indexOf(n) < 0);
+  t.ok('as exceções de propósito estão listadas com motivo na Central', ['caepi_consulta', 'orcamentos_versoes', 'users', 'rm_contas_usuarios'].every(n => excecoes.includes(n)), excecoes.join(', '));
+  t.ok('todo nó das regras está no backup (fora as exceções do padrão)', !fora.length, 'fora do backup: ' + fora.join(', '));
+  // Estoque: o levantamento do galpão (com valores) não fica escrito na página
+  const e = path.join(RAIZ, 'Controle-estoque-maquinas', 'index.html');
+  if (fs.existsSync(e)) {
+    const he = fs.readFileSync(e, 'utf8'), m = he.match(/const DADOS_INICIAIS = \{[\s\S]*?\n\};/);
+    const itens = m ? (m[0].match(/\bid:\s*"m/g) || []).length : -1;
+    t.ok('Estoque sem inventário embutido na página', itens === 0, 'máquinas no código: ' + itens);
+  }
+});
+
+teste('data-hoje-fuso', async (b, t) => {
+  // o dia de hoje é o de Brasília: calculado pelo relógio de Londres
+  // (toISOString) ele virava o dia seguinte depois das 21h
+  const opt = { fuso: 'America/Sao_Paulo', relogio: '2026-09-29T22:30:00-03:00' };
+  const extra = {
+    rm_contas: 'todayISO()', Pedidos_perfitec: 'todayISO()', controle_compras: 'todayISO()',
+    'Controle-estoque-maquinas': 'hoje()',
+    recibos_rm: "(()=>{state.employees=[{id:'e1',nome:'TESTE',status:'ativo',salario:1}];const em=gerarParcelamento('e1',300,3,'2026-10-01','t','pagamento');return em.parcelas.map(p=>p.vencimento).join(',');})()",
+  };
+  const esperado = { recibos_rm: '2026-11-01,2026-12-01,2027-01-01' };
+  for (const r of repos()) {
+    const { ctx, pg } = await abre(b, { 'sis.local': r }, 'index.html', opt);
+    const res = await pg.evaluate(async x => {
+      const out = { comum: typeof window.rmDiaISO === 'function' ? window.rmDiaISO() : 'sem rmDiaISO' };
+      if (x) { try { out.extra = await eval(x); } catch (e) { out.extra = 'ERRO ' + e.message; } }
+      return out;
+    }, extra[r] || '').catch(e => ({ comum: 'avaliação: ' + e.message }));
+    const ok = res.comum === '2026-09-29' && (!extra[r] || res.extra === (esperado[r] || '2026-09-29'));
+    t.ok(r, ok, JSON.stringify(res));
+    await ctx.close();
+  }
+});
+
+teste('recibos-epi-sem-qr', async (b, t) => {
+  // o QR + PIN saiu do EPI; o botão da Movimentação ainda dizia "Gerar QR
+  // para confirmar" e abria a assinatura no aparelho
+  if (!fs.existsSync(path.join(RAIZ, 'recibos_rm'))) return;
+  const { ctx, pg } = await abre(b, { 'sis.local': 'recibos_rm' });
+  const r = await pg.evaluate(async () => {
+    const l = document.getElementById('loginScreen'); if (l) l.style.setProperty('display', 'none', 'important');
+    const aba = document.querySelector('.vtab[data-v="epi"]'); if (aba) aba.click();
+    await new Promise(x => setTimeout(x, 500));
+    const qr = [...document.querySelectorAll('#v-epi button')].filter(x => /\bQR\b/.test(x.textContent)).map(x => x.textContent.trim());
+    return { qr, conf: ((document.getElementById('epiMovConfirmar') || {}).textContent || '').trim(),
+      aviso: /assina no aparelho da empresa/.test(document.getElementById('v-epi').textContent) };
+  }).catch(e => ({ erro: e.message }));
+  t.ok('EPI sem botão de QR', !r.erro && !r.qr.length && /assinar/i.test(r.conf), JSON.stringify(r));
+  // a faixa "O funcionário assina no aparelho da empresa..." saiu, a pedido
+  t.ok('EPI sem a faixa de explicação da assinatura', !r.erro && !r.aviso, JSON.stringify(r));
+  await ctx.close();
+});
+
+teste('recibos-epi-hist-desligado', async (b, t) => {
+  // FICHA DE EPI ÚNICA: um documento por funcionário com as trocas (data,
+  // item, motivo, usado devolvido, assinatura de cada uma) e, para quem saiu,
+  // a devolução do desligamento. A busca acha desligados; troca pendente sai
+  // com linha para assinar; o arquivo leva o nome.
+  if (!fs.existsSync(path.join(RAIZ, 'recibos_rm'))) return;
+  const { ctx, pg } = await abre(b, { 'sis.local': 'recibos_rm' });
+  const r = await pg.evaluate(async () => {
+    const l = document.getElementById('loginScreen'); if (l) l.style.setProperty('display', 'none', 'important');
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    state.employees = [{ id: 'ha1', nome: 'ANA TESTE ATIVA', status: 'ativo', salario: 1, funcao: 'Montadora' },
+      { id: 'hd1', nome: 'DAVI TESTE SAIU', status: 'desligado', salario: 1, funcao: 'Soldador', dtDesligamento: '2026-09-20' }];
+    const luva = { itemId: 'x', categoria: 'epi', nome: 'Luva de Malha', ca: '15272', unidade: 'par', qtd: 1, devolucao: 'sim' };
+    state.epiMovimentos = {
+      hm1: { id: 'hm1', empId: 'hd1', nome: 'DAVI TESTE SAIU', funcao: 'Soldador', tipo: 'troca', motivo: 'desgaste', data: '2026-09-10',
+        responsavel: 'Teste', itens: [luva], status: 'pendente', criadoEm: '2026-09-10T10:00:00Z' },
+      hm2: { id: 'hm2', empId: 'hd1', nome: 'DAVI TESTE SAIU', funcao: 'Soldador', tipo: 'troca', motivo: 'perda', data: '2026-09-12',
+        responsavel: 'Teste', itens: [Object.assign({}, luva, { devolucao: 'nao' })], status: 'pendente', criadoEm: '2026-09-12T10:00:00Z' } };
+    document.querySelector('.vtab[data-v="epi"]').click(); await esp(400);
+    document.querySelector('.epi-stab[data-p="historico"]').click(); await esp(300);
+    const busca = document.getElementById('epiHistBusca'); if (!busca) return { erro: 'sem busca no histórico' };
+    busca.value = 'davi'; busca.dispatchEvent(new Event('input', { bubbles: true })); await esp(200);
+    const sel = document.getElementById('epiHistFunc').value;
+    const opt = [...document.getElementById('epiHistFunc').options].find(o => o.value === 'hd1');
+    const botoes = [...document.querySelectorAll('#epi-pane-historico .epi-form button')].map(x => x.textContent.trim()).filter(Boolean);
+    let html = '', arq = ''; const o = window.preVisualizarPDF; window.preVisualizarPDF = (c, h, n) => { html = h; arq = n; };
+    try { document.getElementById('epiDossie').click(); } finally { window.preVisualizarPDF = o; }
+    const d = document.createElement('div'); d.innerHTML = html;
+    const cab = [...d.querySelectorAll('table.movpdf')].map(tb => [...tb.querySelectorAll('th')].map(x => x.textContent.trim()).join('|'));
+    return { sel, botoes, arquivo: arq, nome: /Davi Teste Saiu/i.test(html), linhas: d.querySelectorAll('.movass-manual').length,
+      dtLista: /20\/09\/2026/.test(opt ? opt.textContent : ''), dtFicha: /20\/09\/2026/.test(html),
+      cab, motivo: /Novo/.test(html.replace(/Novo Paraíso/g, '')) && /Perdido/.test(html), naoDevolvido: /Não/.test(html),
+      devolucao: /Devolução no desligamento/i.test(html), branco: d.querySelectorAll('tr.mv-branco').length };
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r);
+  t.ok('desligado achado pela busca, com a data de desligamento', !r.erro && r.sel === 'hd1' && r.dtLista, J);
+  t.ok('um botão só: Ficha de EPI', !r.erro && r.botoes.join(',') === 'Ficha de EPI', J);
+  t.ok('ficha com as colunas da troca', !r.erro && r.cab[0] === 'Data|Item|Qtd.|Entrega|Usado devolvido|Assinatura' && r.motivo && r.naoDevolvido, J);
+  t.ok('cada troca pendente com a sua linha para assinar', !r.erro && r.linhas === 2, J);
+  t.ok('desligado: devolução e data no cabeçalho', !r.erro && r.devolucao && r.dtFicha, J);
+  t.ok('5 linhas em branco para anotar à mão', !r.erro && r.branco === 5, J);
+  t.ok('arquivo com o nome do funcionário', !r.erro && /^Ficha de EPI - Davi Teste Saiu/.test(r.arquivo || ''), J);
+  await ctx.close();
+});
+
+teste('recibos-epi-novo-troca', async (b, t) => {
+  // NOVO × TROCA sem ninguém marcar: item do kit da função de admissão já foi
+  // recebido na contratação (a 1ª entrega no sistema é troca e substitui a da
+  // admissão); item fora do kit -- inclusive o do kit de uma função nova -- é
+  // novo na 1ª entrega; dali em diante, troca que substitui a entrega anterior
+  if (!fs.existsSync(path.join(RAIZ, 'recibos_rm'))) return;
+  const { ctx, pg } = await abre(b, { 'sis.local': 'recibos_rm' });
+  const r = await pg.evaluate(async () => {
+    const l = document.getElementById('loginScreen'); if (l) l.style.setProperty('display', 'none', 'important');
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    state.employees = [
+      { id: 'nt1', nome: 'NILO TESTE SOLDA', status: 'ativo', salario: 1, funcao: 'SOLDADOR', dtInicio: '2025-03-10' },
+      { id: 'nt2', nome: 'OTO TESTE MUDOU', status: 'ativo', salario: 1, funcao: 'SOLDADOR', dtInicio: '2024-02-01',
+        historicoFuncao: [{ data: '2026-01-05', anterior: 'AUXILIAR DE PRODUÇÃO', novo: 'SOLDADOR' }] }];
+    const it = (id, nome, dev) => ({ itemId: id, categoria: 'epi', nome, ca: '1', unidade: 'pç', qtd: 1, devolucao: dev || 'sim' });
+    const mv = (id, emp, data, motivo, itens) => ({ id, empId: emp, nome: 'X', tipo: 'troca', motivo, data, itens, status: 'pendente', criadoEm: data + 'T10:00:00Z' });
+    state.epiMovimentos = {
+      a1: mv('a1', 'nt1', '2026-08-05', 'desgaste', [it('ep6', 'Luva de Malha', 'na')]),
+      a2: mv('a2', 'nt1', '2026-09-02', 'desgaste', [it('ep6', 'Luva de Malha'), it('ep9', 'Óculos de Segurança')]),
+      a3: mv('a3', 'nt1', '2026-09-15', 'perda', [it('ep6', 'Luva de Malha', 'nao')]) };
+    document.querySelector('.vtab[data-v="epi"]').click(); await esp(400);
+    // ficha
+    document.querySelector('.epi-stab[data-p="historico"]').click(); await esp(300);
+    const sel = document.getElementById('epiHistFunc'); sel.value = 'nt1'; sel.dispatchEvent(new Event('change')); await esp(150);
+    let html = '', css = ''; const o = window.preVisualizarPDF; window.preVisualizarPDF = (c, h) => { css = c; html = h; };
+    try { document.getElementById('epiDossie').click(); } finally { window.preVisualizarPDF = o; }
+    const txt = (() => { const d = document.createElement('div'); d.innerHTML = html; return d.textContent.replace(/\s+/g, ' '); })();
+    // "substitui a de ..." impresso: tamanho e contraste que não somem no papel
+    const fr = document.createElement('iframe'); fr.style.cssText = 'position:fixed;left:-3000px;width:800px;height:600px'; document.body.appendChild(fr);
+    fr.contentDocument.open(); fr.contentDocument.write('<style>' + css + '</style>' + html); fr.contentDocument.close(); await esp(100);
+    const sub = fr.contentDocument.querySelector('.movficha .sub'), cs = sub && fr.contentWindow.getComputedStyle(sub);
+    const lum = c => { const v = (c.match(/\d+(\.\d+)?/g) || []).slice(0, 3).map(n => { n /= 255; return n <= .03928 ? n / 12.92 : Math.pow((n + .055) / 1.055, 2.4); }); return .2126 * v[0] + .7152 * v[1] + .0722 * v[2]; };
+    const subImp = cs ? { px: parseFloat(cs.fontSize), contraste: 1.05 / (lum(cs.color) + .05), peso: +cs.fontWeight } : null;
+    fr.remove();
+    // troca rápida
+    const rap = document.querySelector('.epi-stab[data-p="rapida"]'); rap.click(); await esp(200);
+    const rs = document.getElementById('epiRapFunc'); rs.value = 'nt1'; rs.dispatchEvent(new Event('change')); await esp(200);
+    const card = id => { const c = document.querySelector('[data-rapit="' + id + '"]'); return c ? c.textContent.replace(/\s+/g, ' ') : ''; };
+    const cards = { luva: card('ep6'), nitrilica: card('ep7'), avental: card('ep1') };
+    rs.value = 'nt2'; rs.dispatchEvent(new Event('change')); await esp(200);
+    cards.mudouAvental = card('ep1'); cards.mudouBotina = card('ep2');
+    // movimentação: tipo manual saiu
+    const tipos = [...document.querySelectorAll('#epiMovTipo option')].map(x => x.value).join(',');
+    return { txt, cards, tipos, subImp };
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r).slice(0, 900), T = r.txt || '';
+  t.ok('ficha: 1ª luva (fora do kit) é Novo', !r.erro && /Luva de Malha[^|]*?Novo/.test(T.slice(T.indexOf('05/08/2026'))), J);
+  t.ok('ficha: luva seguinte é troca que substitui a de 05/08', !r.erro && /substitui a de 05\/08\/2026/.test(T), J);
+  t.ok('ficha: item do kit substitui o da admissão', !r.erro && /substitui a da admissão \(10\/03\/2025\)/.test(T), J);
+  t.ok('ficha: perda substitui a de 02/09', !r.erro && /Perdido[^]*substitui a de 02\/09\/2026|substitui a de 02\/09\/2026/.test(T), J);
+  t.ok('troca rápida: diz novo ou troca em cada item', !r.erro && /troca/i.test(r.cards.luva) && /15\/09\/2026/.test(r.cards.luva)
+    && /novo/i.test(r.cards.nitrilica) && /admissão/i.test(r.cards.avental), J);
+  t.ok('mudou de função: item do kit novo é novo; o do kit antigo é troca', !r.erro && /novo/i.test(r.cards.mudouAvental) && /admissão/i.test(r.cards.mudouBotina), J);
+  t.ok('movimentação sem tipo manual (entrega ou devolução)', !r.erro && r.tipos === 'entrega,devolucao', J);
+  const s = r.subImp;
+  t.ok('ficha: "substitui a de…" legível na impressão (≥ 9px, contraste ≥ 9:1)', !r.erro && s && s.px >= 9 && s.contraste >= 9, JSON.stringify(s));
+  await ctx.close();
+});
+
+teste('recibos-epi-peca-a-mais-e-corrigir', async (b, t) => {
+  // pedidos: (1) uniforme também se entrega A MAIS com o tempo, sem trocar --
+  // precisa da opção "novo" mesmo quando o sistema acharia que é troca;
+  // (2) entrega já assinada com tamanho ou quantidade errados (camisa M que
+  // era G; entregou 2 e lançou 1 + 1) se corrige sem nova assinatura, com a
+  // correção registrada no comprovante
+  if (!fs.existsSync(path.join(RAIZ, 'recibos_rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'recibos_rm' });
+  const r = await pg.evaluate(async () => {
+    const l = document.getElementById('loginScreen'); if (l) l.style.setProperty('display', 'none', 'important');
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    state.employees = [{ id: 'pm1', nome: 'PEDRO TESTE MAIS', status: 'ativo', salario: 1, funcao: 'AUXILIAR DE PRODUÇÃO', dtInicio: '2025-01-06' }];
+    state.epiMovimentos = {};
+    document.querySelector('.vtab[data-v="epi"]').click(); await esp(400);
+    const U = state.cfg.epi.uniformes[0];
+    const it = (qtd, tam) => ({ itemId: U.id, categoria: 'uniforme', nome: U.nome, ca: '', unidade: U.unidade || 'pç', qtd, tamanho: tam, devolucao: 'na' });
+    const mv = (id, data, st, itens) => ({ id, empId: 'pm1', nome: 'PEDRO TESTE MAIS', funcao: 'AUXILIAR DE PRODUÇÃO', tipo: 'entrega', motivo: 'desgaste', data, itens,
+      status: st, criadoEm: data + 'T10:00:00Z', responsavel: 'Teste', metodo: st === 'confirmado' ? 'Assinatura no aparelho' : 'Aguardando assinatura',
+      confirmadoEm: st === 'confirmado' ? data + 'T10:05:00Z' : undefined });
+    state.epiMovimentos.c1 = mv('c1', '2026-08-03', 'confirmado', [it(1, 'M')]);
+    state.epiMovimentos.p1 = mv('p1', '2026-08-04', 'pendente', [it(1, 'P')]);
+    window.rmEpiMovAtualizar(); await esp(100);
+    const out = { uni: U.nome };
+    // troca rápida: o uniforme já entregue seria troca; escolhe "Novo · peça a mais"
+    document.querySelector('.epi-stab[data-p="rapida"]').click(); await esp(200);
+    const rs = document.getElementById('epiRapFunc'); rs.value = 'pm1'; rs.dispatchEvent(new Event('change')); await esp(150);
+    const card = () => (document.querySelector('[data-rapit="' + U.id + '"]') || {}).textContent || '';
+    out.cardAntes = card();
+    document.querySelector('[data-rapit="' + U.id + '"]').click(); await esp(100);
+    out.temEscolha = !!document.querySelector('[data-rapnat="' + U.id + '"][data-v="novo"]');
+    if (out.temEscolha) { document.querySelector('[data-rapnat="' + U.id + '"][data-v="novo"]').click(); await esp(100); }
+    out.cardDepois = card(); out.resumo = (document.getElementById('epiRapResumo') || {}).textContent || '';
+    document.getElementById('epiRapPendente').click(); await esp(200);
+    const novo = Object.values(state.epiMovimentos).filter(m => !['c1', 'p1'].includes(m.id))[0];
+    out.novoItem = novo && novo.itens[0];
+    // uniforme que só veio na ficha em papel: o sistema acha "novo", mas a
+    // escolha também aparece -- e "Troca" faz a anterior voltar
+    const V = state.cfg.epi.uniformes[1];
+    const cardV = () => (document.querySelector('[data-rapit="' + V.id + '"]') || {}).textContent || '';
+    out.cardVAntes = cardV();
+    document.querySelector('[data-rapit="' + V.id + '"]').click(); await esp(100);
+    out.escolhaV = !!document.querySelector('[data-rapnat="' + V.id + '"][data-v="troca"]');
+    const onV = document.querySelector('[data-rapnat="' + V.id + '"].on'); out.escolhaVmarcado = onV ? onV.getAttribute('data-v') : '';
+    if (out.escolhaV) { document.querySelector('[data-rapnat="' + V.id + '"][data-v="troca"]').click(); await esp(100); }
+    // quantidade: 2 calças numa linha só, não em dois lançamentos
+    const mais = document.querySelector('[data-rapq="' + V.id + '"][data-d="1"]');
+    out.temQtd = !!mais;
+    if (mais) { mais.click(); await esp(80); document.querySelector('[data-rapq="' + V.id + '"][data-d="1"]').click(); await esp(80);
+      document.querySelector('[data-rapq="' + V.id + '"][data-d="-1"]').click(); await esp(80); }
+    out.cardVDepois = cardV(); out.resumoV = (document.getElementById('epiRapResumo') || {}).textContent || '';
+    const antes = new Set(Object.keys(state.epiMovimentos));
+    document.getElementById('epiRapPendente').click(); await esp(200);
+    const mV = Object.values(state.epiMovimentos).filter(m => !antes.has(m.id))[0];
+    out.trocaPapel = mV && mV.itens[0];
+    // movimentação: o mesmo uniforme oferece troca ou "novo · peça a mais"
+    document.querySelector('.epi-stab[data-p="mov"]').click(); await esp(150);
+    const mf = document.getElementById('epiMovFunc'); mf.value = 'pm1'; mf.dispatchEvent(new Event('change')); await esp(150);
+    const sel = document.querySelector('#epiMovItens tr[data-mi="' + U.id + '"] [data-mnat]');
+    out.movOpcoes = sel ? [...sel.options].map(o => o.value + ':' + o.textContent).join('|') : '';
+    const selV = document.querySelector('#epiMovItens tr[data-mi="' + state.cfg.epi.uniformes[2].id + '"] [data-mnat]');
+    out.movOpcoesV = selV ? selV.value + '=' + [...selV.options].map(o => o.value).join(',') : '';
+    // histórico: Corrigir só no assinado
+    document.querySelector('.epi-stab[data-p="historico"]').click(); await esp(200);
+    const hs = document.getElementById('epiHistFunc'); hs.value = ''; hs.dispatchEvent(new Event('change')); await esp(150);
+    out.corrigirNoAssinado = !!document.querySelector('[data-mcorr="c1"]');
+    out.corrigirNoPendente = !!document.querySelector('[data-mcorr="p1"]');
+    if (out.corrigirNoAssinado) {
+      document.querySelector('[data-mcorr="c1"]').click(); await esp(100);
+      const dlg = document.querySelector('.pg.epi-corr');
+      out.dialogo = dlg ? dlg.textContent.replace(/\s+/g, ' ') : '';
+      if (dlg) {
+        dlg.querySelector('[data-cq="0"]').value = '0'; dlg.querySelector('[data-ok]').click(); await esp(50);
+        out.recusaZero = (dlg.querySelector('.pg-erro') || {}).textContent || '';
+        dlg.querySelector('[data-cq="0"]').value = '2'; dlg.querySelector('[data-ct="0"]').value = 'G';
+        document.getElementById('epiCorrMot').value = 'entregou 2 G, lançado 1 M';
+        dlg.querySelector('[data-ok]').click(); await esp(300);
+      }
+    }
+    const c1 = state.epiMovimentos.c1;
+    out.c1 = { qtd: c1.itens[0].qtd, tam: c1.itens[0].tamanho, status: c1.status, conf: c1.confirmadoEm, correcoes: (c1.correcoes || []).map(c => c.campo + ':' + c.de + '>' + c.para + ':' + c.motivo) };
+    let html = ''; const o = window.preVisualizarPDF; window.preVisualizarPDF = (c, h) => { html = h; };
+    try { document.querySelector('[data-mpdf="c1"]').click(); } finally { window.preVisualizarPDF = o; }
+    const d = document.createElement('div'); d.innerHTML = html; out.comprovante = d.textContent.replace(/\s+/g, ' ');
+    out.linhaHist = (document.querySelector('[data-mcorr="c1"]') || { closest: () => null }).closest('tr');
+    out.linhaHist = out.linhaHist ? out.linhaHist.textContent.replace(/\s+/g, ' ') : '';
+    // ficha de desligamento: a peça a mais fica "em poder" (não volta numa troca)
+    return out;
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r).slice(0, 2200);
+  t.ok('troca rápida: uniforme já entregue aparece como troca e oferece "Novo · peça a mais"', !r.erro && /troca/i.test(r.cardAntes) && r.temEscolha, J);
+  t.ok('escolhido "novo": cartão diz peça a mais e o resumo não diz que a anterior volta', !r.erro && /peça a mais/.test(r.cardDepois) && !/anterior volta/.test(r.resumo), J);
+  t.ok('a entrega gravada é peça a mais: adicional, sem devolução', !r.erro && r.novoItem && r.novoItem.adicional === true && r.novoItem.devolucao === 'na' && !r.novoItem.dataDevolucao, J);
+  t.ok('uniforme da ficha em papel (sistema acha novo): a escolha também aparece, marcada em Novo', !r.erro && /novo/.test(r.cardVAntes) && r.escolhaV && r.escolhaVmarcado === 'novo', J);
+  t.ok('escolhido "Troca": a anterior volta, gravado como troca da ficha em papel', !r.erro && /troca · a anterior volta/.test(r.cardVDepois) && /anterior volta hoje/.test(r.resumoV)
+    && r.trocaPapel && r.trocaPapel.trocaPapel === true && r.trocaPapel.devolucao === 'sim', J);
+  t.ok('troca rápida: quantidade por item (+ + − = 2), no cartão, no resumo e gravada', !r.erro && r.temQtd && /2 pç/.test(r.cardVDepois) && /2 pç de/.test(r.resumoV) && r.trocaPapel && r.trocaPapel.qtd === 2, J);
+  t.ok('movimentação: uniforme nunca entregue também tem a escolha (começa em novo)', !r.erro && r.movOpcoesV === 'novo=troca,novo', J);
+  t.ok('movimentação: o uniforme oferece troca ou "novo · peça a mais"', !r.erro && /novo:novo · peça a mais/.test(r.movOpcoes) && /^troca:/.test(r.movOpcoes), J);
+  t.ok('Corrigir aparece só na movimentação assinada', !r.erro && r.corrigirNoAssinado && !r.corrigirNoPendente, J);
+  t.ok('a janela diz que não pede nova assinatura e recusa quantidade 0', !r.erro && /Sem nova assinatura/.test(r.dialogo) && /Quantidade inválida/.test(r.recusaZero), J);
+  t.ok('corrigido: quantidade 2 e tamanho G, continua assinada, cada mudança registrada com o motivo', !r.erro && r.c1.qtd === 2 && r.c1.tam === 'G' && r.c1.status === 'confirmado' && !!r.c1.conf
+    && r.c1.correcoes.join() === 'quantidade:1>2:entregou 2 G, lançado 1 M,tamanho:M>G:entregou 2 G, lançado 1 M', J);
+  t.ok('comprovante mostra a correção (era → ficou) depois da assinatura', !r.erro && /Correções feitas depois da assinatura/.test(r.comprovante) && /Quantidade\s*1\s*2/.test(r.comprovante) && /Tamanho\s*M\s*G/.test(r.comprovante), J);
+  t.ok('histórico avisa que foi corrigido', !r.erro && /corrigido depois da assinatura/.test(r.linhaHist) && /\(G\)/.test(r.linhaHist), J);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
+teste('contas-link-acompanhar', async (b, t) => {
+  // pedido: mandar por link tudo o que está em aberto para quem decide os
+  // pagamentos acompanhar pelo telefone -- atraso de cada conta, forma de
+  // pagamento escolhida por ele e "paguei". Acesso pedido e liberado no sistema.
+  if (!fs.existsSync(path.join(RAIZ, 'rm_contas'))) return;
+  const nuvem = () => {
+    window.__grav = []; window.__on = {};
+    fb = { auth: { currentUser: { email: 'pessoa@exemplo.com', uid: 'u1' } }, db: { ref: (p) => ({
+      once: () => Promise.resolve({ val: () => p === 'contas_pagar/formas' ? ['PIX', 'Boleto', 'Cheque'] : null }),
+      on: (ev, ok, err) => { window.__on[p] = { ok, err }; },
+      off: () => {},
+      set: v => { window.__grav.push(['set', p, v]); return Promise.resolve(); },
+      update: v => { window.__grav.push(['update', p, JSON.parse(JSON.stringify(v))]); return Promise.resolve(); } }) } };
+  };
+  // --- o link, no telefone
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'rm_contas' }, 'index.html?ver=aberto', { tela: { width: 360, height: 760 } });
+  const r = await pg.evaluate(async (nuvemSrc) => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    const vis = sel => { const e = document.querySelector(sel); return !!e && e.offsetParent !== null; };
+    const out = { primeiroAcesso: vis('#acompLogin'), subLogin: (document.querySelector('.login-card .sub') || {}).textContent };
+    eval('(' + nuvemSrc + ')')();
+    onAuthed('pessoa@exemplo.com'); await esp(50);
+    out.sistemaEscondido = !vis('.wrap') && !vis('#acompBt');
+    // sem liberação: deixa o pedido e espera
+    __on['contas_pagar/contas'].err(new Error('permission_denied')); await esp(50);
+    out.pedidoTela = document.getElementById('acomp').textContent.replace(/\s+/g, ' ');
+    out.pedido = JSON.stringify(__grav.filter(g => g[1] === 'contas_pagar_acesso/pedidos/u1').map(g => g[2].email));
+    // liberado: abre sozinho
+    __on['contas_pagar_acesso/liberados/u1'].ok({ val: () => ({ ok: true }) }); await esp(50);
+    const d = n => { const x = new Date(todayISO() + 'T12:00:00'); x.setDate(x.getDate() + n); return x.toISOString().slice(0, 10); };
+    const c = (id, forn, valor, venc, extra) => Object.assign({ id, fornecedor: forn, valor, venc, categoria: 'Frete', pago: false }, extra || {});
+    __on['contas_pagar/contas'].ok({ val: () => ({
+      a: c('a', 'Fornecedor Atrasado', 1200, d(-12), { documento: 'NF 10' }),
+      b: c('b', 'Fornecedor Hoje', 300, d(0), { forma: 'Boleto' }),
+      e: c('e', 'Fornecedor Semana', 450.5, d(3), { parcela: 2, totalParcelas: 3 }),
+      f: c('f', 'Fornecedor Longe', 900, d(20)),
+      g: c('g', 'Fornecedor Pago', 80, d(-1), { pago: true, dataPagamento: d(-1) }) }) }); await esp(50);
+    const host = document.getElementById('acomp');
+    out.tiles = [...host.querySelectorAll('.ac-tile')].map(x => x.textContent.replace(/\s+/g, ' ').trim());
+    out.grupos = [...host.querySelectorAll('.ac-gt')].map(x => x.firstChild.textContent);
+    out.cartaoA = (host.querySelector('[data-acid="a"]') || {}).textContent.replace(/\s+/g, ' ');
+    out.cartaoE = (host.querySelector('[data-acid="e"]') || {}).textContent.replace(/\s+/g, ' ');
+    out.formasA = [...host.querySelectorAll('[data-acforma="a"] option')].map(o => o.textContent).join(',');
+    out.formaB = host.querySelector('[data-acforma="b"]').value;
+    out.pagas = (host.querySelector('.ac-pagas') || {}).textContent;
+    out.rola = document.documentElement.scrollWidth > innerWidth + 1;
+    // filtro: só atrasadas
+    host.querySelector('[data-acfiltro="atrasadas"]').click(); await esp(30);
+    out.soAtrasadas = [...host.querySelectorAll('.ac-card')].map(x => x.getAttribute('data-acid')).join(',');
+    host.querySelector('[data-acfiltro="atrasadas"]').click(); await esp(30);
+    // forma de pagamento escolhida por ele
+    __grav.length = 0;
+    const sl = host.querySelector('[data-acforma="a"]'); sl.value = 'PIX'; sl.dispatchEvent(new Event('change')); await esp(30);
+    out.gravForma = JSON.stringify(__grav);
+    // paguei
+    __grav.length = 0;
+    host.querySelector('[data-acpago="a"]').click(); await esp(30);
+    out.gravPago = JSON.stringify(__grav);
+    out.aSaiu = !host.querySelector('[data-acid="a"]');
+    out.pagasDepois = (host.querySelector('.ac-pagas') || {}).textContent.replace(/\s+/g, ' ');
+    __grav.length = 0;
+    host.querySelector('[data-acdesfaz="a"]').click(); await esp(30);
+    out.gravDesfaz = JSON.stringify(__grav);
+    out.aVoltou = !!host.querySelector('[data-acid="a"]');
+    return out;
+  }, nuvem.toString()).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r).slice(0, 2500);
+  t.ok('link ?ver=aberto: login com "Primeiro acesso" e o título das contas em aberto', !r.erro && r.primeiroAcesso && r.subLogin === 'Contas em aberto', J);
+  t.ok('no link, o resto do sistema não aparece', !r.erro && r.sistemaEscondido, J);
+  t.ok('sem liberação: avisa e deixa o pedido de acesso com o e-mail', !r.erro && /Pedido de acesso enviado/.test(r.pedidoTela) && r.pedido === '["pessoa@exemplo.com"]', J);
+  t.ok('liberado: totais de atrasado, até 7 dias e em aberto (arredondados, cabem no telefone)', !r.erro && /Atrasado\s*R\$\s?1\.200\s*1 conta/.test(r.tiles[0]) && /Até 7 dias\s*R\$\s?751\s*2 contas/.test(r.tiles[1]) && /Em aberto\s*R\$\s?2\.851\s*4 contas/.test(r.tiles[2]), J);
+  t.ok('grupos na ordem: atrasadas, hoje, 7 dias, depois', !r.erro && r.grupos.join('|') === 'Atrasadas|Vencem hoje|Próximos 7 dias|Depois', J);
+  t.ok('cada conta diz o tempo: "12 dias de atraso", "vence em 3 dias", parcela', !r.erro && /12 dias de atraso/.test(r.cartaoA) && /NF 10/.test(r.cartaoA) && /vence em 3 dias/.test(r.cartaoE) && /parcela 2\/3/.test(r.cartaoE), J);
+  t.ok('forma de pagamento com as formas do sistema; a já escolhida vem marcada', !r.erro && r.formasA === 'escolher…,PIX,Boleto,Cheque' && r.formaB === 'Boleto', J);
+  t.ok('filtro "Atrasado" mostra só as atrasadas', !r.erro && r.soAtrasadas === 'a', J);
+  t.ok('escolher a forma grava só a forma (e quem escolheu) daquela conta', !r.erro && r.gravForma === '[["update","contas_pagar/contas",{"a/forma":"PIX","a/formaPor":"pessoa@exemplo.com"}]]', J);
+  t.ok('Paguei grava pago, a data de hoje e quem pagou; a conta vai para "Pagas"', !r.erro && /"a\/pago":true/.test(r.gravPago) && /"a\/pagoPor":"pessoa@exemplo.com"/.test(r.gravPago) && /"a\/dataPagamento":"\d{4}-\d\d-\d\d"/.test(r.gravPago)
+    && r.aSaiu && /Fornecedor Atrasado/.test(r.pagasDepois), J);
+  t.ok('Desfazer volta a conta para em aberto', !r.erro && /"a\/pago":false/.test(r.gravDesfaz) && r.aVoltou, J);
+  t.ok('pagas dos últimos 15 dias aparecem à parte', !r.erro && /Pagas nos últimos 15 dias/.test(r.pagas) && /Fornecedor Pago/.test(r.pagas), J);
+  t.ok('celular 360: sem rolar de lado', !r.erro && !r.rola, J);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+  // --- no sistema: o link, os pedidos e a liberação
+  const s2 = await abre(b, { 'sis.local': 'rm_contas' });
+  const q = await s2.pg.evaluate(async (nuvemSrc) => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    const out = { primeiroAcessoEscondido: document.getElementById('acompLogin').hidden };
+    eval('(' + nuvemSrc + ')')();
+    acompVigiarPedidos();
+    __on['contas_pagar_acesso'].ok({ val: () => ({ pedidos: { u1: { email: 'pessoa@exemplo.com', em: Date.now() } }, liberados: { u9: { ok: true, email: 'outra@exemplo.com', em: Date.now() } } }) });
+    await esp(30);
+    const n = document.getElementById('acompN'); out.badge = n.hidden ? '' : n.textContent;
+    acompAbrirJanela(); await esp(30);
+    out.url = document.getElementById('acompUrl').textContent;
+    out.janela = document.getElementById('acompOverlay').textContent.replace(/\s+/g, ' ');
+    __grav.length = 0;
+    document.querySelector('[data-aclibera="u1"]').click(); await esp(30);
+    out.libera = JSON.stringify(__grav.map(g => [g[0], g[1], Object.keys(g[2]).sort(), (g[2]['liberados/u1'] || {}).ok, g[2]['pedidos/u1']]));
+    return out;
+  }, nuvem.toString()).catch(e => ({ erro: e.message }));
+  const J2 = JSON.stringify(q).slice(0, 1500);
+  t.ok('sistema: "Primeiro acesso" só no link', !q.erro && q.primeiroAcessoEscondido === true, J2);
+  t.ok('sistema: botão Link com o número de pedidos', !q.erro && q.badge === '1', J2);
+  t.ok('janela do link: endereço da página de instalação, pedido e quem tem acesso', !q.erro && /rm_contas\/aberto\.html$/.test(q.url) && /pessoa@exemplo\.com/.test(q.janela) && /outra@exemplo\.com/.test(q.janela) && /Enviar pelo WhatsApp/.test(q.janela), J2);
+  t.ok('Liberar grava a liberação e apaga o pedido', !q.erro && q.libera === '[["update","contas_pagar_acesso",["liberados/u1","pedidos/u1"],true,null]]', J2);
+  t.ok('sem erro na página do sistema', !s2.erros.length, s2.erros.join(' | '));
+  await s2.ctx.close();
+  // --- regra da nuvem e backup acompanham o nó novo
+  const regras = JSON.parse(fs.readFileSync(path.join(RAIZ, 'central_rm', 'ferramentas', 'regras_firebase.json'), 'utf8')).rules;
+  const central = fs.readFileSync(path.join(RAIZ, 'central_rm', 'index.html'), 'utf8');
+  const cp = regras.contas_pagar || {}, camp = ((cp.contas || {}).$id) || {};
+  t.ok('regra: liberado lê as contas e grava só pago/forma; acesso tem pedido e liberação por uid',
+    !!regras.contas_pagar_acesso && !!(cp.contas || {})['.read'] && ['pago', 'dataPagamento', 'pagoPor', 'forma', 'formaPor'].every(k => camp[k] && camp[k]['.write'])
+    && !camp['.write'] && !(cp.contas || {})['.write'] && !!regras.contas_pagar_acesso.pedidos.$uid['.write'], JSON.stringify(cp).slice(0, 400));
+  t.ok('backup da Central inclui contas_pagar_acesso', /NOS_DADOS = \[[^\]]*'contas_pagar_acesso'/.test(central), '');
+  t.ok('página de instalação e manifest próprios', fs.existsSync(path.join(RAIZ, 'rm_contas', 'aberto.html'))
+    && JSON.parse(fs.readFileSync(path.join(RAIZ, 'rm_contas', 'manifest-aberto.json'), 'utf8')).start_url === './?ver=aberto', '');
+});
+
+teste('recibos-13-sem-gratificacao-natalina', async (b, t) => {
+  // pedido: o recibo de 13º diz só "13º salário" -- sem "(gratificação natalina)"
+  if (!fs.existsSync(path.join(RAIZ, 'recibos_rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'recibos_rm' });
+  const r = await pg.evaluate(() => {
+    const txt = h => { const d = document.createElement('div'); d.innerHTML = h; return d.textContent.replace(/\s+/g, ' '); };
+    const m = p => ({ tipo: 'decimo', nome: 'FULANO EXEMPLO', doc: '000.000.000-00', docTipo: 'CPF', valorPrevisto: 3500, extra: { parcela: p, ano: '2026' } });
+    return { u: txt(reciboExtraHTML(m('u'))), p1: txt(reciboExtraHTML(m('1'))) };
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r).slice(0, 900);
+  t.ok('parcela única: "ao 13º salário de 2026, em parcela única", sem gratificação natalina', !r.erro && /referente ao 13º salário de 2026, em parcela única/.test(r.u) && !/gratifica/i.test(r.u), J);
+  t.ok('1ª parcela: "à 1ª parcela do 13º salário de 2026", sem gratificação natalina', !r.erro && /à 1ª parcela do 13º salário de 2026/.test(r.p1) && !/gratifica/i.test(r.p1), J);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
+teste('recibos-entrevista-beneficios', async (b, t) => {
+  // pedido: aba com os benefícios para a entrevista, a soma da assiduidade
+  // (350 rancho + 170 + 420 almoços), o horário e as anotações do candidato.
+  // "Alimentação" mostra só "Média" (sem a palavra assiduidade). A entrevista
+  // grava na nuvem (RAMOS) e as anotações não saem na folha do candidato.
+  if (!fs.existsSync(path.join(RAIZ, 'recibos_rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'recibos_rm' }, 'index.html', { relogio: '2026-10-13T10:00:00-03:00', fuso: 'America/Sao_Paulo' });
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    const l = document.getElementById('loginScreen'); if (l) l.style.setProperty('display', 'none', 'important');
+    dadosCarregados = true;
+    if (!fb) fb = { db: { ref: () => ({ update: () => Promise.resolve(), set: () => Promise.resolve(), on: () => {} }) }, auth: {} };
+    const bt = document.querySelector('.vtab[data-v="entrev"]'); bt.click(); await esp(50);
+    const grupo = (document.querySelector('#abasGrupo .gtab.on') || {}).textContent || '';
+    const txt = s => (document.querySelector(s) || {}).textContent || '';
+    const linhas = [...document.querySelectorAll('#entBen .ent-ben-l')].map(x => x.textContent.replace(/\s+/g, ' '));
+    const alim = linhas.find(x => /Alimenta/.test(x)) || '';
+    const tot = txt('#entTot'), hr = txt('#entHr');
+    const set = (id, v) => { const i = document.getElementById(id); i.value = v; i.dispatchEvent(new Event('change')); };
+    set('enNome', 'FULANO EXEMPLO'); set('enFuncao', 'Soldador'); set('enNotas', 'ANOTACAO SO NOSSA');
+    const guardada = Object.values(state.entrevistas || {}).find(e => e.nome === 'FULANO EXEMPLO');
+    document.getElementById('enImprimir').click(); await esp(50);
+    const folha = txt('#printScroll');
+    // trocar o valor em Empresa > Benefícios muda a soma
+    document.querySelector('.vtab[data-v="emp"]').click(); renderBenCfg();
+    const v = document.querySelector('#benCfg [data-k="valor"]'); v.value = '400,00'; v.dispatchEvent(new Event('change'));
+    bt.click(); await esp(30);
+    return { grupo, tot, alim, hr, linhas: linhas.length,
+      guardada: !!guardada && guardada.funcao === 'Soldador' && guardada.notas === 'ANOTACAO SO NOSSA',
+      ramo: RAMOS.includes('entrevistas') && !!retratoDados().entrevistas, folha, tot2: txt('#entTot') };
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r).slice(0, 1200) + ' ' + erros.join(' | ');
+  t.ok('aba Entrevista dentro de Documentos', !r.erro && /Documentos/.test(r.grupo), J);
+  t.ok('soma da assiduidade: 350 rancho + 170 prêmio + 420 almoços = R$ 940,00', !r.erro && /R\$ 350,00 rancho \+ R\$ 170,00 prêmio \+ R\$ 420,00 almoços/.test(r.tot) && /R\$ 940,00/.test(r.tot), J);
+  t.ok('cinco benefícios, com Unimed 50% e seguro Prudential', !r.erro && r.linhas === 5, J);
+  t.ok('alimentação mostra "Média", sem a palavra assiduidade', !r.erro && /Média/.test(r.alim) && !/assiduidade/i.test(r.alim), J);
+  t.ok('horário: seg a qui 07:00–12:00 / 13:00–17:00, sexta até 16:00, 44 h/semana', !r.erro && /07:00 às 12:00/.test(r.hr) && /13:00 às 17:00/.test(r.hr) && /13:00 às 16:00/.test(r.hr) && /44 h\/semana/.test(r.hr), J);
+  t.ok('a entrevista com nome entra na lista e vai para a nuvem', !r.erro && r.guardada && r.ramo, J);
+  t.ok('folha impressa traz o total e não traz as anotações', !r.erro && /R\$ 940,00/.test(r.folha) && /Fulano Exemplo/.test(r.folha) && !/ANOTACAO/.test(r.folha), J);
+  t.ok('trocar o valor em Empresa › Benefícios muda a soma', !r.erro && /R\$ 990,00/.test(r.tot2), J);
+  t.ok('sem erro na página', !erros.length, J);
+  await ctx.close();
+});
+
+teste('orcamento-chave-na-mao', async (b, t) => {
+  // pedido: aba de detalhamento de obra chave na mão -- obra, cidade,
+  // metragem total; o que vai em cada serviço (Elétrica, Hidráulica,
+  // Pintura, Banheiro, Esquadrias) e opção de acrescentar serviços e itens.
+  // "Não preciso de valor por item, vale apenas o total que faço por m²."
+  if (!fs.existsSync(path.join(RAIZ, 'orcamento-rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'orcamento-rm' });
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    const aba = [...document.querySelectorAll('.orc-tab[data-aba]')].map(x => x.textContent.trim());
+    orcAba('cnm'); await esp(50);
+    const vis = !!(document.getElementById('panel-cnm') || {}).classList && document.getElementById('panel-cnm').classList.contains('on');
+    const nomes = [...document.querySelectorAll('#cnmServ .cnm-srv-h b')].map(x => x.textContent);
+    const vazio = quoteVazio();
+    const set = (sel, v) => { const i = document.querySelector(sel); i.value = v; i.dispatchEvent(new Event('input')); };
+    set('#cnmObra', 'OBRA EXEMPLO'); set('#cnmCidade', 'Cidade Exemplo'); set('#cnmM2', '120');
+    const ele = cnmDados().servicos[0];
+    cnmAddItem(ele.id); await esp(20);
+    set('[data-cnmit^="' + ele.id + '|"][data-k="desc"]', 'Cabo 2,5 mm²');
+    set('[data-cnmit^="' + ele.id + '|"][data-k="qtd"]', '400');
+    set('[data-cnmrm2="' + ele.id + '"]', '70,00');
+    const colunas = [...document.querySelectorAll('[data-srv="' + ele.id + '"] thead th')].map(x => x.textContent.trim()).filter(Boolean);
+    const sub = (document.querySelector('[data-cnmtot="' + ele.id + '"]') || {}).value || '';
+    cnmAddServico('Fundação'); await esp(20);
+    const fund = cnmDados().servicos.filter(s => s.nome === 'Fundação')[0];
+    set('[data-cnmrm2="' + fund.id + '"]', '30');
+    const res = (document.getElementById('cnmRes') || {}).textContent || '';
+    const obraOrc = (document.getElementById('q_obra') || {}).value;
+    // salva e reabre: volta com tudo
+    S.orcamentosSalvos = []; salvarOrcamento(); await esp(30);
+    const salvo = S.orcamentosSalvos[0] || {};
+    clearQuote(); await esp(20);
+    const limpo = cnmDados().servicos.length === 5 && !cnmTemConteudo();
+    S.orcamentoAtualId = null;
+    const QK = QUOTE_KEYS.includes('chaveMao');
+    S.chaveMao = JSON.parse(JSON.stringify(salvo.quote.chaveMao)); S.obra = salvo.quote.obra; initRender();
+    return { aba, vis, nomes, vazio, colunas, sub, res, obraOrc, total: salvo.total, totalNum: salvo.totalNum, limpo, QK,
+      volta: cnmDados().servicos[0].itens.map(i => i.desc + ':' + i.qtd).join(','), cid: cnmDados().cidade };
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r).slice(0, 1200) + ' ' + erros.join(' | ');
+  t.ok('aba "Chave na mão" ao lado de Esquadrias', !r.erro && r.aba.join('|').indexOf('Esquadrias|Chave na mão') >= 0 && r.vis, J);
+  t.ok('serviços de partida: Elétrica, Hidráulica, Pintura, Banheiro, Esquadrias', !r.erro && r.nomes.join(',') === 'Elétrica,Hidráulica,Pintura,Banheiro,Esquadrias', J);
+  t.ok('a lista de partida vazia não faz o orçamento deixar de ser vazio', !r.erro && r.vazio, J);
+  t.ok('itens sem valor: só descrição, unidade e quantidade', !r.erro && r.colunas.join(',') === 'Item / descrição,Unid.,Qtd.', J);
+  t.ok('serviço = R$/m² × metragem (70 × 120 = R$ 8.400,00)', !r.erro && /8\.400,00/.test(r.sub), J);
+  t.ok('serviço acrescentado entra no total (8.400 + 3.600 = R$ 12.000,00; R$ 100,00 por m²)', !r.erro && /12\.000,00/.test(r.res) && /100,00 por m²/.test(r.res), J);
+  t.ok('a obra é a mesma do orçamento', !r.erro && r.obraOrc === 'OBRA EXEMPLO', J);
+  t.ok('salvo só com chave na mão mostra o total da obra', !r.erro && r.totalNum === 12000 && /12\.000,00/.test(r.total), J);
+  t.ok('faz parte do orçamento (QUOTE_KEYS): novo limpa, salvo reabre com itens e cidade', !r.erro && r.QK && r.limpo && r.volta === 'Cabo 2,5 mm²:400' && r.cid === 'Cidade Exemplo', J);
+  t.ok('sem erro na página', !erros.length, J);
+  await ctx.close();
+});
+
+teste('orcamento-chave-na-mao-salvos', async (b, t) => {
+  // pedido: "precisa ter opção de salvar o detalhamento também" -- o
+  // detalhamento salvo aparece numa lista na própria aba e reabre dali.
+  if (!fs.existsSync(path.join(RAIZ, 'orcamento-rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'orcamento-rm' });
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    window.confirm = () => true; window.alert = () => {};
+    S.orcamentosSalvos = []; orcAba('cnm'); await esp(30);
+    const botoes = [...document.querySelectorAll('#cnmHost .esq-topo button')].map(x => x.textContent.trim());
+    const set = (sel, v) => { const i = document.querySelector(sel); i.value = v; i.dispatchEvent(new Event('input')); };
+    const monta = (obra, cid, m2, rm2) => { clearQuote(); set('#cnmObra', obra); set('#cnmCidade', cid); set('#cnmM2', m2);
+      const s = cnmDados().servicos[0]; s.rm2 = rm2; s.itens = [{ id: 'i1', desc: 'Cabo ' + obra, un: 'm', qtd: '10' }]; cnmRender(); cnmSalvar(); };
+    monta('OBRA UM', 'Cidade A', '100', '50');
+    const estado = (document.getElementById('cnmEstado') || {}).textContent || '';
+    monta('OBRA DOIS', 'Cidade B', '200', '40');
+    // um orçamento comum (sem chave na mão) não entra na lista
+    clearQuote(); S.cliente = 'CLIENTE PERFIL'; S.linhasAvulso = [{ desc: 'x', qtd: 1, preco: 10 }]; salvarOrcamento(); clearQuote(); await esp(20);
+    const linhas = [...document.querySelectorAll('#cnmSalvos tbody tr')].map(x => x.textContent.replace(/\s+/g, ' '));
+    set('#cnmBusca', 'cidade a'); const filtrado = document.querySelectorAll('#cnmSalvos tbody tr').length; set('#cnmBusca', '');
+    const um = S.orcamentosSalvos.find(e => e.obra === 'OBRA UM');
+    document.querySelector('[data-cnmabre="' + um.id + '"]').click(); await esp(30);
+    renderSaved();
+    const tag = [...document.querySelectorAll('#savedList .si-nome')].filter(x => /chave na mão/.test(x.textContent)).length;
+    return { botoes, estado, linhas, filtrado, obra: S.obra, cid: cnmDados().cidade, item: (cnmDados().servicos[0].itens[0] || {}).desc,
+      cel: (document.getElementById('cnmObra') || {}).value, tag };
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r).slice(0, 1200) + ' ' + erros.join(' | ');
+  t.ok('botões "Salvar detalhamento" e "Imprimir / PDF"', !r.erro && r.botoes.includes('Salvar detalhamento') && r.botoes.includes('Imprimir / PDF'), J);
+  t.ok('depois de salvar, a aba diz que está salvo e o número', !r.erro && /Salvo · Nº \d+/.test(r.estado), J);
+  t.ok('lista de detalhamentos salvos: os dois, com total, e sem o orçamento comum', !r.erro && r.linhas.length === 2 && r.linhas.some(x => /OBRA UM/.test(x) && /5\.000,00/.test(x)) && r.linhas.some(x => /OBRA DOIS/.test(x) && /8\.000,00/.test(x)), J);
+  t.ok('a busca filtra por cidade', !r.erro && r.filtrado === 1, J);
+  t.ok('Abrir na lista traz o detalhamento de volta', !r.erro && r.obra === 'OBRA UM' && r.cid === 'Cidade A' && r.item === 'Cabo OBRA UM' && r.cel === 'OBRA UM', J);
+  t.ok('em Salvos o detalhamento leva a etiqueta "chave na mão"', !r.erro && r.tag === 2, J);
+  t.ok('sem erro na página', !erros.length, J);
+  await ctx.close();
+});
+
+teste('orcamento-chave-na-mao-total-do-servico', async (b, t) => {
+  // pedido: "quero ter opção de colocar o valor total por serviço". Cada
+  // serviço aceita o R$/m² OU o total; o outro sai calculado. Mudar a
+  // metragem mexe no total de quem foi dado por m² e no R$/m² de quem foi
+  // dado pelo total.
+  if (!fs.existsSync(path.join(RAIZ, 'orcamento-rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'orcamento-rm' });
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    window.confirm = () => true;
+    orcAba('cnm'); clearQuote(); await esp(30);
+    const set = (sel, v) => { const i = document.querySelector(sel); i.value = v; i.dispatchEvent(new Event('input')); };
+    const val = sel => (document.querySelector(sel) || {}).value;
+    set('#cnmM2', '100');
+    const [ele, hid] = cnmDados().servicos;
+    set('[data-cnmrm2="' + ele.id + '"]', '50');          // por m²: 50 × 100 = 5.000
+    set('[data-cnmtot="' + hid.id + '"]', '3.000,00');    // total: 3.000 -> 30/m²
+    const a = { eleTot: val('[data-cnmtot="' + ele.id + '"]'), hidM2: val('[data-cnmrm2="' + hid.id + '"]'),
+      hidCalc: document.querySelector('[data-cnmrm2="' + hid.id + '"]').classList.contains('calc'),
+      res: document.getElementById('cnmRes').textContent };
+    set('#cnmM2', '200');
+    const b2 = { eleTot: val('[data-cnmtot="' + ele.id + '"]'), hidM2: val('[data-cnmrm2="' + hid.id + '"]'), total: cnmTotal() };
+    // salva e reabre: o modo de cada serviço volta
+    S.orcamentosSalvos = []; salvarOrcamento(); await esp(20);
+    const salvo = S.orcamentosSalvos[0]; clearQuote(); loadOrcamento(salvo.id); await esp(20);
+    let html = ''; esqEntregaPDF = h => { html = h; }; cnmPDF();
+    return { a, b2, volta: cnmTotal(), lista: cnmTotalDe(salvo.quote.chaveMao), pdf: html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ') };
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r).slice(0, 1200) + ' ' + erros.join(' | ');
+  t.ok('por m²: o total sai calculado (50 × 100 = 5.000,00)', !r.erro && r.a.eleTot === '5.000,00', J);
+  t.ok('pelo total: o R$/m² sai calculado (3.000 / 100 = 30,00) e fica marcado como calculado', !r.erro && r.a.hidM2 === '30,00' && r.a.hidCalc, J);
+  t.ok('total da obra soma os dois jeitos (R$ 8.000,00)', !r.erro && /8\.000,00/.test(r.a.res), J);
+  t.ok('metragem 200: o por m² vira 10.000 e o total fechado fica 3.000 (15/m²)', !r.erro && r.b2.eleTot === '10.000,00' && r.b2.hidM2 === '15,00' && r.b2.total === 13000, J);
+  t.ok('salvo e reaberto, a lista e o PDF dão o mesmo total', !r.erro && r.volta === 13000 && r.lista === 13000 && /13\.000,00/.test(r.pdf) && /15,00\/m²/.test(r.pdf), J);
+  t.ok('sem erro na página', !erros.length, J);
+  await ctx.close();
+});
+
+teste('recibos-terceiro-cheque-no-lugar-de-dinheiro', async (b, t) => {
+  // pedido: "espécie e dinheiro é a mesma coisa, falta opção de cheque no
+  // lugar de um deles". Dinheiro sai, Cheque entra; o que já foi gravado como
+  // 'dinheiro' continua aparecendo como Espécie.
+  if (!fs.existsSync(path.join(RAIZ, 'recibos_rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'recibos_rm' });
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    const l = document.getElementById('loginScreen'); if (l) l.style.setProperty('display', 'none', 'important');
+    const ops = sel => [...document.querySelectorAll(sel + ' option')].map(o => o.textContent.trim());
+    state.terceiros = [{ id: 't1', nome: 'FULANO EXEMPLO', docTipo: 'CPF', doc: '', servico: 'APLICAÇÃO', metodo: 'dinheiro', ord: 0 }];
+    tDraft = { linhas: [novaLinhaT(state.terceiros[0], { metodo: 'dinheiro' }), novaLinhaT(state.terceiros[0], { metodo: 'cheque' })] };
+    document.querySelector('.vtab[data-v="terclanc"]').click(); await esp(60);
+    const sels = [...document.querySelectorAll('select[data-lf="metodo"]')];
+    return { linha: sels[0] ? [...sels[0].options].map(o => o.textContent) : [], velho: sels[0] && sels[0].value, novo: sels[1] && sels[1].value,
+      cad: ops('#tmMetodo'), pag: ops('#payMetodo'), rel: ops('#relMetodoF'),
+      txt: [metodoMovTexto('dinheiro'), metodoMovTexto('cheque')] };
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  t.ok('linha do recibo de terceiro: Banco, PIX, Espécie, Cheque (sem Dinheiro)', !r.erro && r.linha.join(',') === 'Banco,PIX,Espécie,Cheque', J);
+  t.ok('cadastro do terceiro, pagamento e filtro do relatório têm Cheque e não têm Dinheiro', !r.erro && [r.cad, r.pag, r.rel].every(l => l.includes('Cheque') && !l.includes('Dinheiro')), J);
+  t.ok('o que estava gravado como "dinheiro" aparece como Espécie', !r.erro && r.velho === 'pf' && r.txt[0] === 'Espécie (PF)', J);
+  t.ok('cheque fica cheque', !r.erro && r.novo === 'cheque' && r.txt[1] === 'Cheque', J);
+  // e o pagamento em espécie de funcionário (importar planilha) também se chama Espécie
+  const fonteRec = fs.readFileSync(path.join(RAIZ, 'recibos_rm', 'index.html'), 'utf8');
+  t.ok('nenhum lugar chama espécie de "Dinheiro" (importar planilha: Banco/Espécie)', !/'Dinheiro'|>Dinheiro<|Banco\/Dinheiro/.test(fonteRec) && /Banco\/Espécie/.test(fonteRec), '');
+  t.ok('sem erro na página', !erros.length, J);
+  await ctx.close();
+});
+
+teste('central-arrastar-abas', async (b, t) => {
+  // pedido: "mover os sistemas abertos, arrastar para a direita ou esquerda
+  // e alterar a ordem dos abertos". Mouse: arrastou, mudou a ordem. Dedo:
+  // deslizar rápido continua rolando a faixa; segurar e arrastar muda a ordem.
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'central_rm' });
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    ['sa', 'sb', 'sc'].forEach((id, i) => {
+      const lay = document.createElement('div'); lay.className = 'iframe-layer'; lay.id = 'layer-' + id;
+      document.querySelector('.content, main, body').appendChild(lay);
+      openTabs.push({ id, name: 'Sistema ' + 'ABC'[i], cat: 'OUTROS', icon: 'ext' });
+    });
+    activateTab('sb'); await esp(80);
+    const bar = document.getElementById('tabs-bar');
+    const aba = id => bar.querySelector('.tab-item[data-id="' + id + '"]');
+    const meio = el => { const q = el.getBoundingClientRect(); return { x: q.left + q.width / 2, y: q.top + q.height / 2 }; };
+    const ev = (el, tipo, x, y, pt) => el.dispatchEvent(new PointerEvent(tipo, { bubbles: true, cancelable: true, clientX: x, clientY: y, pointerId: 7, pointerType: pt || 'mouse', button: 0, isPrimary: true }));
+    const ordem = () => openTabs.map(t => t.id).join(',');
+    // mouse: A arrastada para depois de C
+    let a = aba('sa'), p0 = meio(a), pc = meio(aba('sc'));
+    ev(a, 'pointerdown', p0.x, p0.y); for (let x = p0.x; x <= pc.x + 30; x += 15) { ev(a, 'pointermove', x, p0.y); await esp(5); }
+    const durante = a.classList.contains('arrastando');
+    ev(a, 'pointerup', pc.x + 30, p0.y); await esp(40);
+    const mouse = ordem(), dom = [...bar.querySelectorAll('.tab-item')].map(x => x.dataset.id).join(',');
+    // o clique que vem junto do soltar não troca de sistema
+    aba('sa').click(); const ativoDepois = activeTabId;
+    // clique normal continua trocando
+    await esp(400); aba('sc').click(); const clique = activeTabId;
+    // dedo: deslizar rápido não reordena
+    let c = aba('sc'), q0 = meio(c);
+    ev(c, 'pointerdown', q0.x, q0.y, 'touch'); ev(c, 'pointermove', q0.x - 40, q0.y, 'touch'); ev(c, 'pointerup', q0.x - 40, q0.y, 'touch'); await esp(400);
+    const dedoRapido = ordem();
+    // dedo: segura e arrasta C para o começo
+    c = aba('sc'); q0 = meio(c); const pb = meio(aba('sb'));
+    ev(c, 'pointerdown', q0.x, q0.y, 'touch'); await esp(380);
+    for (let x = q0.x; x >= pb.x - 60; x -= 15) { ev(c, 'pointermove', x, q0.y, 'touch'); await esp(5); }
+    ev(c, 'pointerup', pb.x - 60, q0.y, 'touch'); await esp(40);
+    const dedo = ordem();
+    // teclado: Alt+Shift+→ na aba em foco
+    await esp(400);
+    aba('sc').dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', altKey: true, shiftKey: true, bubbles: true }));
+    const teclado = ordem();
+    return { durante, mouse, dom, ativoDepois, clique, dedoRapido, dedo, teclado };
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  t.ok('com o mouse, a aba arrastada para a direita vai para o fim', !r.erro && r.durante && r.mouse === 'sb,sc,sa' && r.dom === r.mouse, J);
+  t.ok('soltar não troca o sistema aberto; um clique normal troca', !r.erro && r.ativoDepois === 'sb' && r.clique === 'sc', J);
+  t.ok('no dedo, deslizar rápido só rola a faixa (ordem igual)', !r.erro && r.dedoRapido === 'sb,sc,sa', J);
+  t.ok('no dedo, segurar e arrastar muda a ordem', !r.erro && r.dedo === 'sc,sb,sa', J);
+  t.ok('pelo teclado, Alt+Shift+→ move a aba', !r.erro && r.teclado === 'sb,sc,sa', J);
+  t.ok('sem erro na página', !erros.length, J);
+  await ctx.close();
+});
+
+teste('regras-firebase-minhas-contas', async (b, t) => {
+  // o Minhas Contas (repositório minhas-contas) usa o MESMO Firebase dos
+  // sistemas RM, em users/<uid>. O arquivo de regras é colado inteiro no
+  // console: sem este nó, colar as regras dos sistemas tirava o acesso dele.
+  const regras = JSON.parse(fs.readFileSync(path.join(RAIZ, 'central_rm', 'ferramentas', 'regras_firebase.json'), 'utf8')).rules;
+  const dono = 'auth != null && auth.uid === $uid';
+  for (const no of ['users', 'rm_contas_usuarios']) {
+    const r = ((regras[no] || {}).$uid) || {};
+    t.ok(no + '/$uid: só o dono lê e grava', r['.read'] === dono && r['.write'] === dono, JSON.stringify(regras[no] || null));
+  }
+  const mc = path.join(RAIZ, 'minhas-contas', 'app.js');
+  if (fs.existsSync(mc)) {
+    const nos = [...new Set([...fs.readFileSync(mc, 'utf8').matchAll(/ref\(db,\s*`([a-z_]+)\//g)].map(m => m[1]))];
+    t.ok('todo nó que o Minhas Contas usa está nas regras', nos.length && nos.every(n => regras[n]), nos.join(','));
+  }
+});
+
+teste('recibos-epi-assina-lote', async (b, t) => {
+  // Troca rápida de EPI no celular da empresa: com assinaturas pendentes, a
+  // caixa "Esta assinatura cobre as N entregas" empurrava os botões para
+  // fora da janela deitada e o "Confirmar recebimento" sumia da tela.
+  if (!fs.existsSync(path.join(RAIZ, 'recibos_rm'))) return;
+  for (const tela of [{ width: 360, height: 740 }, { width: 393, height: 780 }]) {
+    const { ctx, pg } = await abre(b, { 'sis.local': 'recibos_rm' }, 'index.html', { tela });
+    const r = await pg.evaluate(async () => {
+      const l = document.getElementById('loginScreen'); if (l) l.style.setProperty('display', 'none', 'important');
+      const espera = ms => new Promise(x => setTimeout(x, ms));
+      state.employees = [{ id: 'ta1', nome: 'TESTE ASSINA SILVA', funcao: 'Auxiliar de produção', status: 'ativo', salario: 1 }];
+      const itens = [{ itemId: 'x1', categoria: 'epi', nome: 'Luva de Malha', ca: '15272', unidade: 'par', qtd: 1 },
+                     { itemId: 'x2', categoria: 'epi', nome: 'Óculos de proteção', ca: '11268', unidade: 'pç', qtd: 1 }];
+      state.epiMovimentos = {};
+      for (let i = 1; i <= 3; i++) state.epiMovimentos['t' + i] = { id: 't' + i, empId: 'ta1', nome: 'TESTE ASSINA SILVA', funcao: 'Auxiliar de produção',
+        tipo: 'troca', motivo: 'desgaste', data: '2026-09-2' + i, responsavel: 'Teste', itens: itens.slice(0, i === 2 ? 1 : 2),
+        status: 'pendente', criadoEm: '2026-09-2' + i + 'T10:00:00Z', metodo: 'Aguardando assinatura' };
+      const aba = document.querySelector('.vtab[data-v="epi"]'); if (!aba) return ['sem a aba EPI'];
+      aba.click(); await espera(500);
+      const h = document.querySelector('.epi-stab[data-p="historico"]'); if (!h) return ['sem o histórico do EPI'];
+      h.click(); await espera(400);
+      const bt = document.querySelector('[data-mconf]'); if (!bt) return ['sem o botão Assinar no histórico'];
+      bt.click(); await espera(500);
+      const erros = [], md = document.getElementById('epiAssModal');
+      if (!md.classList.contains('deitado')) erros.push('a janela não deitou');
+      const lote = document.getElementById('epiAssLote');
+      if (!lote || lote.style.display === 'none') erros.push('sem a caixa de várias entregas');
+      const W = innerWidth, H = innerHeight;
+      const naTela = id => { const e = document.getElementById(id); if (!e) return id + ' não existe';
+        const q = e.getBoundingClientRect();
+        if (q.width < 1 || q.left < -1 || q.top < -1 || q.right > W + 1 || q.bottom > H + 1) return id + ' fora da tela (' + [q.left, q.top, q.right, q.bottom].map(Math.round).join(',') + ')';
+        const cx = q.left + q.width / 2, cy = q.top + q.height / 2, em = document.elementFromPoint(cx, cy);
+        return (em && (em === e || e.contains(em))) ? '' : id + ' coberto';
+      };
+      ['epiAssConfirmar', 'epiAssSair', 'epiAssLimpar'].forEach(id => { const x = naTela(id); if (x) erros.push(x); });
+      // deitada, a "altura" da área de assinar é a largura na tela
+      const pad = document.getElementById('epiAssPad').getBoundingClientRect();
+      if (pad.width < 60) erros.push('área de assinar com ' + Math.round(pad.width) + 'px');
+      return erros;
+    }).catch(e => ['avaliação: ' + e.message]);
+    t.ok(tela.width + '×' + tela.height, !r.length, r.join(' | '));
+    await ctx.close();
+  }
+});
+
+teste('recibos-card-aniv-a4', async (b, t) => {
+  // o card sai em 4:5 (1080x1350, rede social); impresso em A4 (1:1,414)
+  // sobrava faixa branca em cima e embaixo ("reduzir para caber") ou cortava
+  // ("preencher"). No formato A4 ele sai na proporção exata da folha, com o
+  // fundo estendido, e tocar na foto continua achando a moldura certa
+  if (!fs.existsSync(path.join(RAIZ, 'recibos_rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'recibos_rm' });
+  const r = await pg.evaluate(async () => {
+    const espera = ms => new Promise(x => setTimeout(x, ms));
+    const l = document.getElementById('loginScreen'); if (l) l.style.setProperty('display', 'none', 'important');
+    const m = String(new Date().getMonth() + 1).padStart(2, '0');
+    state.employees = ['ANA TESTE', 'BIA TESTE', 'CAIO TESTE'].map((n, i) => ({ id: 'a' + i, nome: n, status: 'ativo', salario: 1, nascimento: '1990-' + m + '-1' + i }));
+    document.querySelector('[data-v="aniv"]').click(); await espera(300);
+    const cv = document.getElementById('caCanvas'), fmt = document.getElementById('caFormato');
+    if (!fmt) return { erro: 'sem a escolha de formato' };
+    const social = [cv.width, cv.height];
+    fmt.value = 'a4'; fmt.dispatchEvent(new Event('change')); await espera(150);
+    const a4um = [cv.width, cv.height], nomeUm = caNomeArquivo();
+    document.getElementById('caTodos').click(); await espera(300);
+    const a4varios = [cv.width, cv.height];
+    // tocar no meio da 2ª moldura escolhe a 2ª pessoa
+    const mo = caEstado.molduras[1], q = cv.getBoundingClientRect(), k = q.width / cv.width;
+    cv.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, clientX: q.left + (mo.x + mo.w / 2) * k, clientY: q.top + (mo.y + mo.h / 2) * k, pointerId: 1 }));
+    cv.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerId: 1 }));
+    await espera(100);
+    const sel = caEstado.sel;
+    fmt.value = 'social'; fmt.dispatchEvent(new Event('change')); await espera(150);
+    return { social, a4um, a4varios, nomeUm, sel, volta: [cv.width, cv.height], cfg: state.cfg.cardFormato };
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r), prop = x => x && x[1] / x[0];
+  t.ok('rede social continua 1080×1350', !r.erro && r.social[0] === 1080 && r.social[1] === 1350, J);
+  t.ok('A4: proporção da folha (1:1,414), com um e com vários', !r.erro && Math.abs(prop(r.a4um) - Math.SQRT2) < 0.002 && Math.abs(prop(r.a4varios) - Math.SQRT2) < 0.002, J);
+  t.ok('A4: arquivo diz que é para imprimir', /A4/.test(r.nomeUm || ''), J);
+  t.ok('A4: tocar na foto acha a moldura certa', r.sel === 1, J);
+  t.ok('voltar para rede social volta a 1080×1350 e a escolha fica salva', r.volta && r.volta[1] === 1350 && r.cfg === 'social', J);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
+teste('recibos-card-aniv-individuais', async (b, t) => {
+  // o mural do mês vai impresso para o mural; depois cada um recebe o seu no
+  // WhatsApp. Tirar alguém do card apagava a foto dele -- agora a foto
+  // fica guardada e volta, e o sistema gera o individual de cada um a partir
+  // do mural, com enquadramento próprio (mexer no individual não muda o mural)
+  if (!fs.existsSync(path.join(RAIZ, 'recibos_rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'recibos_rm' });
+  const r = await pg.evaluate(async () => {
+    const espera = ms => new Promise(x => setTimeout(x, ms));
+    const l = document.getElementById('loginScreen'); if (l) l.style.setProperty('display', 'none', 'important');
+    const m = String(new Date().getMonth() + 1).padStart(2, '0');
+    state.employees = ['ANA TESTE', 'BIA TESTE', 'CAIO TESTE'].map((n, i) => ({ id: 'i' + i, nome: n, status: 'ativo', salario: 1, nascimento: '1990-' + m + '-1' + i }));
+    document.querySelector('[data-v="aniv"]').click(); await espera(300);
+    document.getElementById('caTodos').click(); await espera(300);
+    // uma foto de mentira para cada um
+    const foto = await new Promise(ok => { const c = document.createElement('canvas'); c.width = 300; c.height = 400; c.getContext('2d').fillRect(0, 0, 300, 400); const im = new Image(); im.onload = () => ok(im); im.src = c.toDataURL(); });
+    caEstado.pessoas.forEach(p => { p.foto = foto; p.zoom = 1.3; p.dx = 0; p.dy = 0; });
+    const muralZoom = caEstado.pessoas[1].zoom;
+    // individual da 2ª: enquadramento próprio
+    const vi = document.querySelector('[data-ca-vista="individual"]'); if (!vi) return { erro: 'sem a vista individual' };
+    caEstado.sel = 1; vi.click(); await espera(150);
+    const indMolduras = caEstado.molduras.length;
+    const z = document.getElementById('caZoom'); z.value = '2'; z.dispatchEvent(new Event('input')); await espera(50);
+    const zooms = { mural: caEstado.pessoas[1].zoom, individual: caEstado.pessoas[1].ind && caEstado.pessoas[1].ind.zoom };
+    document.querySelector('[data-ca-vista="mural"]').click(); await espera(150);
+    const muralMolduras = caEstado.molduras.length;
+    // baixar os individuais: um arquivo por pessoa
+    const baixados = [], clicar = HTMLAnchorElement.prototype.click;
+    HTMLAnchorElement.prototype.click = function () { baixados.push(this.download); };
+    try { document.getElementById('caIndividuais').click(); await espera(2500); } finally { HTMLAnchorElement.prototype.click = clicar; }
+    // tirar a 2ª e trazer de volta: a foto volta
+    document.querySelector('[data-ca-tira="1"]').click(); await espera(100);
+    const semBia = caEstado.pessoas.map(p => p.nome).join(',');
+    document.getElementById('caTodos').click(); await espera(300);
+    const bia = caEstado.pessoas.find(p => p.emp === 'i1');
+    return { indMolduras, muralMolduras, zooms, muralZoom, baixados, semBia, biaFoto: !!(bia && bia.foto), biaZoom: bia && bia.zoom };
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r);
+  t.ok('vista individual mostra o card de uma pessoa; mural volta com as 3', !r.erro && r.indMolduras === 1 && r.muralMolduras === 3, J);
+  t.ok('zoom no individual não muda o mural', !r.erro && r.zooms.individual === 2 && r.zooms.mural === r.muralZoom, J);
+  t.ok('"Baixar individuais": um PNG por pessoa, com o nome dela', !r.erro && r.baixados.length === 3 && ['Ana', 'Bia', 'Caio'].every(n => r.baixados.some(f => f.indexOf('Aniversario ' + n) === 0)), J);
+  t.ok('tirar do card e trazer de volta não perde a foto', !r.erro && !/Bia/.test(r.semBia) && r.biaFoto && r.biaZoom === 1.3, J);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
+teste('recibos-card-aniv-varios', async (b, t) => {
+  // card do mês com vários aniversariantes: "Todos do mês" traz a lista (no
+  // máximo 6), cada um vira uma moldura, tirar e acrescentar funcionam e o
+  // arquivo sai com o nome do mês
+  if (!fs.existsSync(path.join(RAIZ, 'recibos_rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'recibos_rm' });
+  const r = await pg.evaluate(async () => {
+    const l = document.getElementById('loginScreen'); if (l) l.style.setProperty('display', 'none', 'important');
+    const m = String(new Date().getMonth() + 1).padStart(2, '0'), espera = ms => new Promise(r => setTimeout(r, ms));
+    const nomes = ['ANA TESTE', 'BRUNO TESTE', 'CARLA TESTE', 'DIEGO TESTE', 'ELISA TESTE', 'FABIO TESTE', 'GABI TESTE'];
+    state.employees = nomes.slice(0, 3).map((n, i) => ({ id: 'v' + i, nome: n, status: 'ativo', salario: 1, nascimento: '1990-' + m + '-' + String(10 + i).padStart(2, '0') }));
+    document.querySelector('[data-v="aniv"]').click(); await espera(300);
+    document.getElementById('caTodos').click(); await espera(300);
+    const cv = document.getElementById('caCanvas');
+    const tres = { chips: document.querySelectorAll('#caPessoas .ca-pessoa').length, molduras: caEstado.molduras.length,
+      nomes: caEstado.pessoas.map(p => p.nome).join(','), arquivo: caNomeArquivo(),
+      pintado: cv.getContext('2d').getImageData(540, 675, 1, 1).data[3] === 255 };
+    // tocar numa moldura escolhe a pessoa para editar
+    const q = cv.getBoundingClientRect(), mo = caEstado.molduras[2], k = q.width / 1080;
+    cv.dispatchEvent(new PointerEvent('pointerdown', { clientX: q.left + (mo.x + mo.w / 2) * k, clientY: q.top + (mo.y + mo.h / 2) * k, pointerId: 1, bubbles: true }));
+    cv.dispatchEvent(new PointerEvent('pointerup', { pointerId: 1, bubbles: true }));
+    const escolhido = document.getElementById('caNome').value;
+    document.querySelector('[data-ca-tira="0"]').click(); await espera(100);
+    const dois = caEstado.pessoas.length;
+    document.getElementById('caAdd').click(); await espera(100);
+    const addTres = caEstado.pessoas.length, vazio = document.getElementById('caNome').value;
+    // mês com 7: entram só 6
+    state.employees = nomes.map((n, i) => ({ id: 'w' + i, nome: n, status: 'ativo', salario: 1, nascimento: '1990-' + m + '-' + String(10 + i).padStart(2, '0') }));
+    renderAniversariantes(); document.getElementById('caTodos').click(); await espera(300);
+    const seis = caEstado.pessoas.length, addTravado = document.getElementById('caAdd').disabled;
+    return { tres, escolhido, dois, addTres, vazio, seis, addTravado };
+  }).catch(e => ({ erro: e.message }));
+  const mes = ['janeiro','fevereiro','março','abril','maio','junho','julho','agosto','setembro','outubro','novembro','dezembro'][new Date().getMonth()];
+  const ok = !r.erro && r.tres.chips === 3 && r.tres.molduras === 3 && r.tres.nomes === 'Ana,Bruno,Carla' && r.tres.pintado
+    && r.tres.arquivo === 'Aniversariantes ' + mes + ' ' + new Date().getFullYear() + '.png'
+    && r.escolhido === 'Carla' && r.dois === 2 && r.addTres === 3 && r.vazio === '' && r.seis === 6 && r.addTravado;
+  t.ok('card com vários aniversariantes do mês', ok && !erros.length, JSON.stringify(r) + ' ' + erros.join(' | '));
+  await ctx.close();
+});
+
+teste('fundo-da-central-nos-sistemas', async (b, t) => {
+  // o fundo escolhido na Central (trama, grade, marca...) ficava só nela:
+  // agora vale nos sistemas também, pelo mesmo caminho do tema (mensagem ao
+  // quadro + chave comum). E, dentro da Central, a margem do sistema fica
+  // branca no tema claro (sem a faixa cinza colada na barra).
+  if (!fs.existsSync(path.join(RAIZ, 'recibos_rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'central_rm', 'rec.local': 'recibos_rm' });
+  const r = {};
+  try {
+    await pg.evaluate(() => { setWallpaper('grade'); setMarca('vinho'); setWatermark(9);
+      const lay = document.createElement('div'); lay.className = 'iframe-layer active loaded'; lay.id = 'layer-recibos';
+      lay.innerHTML = '<iframe src="http://rec.local/index.html"></iframe>'; document.getElementById('content').appendChild(lay); });
+    await pg.waitForTimeout(3000);
+    const fr = () => pg.frames().find(f => /rec\.local/.test(f.url()));
+    const le = () => fr().evaluate(() => { const c = document.getElementById('rmFundo'), b = document.body;
+      return { tem: !!c, fundo: b.getAttribute('data-wallpaper'), marca: b.getAttribute('data-marca'), op: getComputedStyle(document.documentElement).getPropertyValue('--wm-op').trim(),
+        padrao: c ? getComputedStyle(c, '::before').backgroundImage : '', canto: getComputedStyle(b, '::before').display,
+        quadro: document.documentElement.classList.contains('rm-quadro'), corpo: getComputedStyle(b).backgroundColor,
+        folha: (document.querySelector('.sheet') && getComputedStyle(document.querySelector('.sheet')).boxShadow) || '' }; });
+    r.dentro = await le();
+    // trocou na Central: o sistema aberto troca na hora
+    await pg.evaluate(() => setWallpaper('trama')); await pg.waitForTimeout(400);
+    r.trocou = (await le()).fundo;
+    r.chaves = await pg.evaluate(() => [localStorage.getItem('rm_fundo'), localStorage.getItem('rm_fundo_marca')]);
+  } catch (e) { r.erro = e.message; }
+  await ctx.close();
+  // o sistema aberto sozinho, com a escolha já gravada: mesmo fundo, margem cinza de sempre
+  const so = await abre(b, { 'sis.local': 'recibos_rm' }, 'index.html', { antes: () => { try { localStorage.setItem('rm_fundo', 'logo'); localStorage.setItem('rm_fundo_marca', 'verde'); } catch (e) {} } });
+  r.sozinho = await so.pg.evaluate(() => ({ tem: !!document.getElementById('rmFundo'), fundo: document.body.getAttribute('data-wallpaper'), quadro: document.documentElement.classList.contains('rm-quadro'), corpo: getComputedStyle(document.body).backgroundColor }));
+  await so.ctx.close();
+  // sem escolha nenhuma: o canto de sempre do sistema
+  const nada = await abre(b, { 'sis.local': 'recibos_rm' });
+  r.semEscolha = await nada.pg.evaluate(() => ({ tem: !!document.getElementById('rmFundo'), canto: getComputedStyle(document.body, '::before').display }));
+  await nada.ctx.close();
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  const d = r.dentro || {};
+  t.ok('dentro da Central o sistema recebe o fundo, a cor e a intensidade', !r.erro && d.tem && d.fundo === 'grade' && d.marca === 'vinho' && /0?\.09/.test(d.op) && /linear-gradient/.test(d.padrao), J);
+  t.ok('o canto próprio do sistema sai quando o fundo da Central entra', d.canto === 'none', J);
+  t.ok('trocar o fundo na Central troca no sistema aberto', r.trocou === 'trama' && r.chaves && r.chaves[0] === 'trama' && r.chaves[1] === 'vinho', J);
+  t.ok('dentro da Central, tema claro: margem branca e folha sem sombra', d.quadro && d.corpo === 'rgb(255, 255, 255)' && (d.folha === 'none' || d.folha === ''), J);
+  t.ok('aberto sozinho: o mesmo fundo gravado, margem cinza de sempre', r.sozinho.tem && r.sozinho.fundo === 'logo' && !r.sozinho.quadro && r.sozinho.corpo !== 'rgb(255, 255, 255)', J);
+  t.ok('sem escolha gravada: fica o canto de sempre', !r.semEscolha.tem && r.semEscolha.canto !== 'none', J);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+});
+
+teste('bordas-limpas-tema-claro', async (b, t) => {
+  // no tema claro a borda entre a Central e o sistema parecia manchada: a
+  // sombra da barra lateral caía sobre o sistema, a folha tinha um halo de
+  // 24 px e o fundo da Central três brilhos coloridos. Agora: fio fino e
+  // sombra de 1–2 px, fundo liso. O tema escuro fica como estava.
+  const maiorBlur = sh => Math.max(0, ...String(sh || '').split(/,(?![^(]*\))/).map(p => { const n = (p.replace(/rgba?\([^)]*\)/, '').match(/-?[\d.]+px/g) || []).map(parseFloat); return /inset/.test(p) ? 0 : (n[2] || 0); }));
+  const out = {};
+  for (const repo of ['recibos_rm', 'controle_obras', 'orcamento-rm', 'rm_contas', 'Pedidos_perfitec', 'controle_compras']) {
+    if (!fs.existsSync(path.join(RAIZ, repo))) continue;
+    const { ctx, pg } = await abre(b, { 'sis.local': repo });
+    out[repo] = await pg.evaluate(() => { const v = getComputedStyle(document.body).getPropertyValue('--shadow').trim(); const s = document.querySelector('.sheet');
+      return { token: v, sheet: s ? getComputedStyle(s).boxShadow : '' }; }).catch(e => ({ erro: e.message }));
+    await ctx.close();
+  }
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'central_rm' });
+  const cen = await pg.evaluate(() => { const c = document.querySelector('.content'), sb = document.querySelector('.sidebar');
+    const claro = { fundo: getComputedStyle(c).backgroundImage, barra: getComputedStyle(sb).boxShadow, fio: getComputedStyle(sb).borderRightColor };
+    document.body.setAttribute('data-theme', 'escuro');
+    const escuro = { fundo: getComputedStyle(c).backgroundImage };
+    document.body.setAttribute('data-theme', 'claro'); return { claro, escuro }; }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify({ out, cen });
+  const sis = Object.keys(out).filter(k => maiorBlur(out[k].token) > 3 || maiorBlur(out[k].sheet) > 3);
+  t.ok('sistemas: sombra da folha sem halo (no máximo 3 px) no tema claro', Object.keys(out).length && !sis.length, sis.join(', ') + ' ' + J);
+  t.ok('Central: barra lateral sem sombra sobre o sistema', !cen.erro && maiorBlur(cen.claro.barra) === 0, J);
+  // o fio era bege (#e6e6e1) ao lado do cinza frio dos sistemas: parecia sujo
+  t.ok('Central: fio da barra no mesmo cinza neutro dos sistemas', !cen.erro && cen.claro.fio === 'rgb(227, 230, 234)', J);
+  t.ok('Central: fundo liso no tema claro, brilhos só no escuro', !cen.erro && cen.claro.fundo === 'none' && /radial-gradient/.test(cen.escuro.fundo), J);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
+teste('central-erro-com-versao', async (b, t) => {
+  // o relatório de melhorias listava erros já corrigidos sem dizer de qual
+  // versão eram (289 ocorrências do Orçamento, todas de antes da v74). Agora
+  // cada sistema manda a versão (bloco comum relata-erro.html) e o relatório
+  // mostra a da primeira e a da última vez. O nome vem da aba da Central.
+  const bloco = fs.readFileSync(path.join(RAIZ, 'central_rm', 'comum', 'relata-erro.html'), 'utf8');
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'central_rm' });
+  const r = await pg.evaluate(async (bloco) => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    Object.keys(_erros).forEach(k => delete _erros[k]);
+    const sobe = async (ver, msg) => {
+      const lay = document.createElement('div'); lay.className = 'iframe-layer'; lay.id = 'layer-recibos';
+      const f = document.createElement('iframe');
+      f.srcdoc = '<script>const APP_VER=' + JSON.stringify(ver) + ';<\/script>' + bloco + '<script>setTimeout(function(){throw new Error(' + JSON.stringify(msg) + ')},20)<\/script>';
+      lay.appendChild(f); document.body.appendChild(lay); await esp(600); lay.remove();
+    };
+    openTabs.push({ id: 'recibos', name: 'Folha de Pagamento' });
+    await sobe('v70', 'Falha de teste X'); await sobe('v74', 'Falha de teste X');
+    openTabs.splice(openTabs.findIndex(x => x.id === 'recibos'), 1);
+    const e = Object.values(_erros).find(x => /Falha de teste X/.test(x.msg)) || {};
+    let html = ''; const wo = window.open; const rd = window.rmDesktop;
+    window.rmDesktop = undefined; window.open = () => ({ document: { write: h => { html = h; }, close() {} } });
+    try { relatorioMelhorias(); } finally { window.open = wo; window.rmDesktop = rd; }
+    return { sistema: e.sistema, n: e.n, ver1: e.ver1, ver: e.ver, coluna: /<th class="n">Versão<\/th>/.test(html), faixa: /v70 → v74/.test(html) };
+  }, bloco).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r);
+  t.ok('o erro chega com o nome da aba (Folha de Pagamento)', !r.erro && r.sistema === 'Folha de Pagamento' && r.n === 2, J);
+  t.ok('guarda a versão da primeira e da última vez', r.ver1 === 'v70' && r.ver === 'v74', J);
+  t.ok('relatório tem a coluna Versão com v70 → v74', r.coluna && r.faixa, J);
+  // o bloco é o mesmo em todos os sistemas (sem nome próprio, sem o trecho antigo)
+  const fora = ['Controle-estoque-maquinas', 'Pedidos_perfitec', 'almo-os', 'calculadora-pu', 'calculo_pre_moldados', 'controle_cheques', 'controle_compras',
+    'controle_obras', 'leitor_dwg', 'orcamento-rm', 'propostas_rm', 'recibos_rm', 'rm_contas'].filter(x => fs.existsSync(path.join(RAIZ, x)))
+    .filter(x => { const h = fs.readFileSync(path.join(RAIZ, x, 'index.html'), 'utf8'); return h.indexOf(bloco.trim()) < 0 || /Relata erro ao pai/.test(h); });
+  t.ok('os 13 sistemas têm o bloco comum de relato', !fora.length, fora.join(', '));
+  const outros = erros.filter(x => !/Falha de teste X/.test(x));  // o erro de propósito, dentro do iframe
+  t.ok('sem outro erro na página', !outros.length, outros.join(' | '));
+  await ctx.close();
+});
+
+teste('central-estilo-do-painel', async (b, t) => {
+  // pedido: as propostas C ("Viva") e A ("Carimbo") como escolha em
+  // Configurações › Aparência, como um tema; o Clássico continua o padrão
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'central_rm' }, 'index.html', {
+    antes: () => { try { const h = (hh) => { const d = new Date(); d.setHours(hh, 5, 0, 0); return d.getTime(); };
+      localStorage.setItem('rm_usage', JSON.stringify({ orcamento: { count: 9, last: h(11) }, obras: { count: 5, last: h(10) }, corte: { count: 2, last: Date.now() - 86400000 } })); } catch (e) {} } });
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    document.querySelectorAll('#lock-screen').forEach(e => e.style.setProperty('display', 'none', 'important'));
+    try { CURRENT_EMAIL = 'teste@exemplo.com'; } catch (e) {}
+    window.isAllowedSystem = () => true;
+    try { _contasCache = { a: { valor: 2600, venc: todayISO() } }; } catch (e) {}
+    render(); await esp(100);
+    const vis = sel => { const e = document.querySelector(sel); return !!e && getComputedStyle(e).display !== 'none'; };
+    const fotografa = () => ({
+      estilo: document.documentElement.getAttribute('data-estilo') || 'classico',
+      busca: vis('.side-busca'), fixados: vis('.nav-fixados'), situacao: vis('.card-st'),
+      sitContas: (document.querySelector('.card-st[data-st="contas"]') || {}).textContent || '',
+      sitObras: (document.querySelector('.card-st[data-st="obras"]') || {}).textContent || '',
+      fixNomes: [...document.querySelectorAll('.nav-fixados .nav-name')].map(e => e.textContent),
+      tileFundo: getComputedStyle(document.querySelector('.stat-tile')).backgroundImage,
+      faixaGap: getComputedStyle(document.getElementById('dash-stats')).columnGap,
+      iconeNum: vis('.stat-icon'), folha: vis('#dash-folha'),
+    });
+    const botoes = [...document.querySelectorAll('#rm-seg-estilo .estilo-chip')].map(b => b.textContent.trim());
+    const classico = fotografa();
+    rmSetEstilo('viva'); await esp(50); const viva = fotografa();
+    const guardado = localStorage.getItem('rm_estilo_ultimo');
+    rmSetEstilo('carimbo'); await esp(50); const carimbo = fotografa();
+    rmSetEstilo('classico'); await esp(50); const volta = fotografa();
+    return { botoes, classico, viva, guardado, carimbo, volta };
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r).slice(0, 1800);
+  t.ok('Aparência tem "Estilo do painel": Clássico, Viva, Carimbo', !r.erro && r.botoes.join() === 'Clássico,Viva,Carimbo', J);
+  t.ok('Clássico (padrão): sem busca na lateral, sem Fixados, sem linha de situação', !r.erro && r.classico.estilo === 'classico' && !r.classico.busca && !r.classico.fixados && !r.classico.situacao, J);
+  t.ok('Viva: números do dia em degradê; busca, Fixados e situação aparecem', !r.erro && r.viva.estilo === 'viva' && /gradient/.test(r.viva.tileFundo) && r.viva.busca && r.viva.fixados && r.viva.situacao, J);
+  t.ok('Fixados = os mais abertos, na ordem de uso', !r.erro && r.viva.fixNomes.length === 3 && /Orçamento/.test(r.viva.fixNomes[0]), J);
+  t.ok('situação no cartão: contas vencendo com valor; os outros, quando foram abertos', !r.erro && /1 vencendo · R\$/.test(r.viva.sitContas) && /^Aberto hoje às 10:05$/.test(r.viva.sitObras), J);
+  t.ok('Carimbo: números numa faixa só (sem espaço entre eles, sem ícone) e a folha com a data', !r.erro && r.carimbo.estilo === 'carimbo' && r.carimbo.faixaGap === '0px' && !r.carimbo.iconeNum && r.carimbo.folha, J);
+  t.ok('a escolha fica guardada e o Clássico volta inteiro', !r.erro && r.guardado === 'viva' && r.volta.estilo === 'classico' && !r.volta.busca && !r.volta.situacao, J);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
+teste('central-estilo-do-painel-celular', async (b, t) => {
+  // defeito: no celular, escolher o estilo Viva deixava a gaveta da lateral
+  // (escondida) ocupando o lado esquerdo e o painel espremido à direita
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'central_rm' }, 'index.html', { celular: true });
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    document.querySelectorAll('#lock-screen').forEach(e => e.style.setProperty('display', 'none', 'important'));
+    try { CURRENT_EMAIL = 'teste@exemplo.com'; } catch (e) {}
+    window.isAllowedSystem = () => true;
+    render(); await esp(100);
+    const W = document.documentElement.clientWidth;
+    const mede = () => {
+      const sb = document.querySelector('.sidebar'), m = document.querySelector('.main, main, #dashboard') || document.body;
+      const d = document.getElementById('dash-stats');
+      return { estilo: document.documentElement.getAttribute('data-estilo') || 'classico',
+        lateral: getComputedStyle(sb).position, painelEsq: Math.round(d.getBoundingClientRect().left),
+        largura: Math.round(d.getBoundingClientRect().width), rola: document.documentElement.scrollWidth > W + 1 };
+    };
+    const out = [mede()];
+    for (const e of ['viva', 'carimbo']) { rmSetEstilo(e); await esp(80); out.push(mede()); }
+    rmSetEstilo('classico');
+    return { W, out };
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r).slice(0, 1500);
+  for (const nome of ['classico', 'viva', 'carimbo']) {
+    const m = !r.erro && r.out.find(x => x.estilo === nome);
+    t.ok(nome + ' no celular: lateral fica por cima (gaveta) e o painel ocupa a tela toda, sem rolar de lado',
+      !!m && m.lateral === 'fixed' && m.painelEsq < 40 && m.largura > r.W * 0.8 && !m.rola, J);
+  }
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
+teste('central-aviso-programa-antigo', async (b, t) => {
+  // programa instalado que ainda não se atualiza sozinho (antes da 1.5.103):
+  // o aviso mandava "rodar o atualizar.bat". Agora leva à página do
+  // instalador montado pelo GitHub; o programa novo mostra a versão no rodapé.
+  const roda = async (comAtualizador) => {
+    const ctx = await b.newContext({ viewport: { width: 1400, height: 900 } }); const pg = await ctx.newPage(); const erros = [];
+    pg.on('pageerror', e => erros.push(String(e.message).slice(0, 160)));
+    await pg.route('**/*', rq => {
+      const u = new URL(rq.request().url());
+      const mm = u.pathname.match(/firebasejs\/[^/]+\/(firebase-[a-z-]+\.js)$/);
+      if (mm && fs.existsSync(path.join(FB, mm[1]))) return rq.fulfill({ status: 200, contentType: 'text/javascript', body: fs.readFileSync(path.join(FB, mm[1])) });
+      if (u.protocol === 'file:') return rq.continue();
+      return rq.abort();
+    });
+    await pg.addInitScript((com) => {
+      window.__abriu = '';
+      window.rmDesktop = { versaoCentral: async () => ({ nova: true }), sistemasBaixados: async () => ({}) };
+      if (com) window.rmDesktop.programaEstado = async () => ({ versao: '1.5.103', nova: null, automatico: true });
+    }, comAtualizador);
+    let dialogo = '';
+    pg.on('dialog', d => { dialogo = d.message(); d.accept().catch(() => {}); });
+    await pg.goto('file://' + path.join(RAIZ, 'central_rm', 'index.html')).catch(() => {});
+    await pg.waitForTimeout(2500);
+    const r = await pg.evaluate(async () => {
+      window.open = (u) => { window.__abriu = u; return null; };
+      await verificarVersaoCentral();
+      await new Promise(x => setTimeout(x, 200));
+      const av = document.getElementById('aviso-central');
+      if (av) av.click();
+      await new Promise(x => setTimeout(x, 200));
+      return { aviso: av ? av.textContent : '', abriu: window.__abriu, rodape: (document.getElementById('footer-info') || {}).textContent || '' };
+    }).catch(e => ({ erro: e.message }));
+    r.dialogo = dialogo; r.erros = erros;
+    await ctx.close();
+    return r;
+  };
+  if (!fs.existsSync(path.join(FB, 'firebase-app-compat.js'))) return;
+  const velho = await roda(false), novo = await roda(true);
+  const J = JSON.stringify({ velho, novo }).slice(0, 1500);
+  t.ok('programa antigo: aviso de atualização disponível', !velho.erro && /atualização do programa disponível/.test(velho.aviso), J);
+  t.ok('o aviso não manda mais rodar o atualizar.bat e leva à página do instalador', !/atualizar\.bat/.test(velho.dialogo) && /se atualiza sozinho/.test(velho.dialogo) && /rm-central-instalador\/releases/.test(velho.abriu), J);
+  t.ok('programa que se atualiza sozinho: sem o aviso antigo e com a versão no rodapé', !novo.erro && !novo.aviso && /programa 1\.5\.103/.test(novo.rodape), J);
+});
+
+teste('central-atalho-troca-sistema', async (b, t) => {
+  // pedido: alternar os sistemas abertos na Central por atalho. Ctrl+1…9 já
+  // existia, mas com o cursor DENTRO do sistema a tecla ficava no iframe e
+  // não fazia nada. Agora o bloco comum atalhos-central.html devolve a tecla.
+  const bloco = fs.readFileSync(path.join(RAIZ, 'central_rm', 'comum', 'atalhos-central.html'), 'utf8');
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'central_rm' });
+  const r = await pg.evaluate(async (bloco) => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    ['sa', 'sb', 'sc'].forEach((id, i) => {
+      const lay = document.createElement('div'); lay.className = 'iframe-layer'; lay.id = 'layer-' + id;
+      const f = document.createElement('iframe'); f.srcdoc = bloco + '<input id="cx" value="Sistema ' + id + '">';
+      lay.appendChild(f); document.querySelector('.content, main, body').appendChild(lay);
+      openTabs.push({ id, name: 'Sistema ' + 'ABC'[i], cat: 'OUTROS', icon: 'ext' });
+    });
+    await esp(400); activateTab('sa'); await esp(100);
+    return true;
+  }, bloco).catch(e => ({ erro: e.message }));
+  const foco = async id => { await pg.evaluate(id => { const f = document.querySelector('#layer-' + id + ' iframe'); f.contentWindow.focus(); f.contentDocument.getElementById('cx').focus(); }, id); };
+  const ativo = () => pg.evaluate(() => activeTabId);
+  const seq = [];
+  if (!r.erro) {
+    await foco('sa'); await pg.keyboard.press('Control+Tab'); await pg.waitForTimeout(150); seq.push(await ativo());
+    await foco(seq[0]); await pg.keyboard.press('Control+Tab'); await pg.waitForTimeout(150); seq.push(await ativo());
+    await foco(seq[1]); await pg.keyboard.press('Control+Tab'); await pg.waitForTimeout(150); seq.push(await ativo());   // volta ao 1º
+    await foco(seq[2]); await pg.keyboard.press('Control+Shift+Tab'); await pg.waitForTimeout(150); seq.push(await ativo());
+    await foco(seq[3]); await pg.keyboard.press('Alt+ArrowRight'); await pg.waitForTimeout(150); seq.push(await ativo());
+    await foco(seq[4]); await pg.keyboard.press('Control+2'); await pg.waitForTimeout(150); seq.push(await ativo());
+  }
+  const hud = await pg.evaluate(() => { const h = document.getElementById('troca-hud'); return h ? h.textContent : ''; }).catch(() => '');
+  // digitar dentro do sistema não troca nada
+  let digitou = null;
+  if (!r.erro) { await foco('sb'); await pg.keyboard.type('abc'); await pg.keyboard.press('ArrowRight'); await pg.keyboard.press('Tab'); await pg.waitForTimeout(150); digitou = await ativo(); }
+  const J = JSON.stringify({ r, seq, hud, digitou });
+  t.ok('Ctrl+Tab com o cursor dentro do sistema vai ao próximo e dá a volta', !r.erro && seq.slice(0, 3).join() === 'sb,sc,sa', J);
+  t.ok('Ctrl+Shift+Tab volta ao anterior', seq[3] === 'sc', J);
+  t.ok('Alt+→ também avança (funciona no navegador)', seq[4] === 'sa', J);
+  t.ok('Ctrl+2 vai direto ao 2º sistema aberto', seq[5] === 'sb', J);
+  t.ok('o nome do sistema aparece ao trocar', hud === 'Sistema B', J);
+  t.ok('digitar, seta e Tab sozinhos não trocam de sistema', digitou === 'sb', J);
+  const fora = ['Controle-estoque-maquinas', 'Pedidos_perfitec', 'almo-os', 'calculadora-pu', 'calculo_pre_moldados', 'controle_cheques', 'controle_compras',
+    'controle_obras', 'leitor_dwg', 'orcamento-rm', 'propostas_rm', 'recibos_rm', 'rm_contas'].filter(x => fs.existsSync(path.join(RAIZ, x)))
+    .filter(x => fs.readFileSync(path.join(RAIZ, x, 'index.html'), 'utf8').indexOf(bloco.trim()) < 0);
+  t.ok('os 13 sistemas têm o bloco de atalhos', !fora.length, fora.join(', '));
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
+teste('orcamento-tab-nao-pula', async (b, t) => {
+  // relato: "às vezes, ao passar de uma caixa para outra com Tab, pula para
+  // uma caixa distante" (Orçamento). Cada caixa da tabela salva e redesenha
+  // a tabela no change -- que dispara no meio do Tab: a caixa de destino era
+  // jogada fora, o cursor caía no nada e o Tab seguinte ia para a 1ª linha.
+  if (!fs.existsSync(path.join(RAIZ, 'orcamento-rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'orcamento-rm' }, 'index.html', { espera: 3000 });
+  await semLogin(pg);
+  await pg.evaluate(() => { const l = document.getElementById('loginScreen'); if (l) l.style.setProperty('display', 'none', 'important'); });
+  const onde = () => pg.evaluate(() => {
+    const a = document.activeElement, tr = a && a.closest('tr[data-lid]');
+    if (!a || a === document.body) return 'perdido';
+    const ins = tr ? [...tr.querySelectorAll('input.cell-in')] : [];
+    return (tr ? 'linha ' + ([...tr.parentNode.querySelectorAll('tr[data-lid]')].indexOf(tr) + 1) + ' ' : '') + (ins.indexOf(a) === 0 ? 'comp' : ins.indexOf(a) === 1 ? 'qtd' : a.tagName.toLowerCase());
+  });
+  const foca = (linha, col) => pg.evaluate(([linha, col]) => {
+    const tr = document.querySelectorAll('#perfilBody tr[data-lid]')[linha - 1], i = tr.querySelectorAll('input.cell-in')[col === 'comp' ? 0 : 1];
+    i.focus(); i.select();
+  }, [linha, col]);
+  const ok = await pg.evaluate(() => { for (let i = 0; i < 4; i++) addPerfilLine(S.perfis[i].id); return document.querySelectorAll('#perfilBody tr[data-lid]').length; }).catch(e => 'erro ' + e.message);
+  const r = {};
+  await foca(3, 'comp'); await pg.keyboard.type('2500'); await pg.keyboard.press('Tab'); await pg.waitForTimeout(150);
+  r.tab = await onde();
+  r.salvou = await pg.evaluate(() => S.linhasPerfil[2].comp);
+  await pg.keyboard.type('7'); await pg.keyboard.press('Shift+Tab'); await pg.waitForTimeout(150);
+  r.volta = await onde();
+  r.qtd = await pg.evaluate(() => S.linhasPerfil[2].qtd);
+  await foca(2, 'comp'); await pg.keyboard.type('3100');
+  r.erroClique = await pg.locator('#perfilBody tr[data-lid]').nth(3).locator('input.cell-in').first().click({ timeout: 3000 }).then(() => '', e => e.message.split('\n').slice(0, 3).join(' '));
+  await pg.waitForTimeout(150);
+  r.clique = await onde();
+  r.cursorNoFim = await pg.evaluate(() => { const a = document.activeElement; return !!a && a.value != null && a.selectionStart === a.value.length; });
+  await pg.keyboard.press('Control+A'); await pg.keyboard.type('4200'); await pg.keyboard.press('Tab'); await pg.waitForTimeout(150);
+  r.comp4 = await pg.evaluate(() => S.linhasPerfil[3].comp); r.depois = await onde();
+  const J = JSON.stringify({ ok, r });
+  t.ok('Tab depois de mudar o comprimento vai para a quantidade da MESMA linha', ok === 4 && r.tab === 'linha 3 qtd' && r.salvou === 2500, J);
+  t.ok('Shift+Tab depois de mudar a quantidade volta ao comprimento da mesma linha', r.volta === 'linha 3 comp' && r.qtd === 7, J);
+  t.ok('clicar noutra linha enquanto a tabela se redesenha: o cursor fica onde clicou', r.clique === 'linha 4 comp' && r.cursorNoFim && r.comp4 === 4200 && r.depois === 'linha 4 qtd', J);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
+teste('orcamento-preco-digitado-na-linha', async (b, t) => {
+  // pedido: editar o preço na própria tela do orçamento -- R$/kg do perfil,
+  // R$/m ou R$/m² da telha e o valor dos itens em geral -- sem ir ao cadastro
+  if (!fs.existsSync(path.join(RAIZ, 'orcamento-rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'orcamento-rm' }, 'index.html', { espera: 3000 });
+  await semLogin(pg);
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    const l0 = document.getElementById('loginScreen'); if (l0) l0.style.setProperty('display', 'none', 'important');
+    const cad = JSON.stringify([S.perfis, S.telhas, S.fornecedores]);
+    const p = S.perfis.find(x => perfilCalc({ comp: x.comp, qtd: 1, compra: { quotes: {} } }, x).pk > 0);
+    const tl = S.telhas.find(x => !x.oculto && telhaCalc({ comp: 1000, qtd: 1, compra: { quotes: {} } }, x).preco > 0);
+    addPerfilLine(p.id); addTelhaLine(tl.id);
+    S.categorias.push({ id: 'ctz', nome: 'Fixação teste', acrescimoPct: 10, items: [{ id: 'iz', grupo: 'Parafuso', tipo: 'teste', unidade: 'un', valor: 10 }] });
+    addCatLine('ctz', 'iz'); await esp(50);
+    const lp = S.linhasPerfil[S.linhasPerfil.length - 1], lt = S.linhasTelha[S.linhasTelha.length - 1], lc = S.linhasCat[S.linhasCat.length - 1];
+    lp.qtd = 2; lt.qtd = 3; lt.comp = 5000; lc.qtd = 4; renderLines(); await esp(50);
+    const pkTab = perfilCalc(lp, p).pk, prTab = telhaCalc(lt, tl).preco;
+    const cel = lid => document.getElementById('tot-' + lid).closest('tr');
+    const muda = (inp, v) => { inp.value = v; inp.dispatchEvent(new Event('change', { bubbles: true })); };
+    const out = { pkTab, prTab };
+    // perfil: R$/kg
+    const ipk = cel(lp.lid).querySelector('.preco-in');
+    out.pkCaixa = ipk ? ipk.value : null;
+    if (ipk) muda(ipk, '12,50'); await esp(30);
+    const cp = perfilCalc(lp, p);
+    out.pk = cp.pk; out.totP = Math.round(cp.tot * 100) / 100; out.pesoP = cp.pesoTot;
+    out.marcaP = !!cel(lp.lid).querySelector('.preco-in.digitado') && !!cel(lp.lid).querySelector('.preco-volta');
+    // telha: R$/m e depois R$/m²
+    const ipt = cel(lt.lid).querySelector('.preco-in'), un = cel(lt.lid).querySelector('.un-sel');
+    if (ipt) muda(ipt, '45'); await esp(30);
+    const ct = telhaCalc(lt, tl); out.totTm = Math.round(ct.tot * 100) / 100; out.metros = ct.metros;
+    const un2 = cel(lt.lid).querySelector('.un-sel'); if (un2) { un2.value = 'm2'; un2.dispatchEvent(new Event('change', { bubbles: true })); } await esp(30);
+    const ct2 = telhaCalc(lt, tl); out.totTm2 = Math.round(ct2.tot * 100) / 100; out.area = telhaAreaM2(lt, tl, ct2.metros); out.modo2 = ct2.modo;
+    // item de catálogo: valor unitário (o acréscimo da categoria entra em cima)
+    const ic = cel(lc.lid).querySelector('.preco-in');
+    out.catCaixa = ic ? ic.value : null;
+    if (ic) muda(ic, '12'); await esp(30);
+    const cat = catById('ctz'); out.totC = catLineTotal(cat, catItemById(cat, 'iz'), lc);
+    // ↺ volta ao preço da tabela
+    const v = cel(lp.lid).querySelector('.preco-volta'); if (v) v.click(); await esp(30);
+    out.pkVolta = perfilCalc(lp, p).pk; out.semMarca = !cel(lp.lid).querySelector('.preco-in.digitado');
+    out.cadIgual = JSON.stringify(JSON.parse(cad)[0]) === JSON.stringify(S.perfis) && JSON.stringify(JSON.parse(cad)[2]) === JSON.stringify(S.fornecedores);
+    return out;
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r);
+  const perto = (a, b) => Math.abs(a - b) < 0.02;
+  t.ok('caixa de R$/kg na linha do perfil, já com o preço da tabela', !r.erro && r.pkCaixa != null && perto(parseFloat(String(r.pkCaixa).replace(/\./g, '').replace(',', '.')), r.pkTab), J);
+  t.ok('R$/kg digitado vale na linha (total = peso × R$/kg) e fica marcado', !r.erro && r.pk === 12.5 && perto(r.totP, r.pesoP * 12.5) && r.marcaP, J);
+  t.ok('telha: preço digitado por metro', !r.erro && perto(r.totTm, 45 * r.metros), J);
+  t.ok('telha: trocar para R$/m² usa a área', !r.erro && r.modo2 === 'm2' && perto(r.totTm2, 45 * r.area) && !perto(r.area, r.metros), J);
+  t.ok('item de catálogo: valor digitado com o acréscimo da categoria em cima', !r.erro && r.catCaixa === '10,00' && perto(r.totC, 12 * 1.1 * 4), J);
+  t.ok('↺ volta ao preço da tabela', !r.erro && perto(r.pkVolta, r.pkTab) && r.semMarca, J);
+  t.ok('o cadastro não muda', !r.erro && r.cadIgual, J);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
+teste('central-documentos-busca-nao-puxa-cursor', async (b, t) => {
+  // a tela Documentos se redesenha também quando chega dado da nuvem, e com
+  // algo escrito na busca puxava o cursor de quem digitava noutra caixa
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'central_rm' });
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    if (!document.getElementById('docs-body') || typeof docsGaveta !== 'function') return { erro: 'sem a tela Documentos' };
+    const dv = document.getElementById('docs-view'); if (dv) dv.style.display = 'block';
+    document.querySelectorAll('#lock-screen,.overlay.open').forEach(e => e.style.setProperty('display', 'none', 'important'));
+    docsGaveta('veiculos'); await esp(50);
+    const busca = document.getElementById('docs-q'); busca.focus(); busca.value = 'abc'; busca.dispatchEvent(new Event('input')); await esp(50);
+    const segue = document.activeElement && document.activeElement.id === 'docs-q';
+    const outra = document.createElement('input'); outra.id = 'zzOutra'; document.body.appendChild(outra); outra.focus();
+    docsGaveta('veiculos'); await esp(50);
+    return { segue, ativo: document.activeElement && document.activeElement.id };
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r);
+  t.ok('digitando na busca, o cursor continua nela', !r.erro && r.segue, J);
+  t.ok('redesenho com busca escrita não puxa o cursor de outra caixa', !r.erro && r.ativo === 'zzOutra', J);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
+teste('guarda-foco-redesenho', async (b, t) => {
+  // o bloco comum guarda-foco.html em qualquer tela que se redesenha no
+  // change ou no meio da digitação (a nuvem, o salvar): o cursor não se perde
+  const bloco = fs.readFileSync(path.join(RAIZ, 'central_rm', 'comum', 'guarda-foco.html'), 'utf8');
+  const ctx = await b.newContext(); const pg = await ctx.newPage(); const erros = [];
+  pg.on('pageerror', e => erros.push(e.message));
+  const pagina = (comBloco) => '<!doctype html><body>' + (comBloco ? bloco : '') + '<input id="topo"><table><tbody id="tb"></tbody></table><input id="fim"><script>'
+    + 'var D=[["a","1"],["b","2"],["c","3"],["d","4"]];'
+    + 'function desenha(){document.getElementById("tb").innerHTML=D.map(function(l,i){return "<tr><td><input value=\\""+l[0]+"\\" onchange=\\"D["+i+"][0]=this.value;desenha()\\"></td><td><input value=\\""+l[1]+"\\" onchange=\\"D["+i+"][1]=this.value;desenha()\\"></td></tr>";}).join("");}desenha();'
+    + '<\/script></body>';
+  const onde = () => pg.evaluate(() => { const a = document.activeElement; if (!a || a === document.body) return 'perdido'; if (a.id) return a.id;
+    const ins = [...document.querySelectorAll('#tb input')]; const i = ins.indexOf(a); return 'L' + (Math.floor(i / 2) + 1) + 'C' + (i % 2 + 1); });
+  const roda = async (comBloco) => {
+    await pg.setContent(pagina(comBloco));
+    const r = {};
+    await pg.evaluate(() => { const i = document.querySelectorAll('#tb input')[4]; i.focus(); i.select(); });
+    await pg.keyboard.type('x'); await pg.keyboard.press('Tab'); await pg.waitForTimeout(80); r.tab = await onde();
+    await pg.keyboard.press('Tab'); await pg.waitForTimeout(80); r.tab2 = await onde();
+    // redesenho no meio da digitação: o cursor fica na mesma caixa e no mesmo ponto do texto
+    await pg.evaluate(() => { const i = document.querySelectorAll('#tb input')[2]; i.focus(); i.value = 'abcdef'; i.setSelectionRange(3, 3); i.dispatchEvent(new Event('keyup', { bubbles: true })); });
+    await pg.evaluate(() => { D[1][0] = document.querySelectorAll('#tb input')[2].value; desenha(); });
+    await pg.waitForTimeout(80);
+    r.digita = await onde(); r.ponto = await pg.evaluate(() => document.activeElement.selectionStart);
+    // clique fora de propósito (em lugar nenhum), mesmo com a tabela se
+    // redesenhando por causa da caixa que mudou: não puxa o cursor de volta
+    await pg.evaluate(() => { const i = document.querySelectorAll('#tb input')[0]; i.focus(); i.select(); });
+    await pg.keyboard.type('zz'); await pg.mouse.click(5, 300); await pg.waitForTimeout(80); r.fora = await onde();
+    return r;
+  };
+  const sem = await roda(false), com = await roda(true);
+  const J = JSON.stringify({ sem, com });
+  t.ok('sem o bloco o defeito aparece (o Tab se perde)', sem.tab === 'perdido', J);
+  t.ok('Tab depois de mudar a caixa vai para a vizinha da mesma linha, e segue', com.tab === 'L3C2' && com.tab2 === 'L4C1', J);
+  t.ok('redesenho no meio da digitação: mesma caixa, mesmo ponto do texto', com.digita === 'L2C1' && com.ponto === 3, J);
+  t.ok('clicar fora continua tirando o cursor (o bloco não insiste)', com.fora === 'perdido', J);
+  const fora = ['Controle-estoque-maquinas', 'Pedidos_perfitec', 'almo-os', 'calculadora-pu', 'calculo_pre_moldados', 'controle_cheques', 'controle_compras',
+    'controle_obras', 'leitor_dwg', 'orcamento-rm', 'propostas_rm', 'recibos_rm', 'rm_contas'].filter(x => fs.existsSync(path.join(RAIZ, x)))
+    .filter(x => fs.readFileSync(path.join(RAIZ, x, 'index.html'), 'utf8').indexOf(bloco.trim()) < 0);
+  t.ok('os 13 sistemas têm o bloco', !fora.length, fora.join(', '));
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
+teste('atalhos-responde-se-ha-digitacao', async (b, t) => {
+  // o F5 do programa recarrega o sistema; antes a Central pergunta se há
+  // algo digitado sem gravar -- quem responde é o bloco atalhos-central
+  const bloco = fs.readFileSync(path.join(RAIZ, 'central_rm', 'comum', 'atalhos-central.html'), 'utf8');
+  const ctx = await b.newContext(); const pg = await ctx.newPage(); const erros = [];
+  pg.on('pageerror', e => erros.push(e.message));
+  await pg.setContent('<!doctype html><body><iframe id="f"></iframe></body>');
+  const r = await pg.evaluate(async (bloco) => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    const f = document.getElementById('f'); f.srcdoc = bloco + '<input id="c">'; await esp(300);
+    const pergunta = () => new Promise(res => { const ouve = ev => { if (ev.data && ev.data.rm === 'sujo') { removeEventListener('message', ouve); res(ev.data.sim); } };
+      addEventListener('message', ouve); f.contentWindow.postMessage({ rm: 'sujo?' }, '*'); setTimeout(() => res('sem resposta'), 500); });
+    const antes = await pergunta();
+    const c = f.contentDocument.getElementById('c'); c.focus(); c.value = 'x'; c.dispatchEvent(new Event('input', { bubbles: true }));
+    const digitando = await pergunta();
+    c.dispatchEvent(new Event('change', { bubbles: true }));
+    const gravou = await pergunta();
+    return { antes, digitando, gravou };
+  }, bloco).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r);
+  t.ok('sem nada digitado: "não"', r.antes === false, J);
+  t.ok('digitando (a caixa mudou e não saiu dela): "sim"', r.digitando === true, J);
+  t.ok('depois que a caixa gravou (change): "não" de novo', r.gravou === false, J);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
+teste('central-backup-geral', async (b, t) => {
+  // backup saía em partes (dados e anexos em arquivos separados, restaurar
+  // um nó por vez pelo nome técnico). Agora: um arquivo geral com tudo, e o
+  // restaurar mostra os sistemas pelo nome, deixa marcar vários e guarda a
+  // cópia de como o servidor está ANTES de gravar
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'central_rm' });
+  const r = await pg.evaluate(async () => {
+    const espera = ms => new Promise(x => setTimeout(x, ms));
+    if (typeof backupGeral !== 'function' || !window.BACKUP_SISTEMAS) return { erro: 'sem o backup geral' };
+    const banco = { recibos: { employees: { e1: { nome: 'TESTE' } } }, obras_rm: { o1: { nome: 'Obra teste' } },
+      obras_rm_anexos: { o1: { f1: 'data:application/pdf;base64,AAAA' } }, almocos: { meses: { '2026-09': 1 } } };
+    const ordem = [];
+    firebase.database = () => ({ ref: no => ({
+      once: async () => ({ val: () => (banco[no] === undefined ? null : JSON.parse(JSON.stringify(banco[no]))) }),
+      set: async v => { ordem.push('set ' + no); banco[no] = v; } }) });
+    window.rmDesktop = { backupGravar: async () => { ordem.push('copia'); return { ok: true, gravados: ['x'], pasta: 'P' }; },
+      backupFalhou: async () => true, backupEstado: async () => ({ arquivos: [], bytes: 0, pasta: 'P' }) };
+    // todo nó do backup tem um sistema com nome
+    const nomeados = [].concat.apply([], BACKUP_SISTEMAS.map(s => s.nos));
+    const semNome = (window.__bkNos || ['sem lista']).filter(n => nomeados.indexOf(n) < 0);
+    // 1) backup geral: UM arquivo, dados e anexos juntos
+    const baixados = [], clk = HTMLAnchorElement.prototype.click;
+    HTMLAnchorElement.prototype.click = function () { baixados.push({ nome: this.download, href: this.href }); };
+    await backupGeral(null);
+    HTMLAnchorElement.prototype.click = clk;
+    const arq = baixados[0] ? await (await fetch(baixados[0].href)).text() : '';
+    const geral = arq ? JSON.parse(arq) : {};
+    // 2) o servidor muda depois do backup
+    banco.recibos = { employees: {} }; banco.almocos = { meses: { '2026-10': 2 } };
+    // 3) restaurar só a Folha de Pagamento
+    window.rmDesktop.backupLer = async () => ({ nome: baixados[0].nome, conteudo: arq });
+    await backupRestaurar(); await espera(50);
+    const linhas = [...document.querySelectorAll('.bk-rest .bk-s')].map(x => x.textContent.replace(/\s+/g, ' ').trim());
+    const ok = document.querySelector('.bk-rest [data-ok]');
+    const folha = [...document.querySelectorAll('.bk-rest [data-bk]')].find(c => /Folha de Pagamento/.test(c.parentNode.textContent));
+    folha.click();
+    const travado = ok.disabled;
+    const conf = document.getElementById('bk-conf'); conf.value = 'restaurar'; conf.dispatchEvent(new Event('input'));
+    const rotulo = ok.textContent, liberado = !ok.disabled;
+    const alertas = []; window.alert = m => alertas.push(m);
+    ok.click(); await espera(300);
+    const ordemFluxo = ordem.slice();
+    // obra de backup antigo (sem a marca _v) volta assinada: a regra do Firebase exige
+    await window.__bkRestauroTeste({ obras_rm: { o1: { nome: 'Obra antiga' } } }, [{ nome: 'Controle de Obras', nos: ['obras_rm'] }]);
+    const obraAssinada = banco.obras_rm && banco.obras_rm.o1 && banco.obras_rm.o1._v;
+    return { obraAssinada, semNome, nome: baixados[0] && baixados[0].nome, nos: geral.nos || [], tipo: geral.tipo, linhas, travado, liberado, rotulo,
+      ordem: ordemFluxo, recibos: banco.recibos, almocos: banco.almocos, alerta: alertas.join(' | '), aberto: !!document.querySelector('.bk-rest') };
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r).slice(0, 1500);
+  t.ok('todo nó do backup pertence a um sistema com nome', !r.erro && !r.semNome.length, J);
+  t.ok('backup geral: um arquivo com dados e anexos', !r.erro && /^RM backup geral \d{4}-\d{2}-\d{2} \d{2}h\d{2}\.json$/.test(r.nome)
+    && r.tipo === 'rm-backup-geral' && ['recibos', 'obras_rm', 'obras_rm_anexos', 'almocos'].every(n => r.nos.includes(n)), J);
+  t.ok('restaurar lista os sistemas pelo nome', !r.erro && r.linhas.some(l => /Folha de Pagamento/.test(l)) && r.linhas.some(l => /Controle de Obras/.test(l))
+    && r.linhas.some(l => /Estoque de Máquinas.*não está neste arquivo/.test(l)), J);
+  t.ok('só libera com sistema marcado e RESTAURAR digitado', !r.erro && r.travado && r.liberado && /1 sistema/.test(r.rotulo), J);
+  t.ok('guarda a cópia de agora ANTES de gravar', !r.erro && r.ordem[0] === 'copia' && r.ordem.slice(1).every(x => /^set /.test(x)), J);
+  t.ok('volta só o marcado', !r.erro && r.recibos.employees && r.recibos.employees.e1 && r.almocos.meses['2026-10'] === 2
+    && r.ordem.filter(x => /^set /.test(x)).sort().join() === 'set recibos' && /Folha de Pagamento/.test(r.alerta) && !r.aberto, J);
+  t.ok('obra de backup antigo volta com o contrato de escrita do Obras', !r.erro && r.obraAssinada >= 2, J);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
+teste('central-docs-varios', async (b, t) => {
+  // Documentos da Central: fornecedor pede vários de uma vez e era preciso
+  // mandar um por um. Seleciona vários (até misturando Veículos e Empresa),
+  // envia tudo junto e tira o relatório completo da frota.
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'central_rm' });
+  const r = await pg.evaluate(async () => {
+    const espera = ms => new Promise(r => setTimeout(r, ms));
+    window.isAdminUser = () => true;
+    const pdf = 'data:application/pdf;base64,' + btoa('%PDF-1.4 teste');
+    window.__docsArqTeste = id => ({ nome: id + '.pdf', tipo: 'application/pdf', dados: pdf });
+    window.__docsTeste({
+      veiculos: { v1: { placa: 'AAA1A11', modelo: 'Caminhão Teste', grupo: 'caminhao' }, v2: { placa: 'BBB2B22', modelo: 'Carro Teste', grupo: 'leves' } },
+      docs: { d1: { gaveta: 'veiculos', veiculo: 'v1', nome: 'CRLV 2026', tipo: 'application/pdf', validade: '2026-01-10', bytes: 100 },
+              d2: { gaveta: 'veiculos', veiculo: 'v1', nome: 'Seguro', tipo: 'application/pdf', validade: '2099-01-01', bytes: 100 },
+              d3: { gaveta: 'veiculos', veiculo: 'v2', nome: 'CRLV 2026', tipo: 'application/pdf', validade: '', bytes: 100 },
+              e1: { gaveta: 'empresa', nome: 'Cartão CNPJ', tipo: 'application/pdf', validade: '', bytes: 100 } } });
+    showDocumentos();
+    document.getElementById('docs-sel').click(); await espera(50);
+    document.getElementById('docs-sel-todos').click(); await espera(50);
+    const selVeic = document.querySelectorAll('#docs-body [data-sel]:checked').length;
+    docsGaveta('empresa'); await espera(50);
+    document.querySelector('#docs-body [data-sel="e1"]').click(); await espera(50);
+    const barra = (document.getElementById('docs-selbar') || {}).textContent || '';
+    // sem folha de compartilhar (computador): um .zip com todos
+    const baixados = [];
+    const clk = HTMLAnchorElement.prototype.click;
+    HTMLAnchorElement.prototype.click = function () { baixados.push({ nome: this.download, href: this.href }); };
+    navigator.canShare = undefined;
+    document.getElementById('docs-enviar-sel').click(); await espera(400);
+    let zipNomes = '';
+    if (baixados[0]) { const buf = await (await fetch(baixados[0].href)).arrayBuffer(); zipNomes = new TextDecoder('utf-8').decode(new Uint8Array(buf)); }
+    // com folha de compartilhar (celular): os arquivos vão juntos
+    let compartilhados = null;
+    navigator.canShare = () => true; navigator.share = o => { compartilhados = o.files.map(f => f.name); return Promise.resolve(); };
+    document.getElementById('docs-enviar-sel').click(); await espera(400);
+    HTMLAnchorElement.prototype.click = clk;
+    // relatório completo da frota
+    let rel = '';
+    window.rmImprimirHTML = (h) => { rel = h; return true; };
+    document.getElementById('docs-sel-cancelar').click(); docsGaveta('veiculos'); await espera(50);
+    document.getElementById('docs-relatorio').click(); await espera(100);
+    return { selVeic, barra, zip: baixados[0] && baixados[0].nome, zipNomes, compartilhados,
+      rel: { timbre: /class="[^"]*tb2/.test(rel) && /Nunes e Kuhn/.test(rel), placas: /AAA1A11/.test(rel) && /BBB2B22/.test(rel),
+             docs: /SEGURO/.test(rel) && /CARTÃO CNPJ/.test(rel) === false, venceu: /Vencido/.test(rel) } };
+  }).catch(e => ({ erro: e.message }));
+  const nomes = ['AAA1A11 - CAMINHÃO TESTE - CRLV 2026.pdf', 'AAA1A11 - CAMINHÃO TESTE - SEGURO.pdf', 'BBB2B22 - CARRO TESTE - CRLV 2026.pdf', 'CARTÃO CNPJ.pdf'];
+  const zipOk = r.zip && /^Documentos RM Estruturas \d{2}-\d{2}-\d{4}\.zip$/.test(r.zip) && nomes.every(n => r.zipNomes.includes(n));
+  const ok = !r.erro && r.selVeic === 3 && /4 selecionados/.test(r.barra) && zipOk
+    && r.compartilhados && r.compartilhados.length === 4 && nomes.every(n => r.compartilhados.includes(n))
+    && r.rel.timbre && r.rel.placas && r.rel.docs && r.rel.venceu;
+  t.ok('documentos: vários de uma vez (zip ou compartilhar) e relatório da frota', ok && !erros.length, JSON.stringify(Object.assign({}, r, { zipNomes: undefined })) + ' zipOk=' + zipOk + ' ' + erros.join(' | '));
+  await ctx.close();
+});
+
+teste('central-docs-modelo-inteiro-no-celular', async (b, t) => {
+  // no celular a linha do veículo cortava o modelo ("FIAT/STRAD...") para
+  // caber a placa e a validade, sem como ler o resto. Ali ele desce para a
+  // linha de baixo e aparece inteiro; no computador fica na linha, e o nome
+  // todo aparece ao parar o mouse.
+  const modelo = 'FIAT/STRADA ENDURANCE CS 1.4 FLEX TESTE';
+  const mede = async tela => {
+    const { ctx, pg, erros } = await abre(b, { 'sis.local': 'central_rm' }, 'index.html', tela ? { tela } : {});
+    const r = await pg.evaluate(m => {
+      window.isAdminUser = () => true;
+      window.__docsTeste({ veiculos: { v1: { placa: 'AAA1A11', modelo: m, grupo: 'leves' } },
+        docs: { d1: { gaveta: 'veiculos', veiculo: 'v1', nome: 'CRLV', validade: '2027-05-12', bytes: 1 } } });
+      showDocumentos(); docsGaveta('veiculos');
+      const n = document.querySelector('#docs-body .veic-nome'), c = document.querySelector('#docs-body .veic-cab'), tg = c.querySelector('.veic-tag');
+      const rn = n.getBoundingClientRect(), rc = c.getBoundingClientRect(), rt = tg.getBoundingClientRect();
+      return { txt: n.textContent, title: n.title, inteiro: n.scrollWidth <= n.clientWidth + 1, dentro: rn.right <= rc.right + 1 && rt.right <= rc.right + 1, abaixo: rn.top >= rt.bottom - 2 };
+    }, modelo).catch(e => ({ erro: e.message }));
+    await ctx.close(); return [r, erros];
+  };
+  const [cel, e1] = await mede({ width: 360, height: 760 });
+  t.ok('celular (360): o modelo aparece inteiro, numa linha abaixo da placa e da validade, sem sair do cartão',
+    !cel.erro && cel.txt === modelo && cel.inteiro && cel.abaixo && cel.dentro && !e1.length, JSON.stringify(cel) + ' ' + e1.join(' | '));
+  const [pc, e2] = await mede(null);
+  t.ok('computador: o modelo fica na linha, com o nome todo ao parar o mouse', !pc.erro && !pc.abaixo && pc.title === modelo && !e2.length, JSON.stringify(pc) + ' ' + e2.join(' | '));
+});
+
+teste('central-docs-caixa-alta', async (b, t) => {
+  // os nomes da gaveta vinham como cada arquivo chegou ("Contrato Social
+  // Novo", "Dados_Cadastrais_RM", "BalanÃ§o"): tudo em caixa alta, com o
+  // acento que chegou quebrado consertado, na lista e no que se envia
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'central_rm' });
+  const r = await pg.evaluate(async () => {
+    window.isAdminUser = () => true;
+    window.__docsTeste({ veiculos: { v1: { placa: 'aaa1a11', modelo: 'Atego 2426', grupo: '' } },
+      docs: { e1: { gaveta: 'empresa', nome: 'Contrato Social Novo', validade: '', bytes: 1 },
+              e2: { gaveta: 'empresa', nome: 'BalanÃ§o-1757598469182 (2)', validade: '', bytes: 1 },
+              d1: { gaveta: 'veiculos', veiculo: 'v1', nome: 'crlv 2026', validade: '', bytes: 1 } } });
+    showDocumentos(); docsGaveta('empresa');
+    const lista = [...document.querySelectorAll('#docs-body .doc-nome')].map(x => x.textContent);
+    docsGaveta('veiculos'); docsAlternar('v1');
+    const veic = [...document.querySelectorAll('#docs-body .veic-nome, #docs-body .veic-placa, #docs-body .doc-nome')].map(x => x.textContent);
+    // grupos: renomear um e criar outro pela janela "Grupos"
+    document.getElementById('docs-grupos').click();
+    const dlg = document.querySelector('.dlg-fundo');
+    dlg.querySelector('#dlg-g_caminhao').value = 'Caminhões e carretas';
+    dlg.querySelector('#dlg-novo').value = 'Máquinas pesadas';
+    dlg.querySelector('[data-ok]').click();
+    docsEditarVeiculo('v1');
+    const opts = [...document.querySelectorAll('.dlg-fundo #dlg-grupo option')].map(o => o.textContent);
+    document.querySelector('.dlg-fundo [data-x]').click();
+    return { lista, veic, opts };
+  }).catch(e => ({ erro: e.message }));
+  const ok = !r.erro && r.lista.includes('CONTRATO SOCIAL NOVO') && r.lista.includes('BALANÇO-1757598469182 (2)')
+    && r.veic.includes('ATEGO 2426') && r.veic.includes('AAA1A11') && r.veic.includes('CRLV 2026')
+    && r.opts.includes('Caminhões e carretas') && r.opts.includes('Máquinas pesadas') && !r.opts.includes('Caminhões');
+  t.ok('nomes em caixa alta (acento consertado) e grupos criados/renomeados', ok && !erros.length, JSON.stringify(r) + ' ' + erros.join(' | '));
+  await ctx.close();
+});
+
+teste('central-docs-mover', async (b, t) => {
+  // mover veículos de grupo: um só (botão no cartão) ou vários de uma vez
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'central_rm' });
+  const r = await pg.evaluate(async () => {
+    window.isAdminUser = () => true;
+    window.__docsTeste({ veiculos: { v1: { placa: 'AAA1A11', modelo: 'X', grupo: 'caminhao' }, v2: { placa: 'BBB2B22', modelo: 'Y', grupo: 'caminhao' },
+                                     v3: { placa: 'CCC3C33', modelo: 'Z', grupo: '' } }, docs: {} });
+    showDocumentos();
+    const grupoDe = () => { const o = {}; let g = '';
+      document.querySelectorAll('#docs-body .veic-grupo h4, #docs-body .veic-placa').forEach(e => { if (e.tagName === 'H4') g = e.textContent; else o[e.textContent] = g; }); return o; };
+    // vários: abre pela barra, marca dois, escolhe o destino
+    document.getElementById('docs-mover').click();
+    let dlg = document.querySelector('.dlg-fundo');
+    dlg.querySelector('[data-mv="v1"]').checked = true; dlg.querySelector('[data-mv="v3"]').checked = true;
+    dlg.querySelector('#dlg-destino').value = 'leves';
+    dlg.querySelector('[data-ok]').click();
+    const depois1 = grupoDe();
+    // um só: pelo botão do cartão, já vem marcado
+    docsAlternar('v2'); document.querySelector('[data-v="v2"] [data-mover]').click();
+    dlg = document.querySelector('.dlg-fundo');
+    const preMarcado = dlg.querySelector('[data-mv="v2"]').checked && !dlg.querySelector('[data-mv="v1"]').checked;
+    dlg.querySelector('#dlg-destino').value = 'carreta';
+    dlg.querySelector('[data-ok]').click();
+    return { depois1, depois2: grupoDe(), preMarcado };
+  }).catch(e => ({ erro: e.message }));
+  const ok = !r.erro && r.depois1.AAA1A11 === 'Veículos leves' && r.depois1.CCC3C33 === 'Veículos leves' && r.depois1.BBB2B22 === 'Caminhões'
+    && r.preMarcado && r.depois2.BBB2B22 === 'Carretas';
+  t.ok('mover veículos para outro grupo (um ou vários)', ok && !erros.length, JSON.stringify(r) + ' ' + erros.join(' | '));
+  await ctx.close();
+});
+
+teste('central-apresentacao-fundo', async (b, t) => {
+  // abrir a Apresentação da empresa deixava a Central com o fundo cinza: o
+  // estilo do documento trazia html,body{background} sem escopo, e ficava
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'central_rm' });
+  const r = await pg.evaluate(() => {
+    const fundo = () => [getComputedStyle(document.body).backgroundColor, getComputedStyle(document.documentElement).backgroundColor,
+      getComputedStyle(document.documentElement).getPropertyValue('--linha')].join('|');
+    const antes = fundo();
+    rmApresentacao();
+    const doc = document.getElementById('ap-doc'), txt = doc.textContent;
+    const texto = { tracos: (txt.match(/[—–]/g) || []).length, assinatura: !!doc.querySelector('.ass .linha'),
+      socios: /Maiquel José Kuhn/.test(txt) && /Rudimar Nunes/.test(txt) };
+    rmApresFechar();
+    return { antes, depois: fundo(), texto };
+  }).catch(e => ({ erro: e.message }));
+  t.ok('fundo da Central igual depois de abrir e fechar a apresentação', !r.erro && r.antes === r.depois && !erros.length, JSON.stringify(r) + ' ' + erros.join(' | '));
+  // texto revisado: sem travessão entre palavras, sem campo de assinatura, os dois sócios
+  t.ok('apresentação sem travessões, sem assinatura e com os dois sócios', !r.erro && r.texto.tracos === 0 && !r.texto.assinatura && r.texto.socios, JSON.stringify(r.texto || r));
+  await ctx.close();
+});
+
+teste('central-docs-acesso', async (b, t) => {
+  // a gaveta Documentos era só da conta do Everton; a Bianca
+  // (engenharia@) passa a ver também. Outra conta continua sem.
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'central_rm' });
+  const r = await pg.evaluate(() => {
+    const ver = email => { CURRENT_EMAIL = email; return typeof podeDocumentos === 'function' && podeDocumentos(); };
+    const o = { everton: ver('evertonluis4523@gmail.com'), bianca: ver('engenharia@rmestruturas.com.br'),
+      rudimar: ver('rudimar.nunes@universo.univates.br'), ninguem: ver(null) };
+    CURRENT_EMAIL = 'engenharia@rmestruturas.com.br';
+    window.__docsTeste({ veiculos: {}, docs: { e1: { gaveta: 'empresa', nome: 'X', validade: '2020-01-01', bytes: 1 } } });
+    showDocumentos();
+    o.abriu = document.getElementById('docs-view').style.display === 'block';
+    o.aviso = (window.docsAvisos() || []).length;
+    return o;
+  }).catch(e => ({ erro: e.message }));
+  const ok = !r.erro && r.everton && r.bianca && !r.rudimar && !r.ninguem && r.abriu && r.aviso === 1;
+  t.ok('gaveta Documentos liberada para o Everton e a Bianca, e só para eles', ok && !erros.length, JSON.stringify(r) + ' ' + erros.join(' | '));
+  await ctx.close();
+});
+
+teste('central-etiquetas', async (b, t) => {
+  // etiquetas de identificação de itens: cada linha é uma etiqueta (nome,
+  // largura e altura em cm, cópias), com a prévia ao lado; imprime todas
+  // (folha A4 ou uma por página, no tamanho dela) ou uma só. O desenho é o
+  // das etiquetas de nome: logo no alto, centralizado, nome embaixo em caixa
+  // alta. Para o dono e a engenharia.
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'central_rm' });
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    const ver = e => { CURRENT_EMAIL = e; return typeof podeEtiquetas === 'function' && podeEtiquetas(); };
+    const o = { acesso: { dono: ver('evertonluis4523@gmail.com'), eng: ver('engenharia@rmestruturas.com.br'), rudimar: ver('rudimar.nunes@universo.univates.br'), ninguem: ver(null) } };
+    CURRENT_EMAIL = 'engenharia@rmestruturas.com.br';
+    try { localStorage.removeItem(prefKey('rm_central_etiquetas')); } catch (e) {}
+    if (window.__etqTeste) window.__etqTeste.ajustarVisibilidade();
+    const nav = document.querySelector('[data-etiq]'); o.menu = !!nav && nav.style.display !== 'none';
+    if (typeof showEtiquetas !== 'function') return Object.assign(o, { erro: 'sem showEtiquetas' });
+    showEtiquetas(); await esp(50);
+    o.tela = document.getElementById('etiq-view').style.display === 'block' && document.getElementById('dashboard').style.display === 'none';
+    const linhas = () => [...document.querySelectorAll('#etq-linhas tr')];
+    const poe = (tr, k, v) => { const i = tr.querySelector('[data-k="' + k + '"]'); i.value = v; i.dispatchEvent(new Event('input', { bubbles: true })); i.dispatchEvent(new Event('change', { bubbles: true })); };
+    poe(linhas()[0], 'nome', 'Furadeira de bancada'); poe(linhas()[0], 'w', '6'); poe(linhas()[0], 'h', '4');
+    // Enter no nome cria a próxima linha, no mesmo tamanho
+    linhas()[0].querySelector('[data-k="nome"]').dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    o.novaMesmoTamanho = linhas().length === 2 && linhas()[1].querySelector('[data-k="w"]').value === '6' && linhas()[1].querySelector('[data-k="h"]').value === '4';
+    poe(linhas()[1], 'nome', 'Esmerilhadeira angular de alta rotação com disco'); poe(linhas()[1], 'n', '3');
+    document.getElementById('etq-nova').click(); // terceira linha, sem nome: não imprime
+    await esp(250);
+    const pv = [...document.querySelectorAll('#etq-prevlista .etq')];
+    o.previas = pv.length;
+    const p0 = pv[0], img = p0.querySelector('img'), nm = p0.querySelector('.etq-nome span'), rl = p0.getBoundingClientRect(), ri = img.getBoundingClientRect(), rn = nm.getBoundingClientRect();
+    o.desenho = { logoNoAlto: ri.bottom <= rn.top, logoCentro: Math.abs((ri.left + ri.right) / 2 - (rl.left + rl.right) / 2) < 2,
+      nomeCentro: Math.abs((rn.left + rn.right) / 2 - (rl.left + rl.right) / 2) < 2, caixaAlta: getComputedStyle(nm).textTransform === 'uppercase', texto: nm.textContent };
+    const p1 = pv[1], b1 = p1.querySelector('.etq-nome'), s1 = b1.firstChild;
+    o.longoCabe = s1.offsetWidth <= b1.clientWidth + 1 && s1.offsetHeight <= b1.clientHeight + 1;
+    // impressão: captura o documento que iria para o PDF
+    let docs = []; const orig = window.rmImprimirHTML; window.rmImprimirHTML = (h, n) => { docs.push({ h, n }); return true; };
+    try {
+      document.getElementById('etq-todas').click();
+      document.querySelector('#etiq-body [data-modo="uma"]').click(); await esp(30);
+      document.getElementById('etq-todas').click();
+      document.querySelector('#etq-linhas tr [data-imp]').click();
+    } finally { window.rmImprimirHTML = orig; }
+    const conta = h => (h.match(/class="etq"/g) || []).length;
+    o.a4 = docs[0] ? { n: conta(docs[0].h), a4: /@page\{size:A4/.test(docs[0].h), corte: /recortar/.test(docs[0].h) } : null;
+    o.uma = docs[1] ? { n: conta(docs[1].h), t60: /@page t60x40\{size:60mm 40mm;margin:0\}/.test(docs[1].h), pg: (docs[1].h.match(/class="pg /g) || []).length } : null;
+    o.unidade = docs[2] ? { n: conta(docs[2].h), nome: docs[2].n } : null;
+    o.guardado = (JSON.parse(localStorage.getItem(prefKey('rm_central_etiquetas')) || '{}').linhas || []).length;
+    showDashboard(); o.saiu = document.getElementById('etiq-view').style.display === 'none';
+    return o;
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  t.ok('Etiquetas na Central para o dono e a engenharia, só para eles', !r.erro && r.acesso.dono && r.acesso.eng && !r.acesso.rudimar && !r.acesso.ninguem && r.menu && r.tela, J);
+  t.ok('Enter no nome cria a próxima linha, no mesmo tamanho', !r.erro && r.novaMesmoTamanho, J);
+  t.ok('prévia ao lado, uma por linha', !r.erro && r.previas === 3, J);
+  t.ok('desenho: logo no alto, centralizado; nome embaixo, centralizado, em caixa alta', !r.erro && r.desenho.logoNoAlto && r.desenho.logoCentro && r.desenho.nomeCentro && r.desenho.caixaAlta && /Furadeira/i.test(r.desenho.texto), J);
+  t.ok('nome comprido diminui até caber na etiqueta', !r.erro && r.longoCabe, J);
+  t.ok('imprimir todas na folha A4: as com nome, com as cópias (1 + 3)', !r.erro && r.a4 && r.a4.n === 4 && r.a4.a4 && r.a4.corte, J);
+  t.ok('uma por página: página no tamanho da etiqueta (60 × 40 mm), uma por etiqueta', !r.erro && r.uma && r.uma.n === 4 && r.uma.t60 && r.uma.pg === 4, J);
+  t.ok('imprimir uma só: só aquela etiqueta', !r.erro && r.unidade && r.unidade.n === 1 && /FURADEIRA/.test(r.unidade.nome), J);
+  t.ok('a lista fica guardada; sair da tela a esconde', !r.erro && r.guardado === 3 && r.saiu && !erros.length, J);
+  await ctx.close();
+});
+
+teste('central-engenharia-obras-pu', async (b, t) => {
+  // a conta da engenharia (Bianca) passou a usar o Controle de Obras e o
+  // Sistema PU. Liberar só no menu deixa o sistema abrir vazio, com "sem
+  // permissão"; liberar só na regra deixa o dado aberto e o sistema escondido.
+  // Os dois andam juntos: menu da Central E os nós daqueles sistemas na regra.
+  const eng = 'engenharia@rmestruturas.com.br';
+  const regras = JSON.parse(fs.readFileSync(path.join(RAIZ, 'central_rm', 'ferramentas', 'regras_firebase.json'), 'utf8')).rules;
+  const nos = ['obras_rm', 'obras_rm_historico', 'obras_rm_anexos', 'controle_pu', 'controle_metalica'];
+  const semEng = nos.filter(n => !regras[n] || !String(regras[n]['.read']).includes(eng) || !String(regras[n]['.write']).includes(eng));
+  t.ok('regra do Firebase libera Obras e PU para a engenharia', !semEng.length, 'sem a engenharia: ' + semEng.join(', '));
+  t.ok('Obras segue exigindo a versão nova do registro', regras.obras_rm && regras.obras_rm.$obra && /_v/.test(regras.obras_rm.$obra['.validate']), JSON.stringify(regras.obras_rm));
+  t.ok('Máquinas e Cheques continuam fora da engenharia', !String(regras.maquinas_rm['.read']).includes(eng) && !String(regras.cheques['.read']).includes(eng));
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'central_rm' });
+  const r = await pg.evaluate(e => {
+    const ver = (email, id) => { CURRENT_EMAIL = email; return isAllowedSystem(id); };
+    return { obras: ver(e, 'obras'), pu: ver(e, 'pu'), recibos: ver(e, 'recibos'), cheques: ver(e, 'cheques'),
+      rudimarObras: ver('rudimar.nunes@universo.univates.br', 'obras') };
+  }, eng).catch(e => ({ erro: e.message }));
+  t.ok('menu da Central mostra Obras e PU para a engenharia, e só isso a mais', !r.erro && r.obras && r.pu && r.recibos && !r.cheques && !r.rudimarObras && !erros.length, JSON.stringify(r) + ' ' + erros.join(' | '));
+  await ctx.close();
+});
+
+/* ---- Propostas e Contratos ----
+   A arquiteta montava a proposta e o contrato em dois Words. Lendo os dois
+   de 05/2026: prazo de 120 dias num e 180 no outro, o fechamento diferente,
+   "R15.500,00" e o extenso de cada valor digitado à mão. Aqui o contrato
+   nasce da proposta (mesmas peças, mesmos valores), o extenso sai do número
+   e o que não fecha aparece antes de virar papel. Dados fictícios. */
+const PROP_FICT = `(() => {
+  const d = novoDoc();
+  Object.assign(d.cliente, { nome: 'Cliente Fictício Ltda', doc: '00.000.000/0001-00', endereco: 'Rua Exemplo, 100', cidade: 'Cidade Exemplo/RS', cep: '00000-000', rep: 'Pessoa Exemplo', repDoc: 'CPF 000.000.000-00' });
+  Object.assign(d.obra, { cidade: 'Cidade Exemplo/RS', endereco: 'Rua Exemplo, 100' });
+  d.descricao = 'Pavilhão de exemplo com 20 × 30 m.';
+  d.pre = [{ titulo: 'Volume único', itens: [{ desc: 'Pilar de concreto armado 25x35 × 7,40 m', qtd: '8', un: 'un' }, { desc: 'Placa de concreto armado 8 cm', qtd: '120,5', un: 'm²' }] }];
+  d.met = [{ titulo: '', linhas: [{ k: 'Telha de cobertura', v: 'telha TP40 0,50' }] }];
+  d.valores = [{ etapa: 'Fundações', valor: 59120, opcional: false, contrato: true }, { etapa: 'Pré-fabricado', valor: 327770, opcional: false, contrato: true },
+    { etapa: 'Metálica', valor: 365240, opcional: false, contrato: true }, { etapa: 'Piso de concreto polido', valor: 88000, opcional: true, contrato: true },
+    { etapa: 'Escada metálica', valor: 20000, opcional: true, contrato: true }, { etapa: 'Projeto + PPCI', valor: 15500, opcional: true, contrato: true }];
+  return d;
+})()`;
+
+teste('propostas-extenso-e-contas', async (b, t) => {
+  if (!fs.existsSync(path.join(RAIZ, 'propostas_rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'propostas_rm' });
+  const r = await pg.evaluate((FICT) => {
+    const casos = { 875630: 'oitocentos e setenta e cinco mil seiscentos e trinta reais', 15500: 'quinze mil e quinhentos reais', 1: 'um real', 100: 'cem reais',
+      101: 'cento e um reais', 1001: 'mil e um reais', 1100: 'mil e cem reais', 1250: 'mil duzentos e cinquenta reais', 1000000: 'um milhão de reais',
+      2300000: 'dois milhões e trezentos mil reais', 112605: 'cento e doze mil seiscentos e cinco reais', 2.5: 'dois reais e cinquenta centavos', 0.01: 'um centavo' };
+    const ext = {}; Object.keys(casos).forEach(k => { const v = extenso(+k); if (v !== casos[k]) ext[k] = v; });
+    const d = eval(FICT);
+    const totP = totalProposta(d), totC = totalContrato(d);
+    d.contrato = novoContrato(d);
+    /* o Word de 05/2026: entrada de 200 mil e 6 de 112.605 = 875.630 */
+    Object.assign(d.contrato.pag, { modo: 'parcelas', entrada: 200000, entradaData: '2026-06-05', n: 6, dia: 5, inicio: '2026-07' });
+    const p1 = parcelasContrato(d);
+    /* 100 mil em 3: duas de 33.333,33 e a última fecha a conta */
+    const d2 = normalizar(JSON.parse(JSON.stringify(d))); d2.valores = [{ etapa: 'X', valor: 100000, opcional: false, contrato: true }];
+    Object.assign(d2.contrato.pag, { entrada: 0, n: 3 });
+    const p2 = parcelasContrato(d2);
+    d2.contrato.pag.modo = 'percentual';
+    const p3 = parcelasContrato(d2);
+    const okAvisos = avisos(d).filter(a => !/representa/i.test(a));
+    d.pagProp[0].pct = 25; d.contrato.prazoDias = 180;
+    const av = avisos(d);
+    /* o que o Firebase devolve: lista virou objeto, texto vazio sumiu */
+    const n = normalizar({ id: 'x', cliente: { nome: 'A' }, pre: { 0: { titulo: 'V', itens: { 1: { desc: 'Pilar', qtd: 3 } } } }, valores: { 0: { etapa: 'E', valor: '1.234,56' } } });
+    return { ext, totP, totC, p1: p1.map(x => x.rot + '|' + x.quando + '|' + x.valor), soma1: p1.reduce((s, x) => s + x.valor, 0),
+      p2: p2.map(x => x.valor), p3: p3.map(x => x.valor), soma3: Math.round(p3.reduce((s, x) => s + x.valor, 0) * 100) / 100, okAvisos, av,
+      n: { pre: n.pre[0].itens[0].desc + ' ' + n.pre[0].itens[0].qtd + ' ' + n.pre[0].itens[0].un, val: n.valores[0].valor, met: n.met.length, comp: n.comp.length, textos: !!n.textos.abertura } };
+  }, PROP_FICT).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r).slice(0, 1500);
+  t.ok('valor por extenso (os valores do Word de 05/2026 e os casos do "e")', !r.erro && !Object.keys(r.ext).length, J);
+  t.ok('total da proposta sem os opcionais; contrato com os marcados "no contrato"', r.totP === 752130 && r.totC === 875630, J);
+  t.ok('entrada + 6 parcelas fecham o contrato, vencendo dia 5 de cada mês', r.soma1 === 875630 && r.p1[0] === 'Entrada|05/06/2026|200000' && r.p1[1] === '1ª parcela|05/07/2026|112605' && r.p1[6] === '6ª parcela|05/12/2026|112605', J);
+  t.ok('a sobra do arredondamento vai na última parcela', JSON.stringify(r.p2) === '[33333.33,33333.33,33333.34]', J);
+  t.ok('percentuais da proposta aplicados ao contrato somam o total', r.soma3 === 100000 && r.p3[0] === 30000, J);
+  t.ok('nada a avisar quando tudo fecha', r.okAvisos && !r.okAvisos.length, J);
+  t.ok('avisa parcelas que não somam 100% e prazo do contrato diferente da proposta', r.av && r.av.some(a => /95%/.test(a)) && r.av.some(a => /180 dias.*120 dias/.test(a)), J);
+  t.ok('o que volta da nuvem (lista como objeto, valor em texto) é lido certo', r.n && r.n.pre === 'Pilar 3 un' && r.n.val === 1234.56 && r.n.met === 0 && r.n.comp === 5 && r.n.textos, J);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
+teste('propostas-contrato-da-proposta', async (b, t) => {
+  // o contrato não é outro arquivo: usa as peças, os valores e o cliente da
+  // proposta. Mudou uma peça na proposta, mudou no contrato.
+  if (!fs.existsSync(path.join(RAIZ, 'propostas_rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'propostas_rm' });
+  await semLogin(pg);
+  const r = await pg.evaluate(async (FICT) => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    await iniciarApp();
+    const d = eval(FICT); docs[d.id] = d; abrir(d.id); await esp(50);
+    const prop = document.getElementById('folha').textContent;
+    const btn = document.getElementById('abaContrato'), rotAntes = btn.textContent.trim();
+    btn.click(); await esp(150);
+    const c1 = document.getElementById('folha').textContent;
+    /* volta à proposta, muda a quantidade de pilares pela ficha */
+    document.getElementById('abaProposta').click(); await esp(50);
+    const q = document.querySelector('#ficha [data-p="pre.0.itens.0.qtd"]'); q.value = '10'; q.dispatchEvent(new Event('input', { bubbles: true })); await esp(250);
+    document.getElementById('abaContrato').click(); await esp(150);
+    const c2 = document.getElementById('folha').textContent;
+    /* textos padrão mudados depois não reescrevem o contrato que já existe */
+    modeloNuvem = { contrato: { gerais: '6.1. Texto novo de teste.' } };
+    const novo = novoContrato(d);
+    const tela = { contrato: btn.textContent.trim(), sec: [...document.querySelectorAll('#ficha .sec>summary')].map(s => s.firstChild.textContent) };
+    return { rotAntes, prop: { cliente: prop.includes('Cliente Fictício Ltda'), total: prop.includes('R$ 752.130,00'), ext: prop.includes('setecentos e cinquenta e dois mil cento e trinta reais'), opc: prop.includes('Opcionais, fora do total acima') },
+      c1: { pilar: /Pilar de concreto armado 25x35 × 7,40 m\s*8 un/.test(c1), total: c1.includes('R$ 875.630,00') && c1.includes('oitocentos e setenta e cinco mil seiscentos e trinta reais'), cliente: c1.includes('Cliente Fictício Ltda'),
+        foro: c1.includes('Estrela/RS e Cidade Exemplo/RS'), obra: c1.includes('Rua Exemplo, 100, Cidade Exemplo/RS'), dias: c1.includes('120 (cento e vinte) dias') },
+      c2: /Pilar de concreto armado 25x35 × 7,40 m\s*10 un/.test(c2), velho: d.contrato.textos.gerais.indexOf('Texto novo') < 0, novo: novo.textos.gerais === '6.1. Texto novo de teste.', tela };
+  }, PROP_FICT).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r).slice(0, 1500);
+  t.ok('proposta: cliente, total sem opcionais e por extenso, opcionais à parte', r.prop && Object.values(r.prop).every(Boolean), J);
+  t.ok('"＋ Gerar contrato" vira a aba "Contrato"', /Gerar contrato/.test(r.rotAntes || '') && r.tela && r.tela.contrato === 'Contrato', J);
+  t.ok('contrato com as peças, o cliente, o total por extenso, o endereço da obra, o foro e o prazo', r.c1 && Object.values(r.c1).every(Boolean), J);
+  t.ok('peça mudada na proposta aparece no contrato', r.c2 === true, J);
+  t.ok('texto padrão novo vale para o próximo contrato e não reescreve o que existe', r.velho && r.novo, J);
+  t.ok('ficha do contrato com contrato, pagamento e textos no alto', r.tela && r.tela.sec.slice(0, 3).join() === 'Contrato,Pagamento do contrato,Textos do contrato', J);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
+teste('propostas-papel-e-word', async (b, t) => {
+  // no papel: um timbrado só (o cabeçalho padrão punha um segundo por cima),
+  // no modelo de duas colunas, sem campo nenhum. O Word sai dos mesmos
+  // blocos e abre (zip válido, XML bem formado).
+  if (!fs.existsSync(path.join(RAIZ, 'propostas_rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'propostas_rm' });
+  await semLogin(pg);
+  await pg.evaluate(async (FICT) => { await iniciarApp(); const d = eval(FICT); docs[d.id] = d; abrir(d.id); }, PROP_FICT);
+  await pg.waitForTimeout(300);
+  await pg.emulateMedia({ media: 'print' });
+  await pg.evaluate(() => window.dispatchEvent(new Event('beforeprint')));
+  await pg.waitForTimeout(200);
+  const papel = await pg.evaluate((CONF) => {
+    const vis = e => { const r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0 && getComputedStyle(e).visibility !== 'hidden'; };
+    /* timbrado = o bloco de duas colunas (o do cabeçalho padrão também é um .tb2) */
+    const cnpjs = [...document.querySelectorAll('.tb2,.rm-cab')].filter(vis).length;
+    const campos = [...document.querySelectorAll('input,select,textarea,button')].filter(vis).length;
+    const timbre = eval(CONF)(document.getElementById('folhaPapel'));
+    return { cnpjs, campos, timbre, pe: !!document.getElementById('rm-pe-imp'), nome: window.rmNomePDF() };
+  }, CONFERE_TIMBRE).catch(e => ({ erro: e.message }));
+  await pg.emulateMedia({ media: 'screen' });
+  const w = await pg.evaluate(async () => {
+    const d = docs[atualId];
+    const u8 = await docxBytes(blocosProposta(d));
+    d.contrato = novoContrato(d);
+    const c8 = await docxBytes(blocosContrato(d));
+    /* o zip é "store": cada parte está inteira, dá para ler direto */
+    const partes = u => { const out = {}; const dv = new DataView(u.buffer); let p = 0;
+      while (p + 30 < u.length && dv.getUint32(p, true) === 0x04034b50) { const n = dv.getUint16(p + 26, true), tam = dv.getUint32(p + 18, true);
+        const nome = new TextDecoder().decode(u.slice(p + 30, p + 30 + n)); out[nome] = u.slice(p + 30 + n, p + 30 + n + tam); p += 30 + n + tam; } return out; };
+    const ler = (u, k) => new TextDecoder().decode(partes(u)[k] || new Uint8Array());
+    const bem = x => !new DOMParser().parseFromString(x, 'application/xml').querySelector('parsererror');
+    const pp = partes(u8), pc = partes(c8), doc = ler(u8, 'word/document.xml'), con = ler(c8, 'word/document.xml');
+    const xmls = Object.keys(pp).filter(k => /\.xml$|\.rels$/.test(k));
+    return { pk: u8[0] === 0x50 && u8[1] === 0x4b, nomes: Object.keys(pp).sort(), xmlOk: xmls.every(k => bem(ler(u8, k))) && Object.keys(pc).filter(k => /\.xml$|\.rels$/.test(k)).every(k => bem(ler(c8, k))),
+      logo: (pp['word/media/logo.png'] || []).length > 1000, cliente: doc.includes('Cliente Fictício Ltda'), total: doc.includes('R$ 752.130,00'),
+      timbre: ler(u8, 'word/header1.xml').includes('CNPJ 28.654.965/0001-17'), contrato: con.includes('R$ 875.630,00') && con.includes('Das cláusulas gerais') };
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify({ papel, w }).slice(0, 1500);
+  t.ok('no papel um timbrado só', papel.cnpjs === 1, J);
+  t.ok('timbrado no modelo de duas colunas', papel.timbre && !papel.timbre.length, J);
+  t.ok('nenhum campo nem botão no papel; rodapé padrão presente', papel.campos === 0 && papel.pe, J);
+  t.ok('PDF com o nome do documento', /^Proposta Cliente Fictício Ltda \d\d-\d\d-\d{4}$/.test(papel.nome || ''), J);
+  t.ok('Word: zip com documento, timbrado, rodapé e logo', w.pk && ['word/document.xml', 'word/header1.xml', 'word/footer1.xml', 'word/media/logo.png', '[Content_Types].xml'].every(k => (w.nomes || []).includes(k)) && w.logo, J);
+  t.ok('Word: todo XML bem formado', w.xmlOk === true, J);
+  t.ok('Word: mesmo cliente e total da folha; contrato com o total e as cláusulas', w.cliente && w.total && w.timbre && w.contrato, J);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
+teste('propostas-nuvem', async (b, t) => {
+  // cada proposta no seu nó (quem grava o banco inteiro apaga o do outro);
+  // gravação recusada avisa e a alteração fica guardada para subir depois;
+  // a nuvem não passa por cima do que ainda não subiu daqui.
+  if (!fs.existsSync(path.join(RAIZ, 'propostas_rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'propostas_rm' });
+  await semLogin(pg);
+  const r = await pg.evaluate(async (FICT) => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    const gravados = []; let recusa = false, avisos = 0;
+    window.rmNuvemErro = () => { avisos++; };
+    fbDB = { ref(p) { return { set(v) { if (recusa) return Promise.reject(new Error('PERMISSION_DENIED')); gravados.push(p); return Promise.resolve(); }, remove() { gravados.push('-' + p); return Promise.resolve(); }, on() { }, off() { } }; } };
+    fbAuthReady = true;
+    const d = eval(FICT); docs[d.id] = d; abrir(d.id);
+    const q = document.querySelector('#ficha [data-p="cliente.nome"]'); q.value = 'Outro Nome'; q.dispatchEvent(new Event('input', { bubbles: true }));
+    await esp(900);
+    const caminho = gravados.slice();
+    recusa = true; q.value = 'Nome Recusado'; q.dispatchEvent(new Event('input', { bubbles: true })); await esp(900);
+    const pendente = !!pendentes[d.id], local = JSON.parse(localStorage.getItem('rm_propostas_v1')).docs[d.id].cliente.nome;
+    /* chega da nuvem uma versão mais velha desta e uma proposta de outro aparelho */
+    const velha = JSON.parse(JSON.stringify(d)); velha.alterado = d.alterado - 5000; velha.cliente.nome = 'Velha';
+    const outra = normalizar(eval(FICT)); outra.id = 'outra'; outra.cliente.nome = 'De Outro Aparelho';
+    aplicarRemoto({ [d.id]: velha, outra });
+    return { caminho, avisos, pendente, local, ficou: docs[d.id].cliente.nome, outra: docs.outra && docs.outra.cliente.nome };
+  }, PROP_FICT).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r);
+  t.ok('grava só o nó da proposta (propostas_rm/docs/<id>)', r.caminho && r.caminho.length === 1 && /^propostas_rm\/docs\/[a-z0-9]+$/.test(r.caminho[0]), J);
+  t.ok('recusa da nuvem avisa e a alteração fica no aparelho para subir', r.avisos === 1 && r.pendente && r.local === 'Nome Recusado', J);
+  t.ok('versão velha da nuvem não apaga a que não subiu; proposta de outro aparelho chega', r.ficou === 'Nome Recusado' && r.outra === 'De Outro Aparelho', J);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
+teste('central-propostas-arquiteta', async (b, t) => {
+  // a arquiteta entra na Central e vê só Propostas e Contratos; a regra do
+  // banco abre o nó para ela e para o dono, e mais ninguém; a agenda dela
+  // funciona (central_lembretes/<uid>); e o nó entra na cópia de segurança.
+  if (!fs.existsSync(path.join(RAIZ, 'central_rm'))) return;
+  const arq = 'arquitetarm@rmestruturas.com.br';
+  const regras = JSON.parse(fs.readFileSync(path.join(RAIZ, 'central_rm', 'ferramentas', 'regras_firebase.json'), 'utf8')).rules;
+  const rp = regras.propostas_rm || {};
+  t.ok('regra: propostas_rm para o dono e a arquiteta, só', String(rp['.read']).includes(arq) && String(rp['.write']).includes(arq) && String(rp['.read']).includes('evertonluis4523@gmail.com') && !/engenharia|rudimar/.test(rp['.read'] + rp['.write']), JSON.stringify(rp));
+  t.ok('regra: a arquiteta não lê outros sistemas', ['contas_pagar', 'recibos', 'obras_rm', 'orcamentos_cadastro', 'cheques'].every(n => !JSON.stringify(regras[n]).includes(arq)));
+  t.ok('regra: agenda da arquiteta liberada', JSON.stringify(regras.central_lembretes.$uid).includes(arq));
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'central_rm' });
+  const r = await pg.evaluate(e => {
+    const ver = (email, id) => { CURRENT_EMAIL = email; return isAllowedSystem(id); };
+    const sis = BASE_SYSTEMS.find(s => s.id === 'propostas') || {};
+    CURRENT_EMAIL = e; const menu = allSystems().map(s => s.id);
+    return { menu, url: sis.url, local: sis.local, cat: sis.cat, dono: ver('evertonluis4523@gmail.com', 'propostas'), eng: ver('engenharia@rmestruturas.com.br', 'propostas'),
+      admin: (CURRENT_EMAIL = e, isAdminUser()), backup: (window.BACKUP_SISTEMAS || []).some(x => x.nos.includes('propostas_rm')) };
+  }, arq).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r);
+  t.ok('menu da arquiteta: só Propostas e Contratos, sem as abas de administração', !r.erro && r.menu.join() === 'propostas' && !r.admin, J);
+  t.ok('Propostas na Central (Comercial), com cópia local para o programa', r.url === 'https://evertonluis4523-afk.github.io/propostas_rm/' && r.local === 'systems/propostas_rm/index.html' && r.cat === 'COMERCIAL', J);
+  t.ok('o dono vê, a engenharia não', r.dono && !r.eng, J);
+  t.ok('propostas_rm entra na cópia de segurança', r.backup === true, J);
+  const central = fs.readFileSync(path.join(RAIZ, 'central_rm', 'index.html'), 'utf8');
+  t.ok('propostas_rm na lista de nós da cópia', /NOS_DADOS = \[[^\]]*'propostas_rm'/.test(central));
+  const sync = fs.readFileSync(path.join(RAIZ, 'central_rm', 'scripts', 'sync-systems.js'), 'utf8');
+  t.ok('o programa instalado baixa o sistema novo', /propostas_rm: 'propostas_rm'/.test(sync));
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
+teste('encostado', async (b, t) => {
+  // a porcentagem dos grupos do orçamento ficava espremida na borda da caixa
+  if (fs.existsSync(path.join(RAIZ, 'orcamento-rm'))) {
+    const { ctx, pg, erros } = await abre(b, { 'sis.local': 'orcamento-rm' });
+    const r = await pg.evaluate(() => {
+      const l = document.getElementById('loginScreen'); if (l) l.style.setProperty('display', 'none', 'important');
+      renderTotGroups(1000, 200, 500, 300);
+      const g = document.querySelector('#totGroups .grow');
+      const pc = g.querySelector('.gpct').getBoundingClientRect(), v = g.querySelector('.gv').getBoundingClientRect();
+      return { pctAntesDoValor: pc.right < v.left };
+    }).catch(e => ({ erro: e.message }));
+    t.ok('orçamento: % junto do nome, longe da borda', !r.erro && r.pctAntesDoValor && !erros.length, JSON.stringify(r) + ' ' + erros.join(' | '));
+    await ctx.close();
+  }
+  // "Relatório para a contabilidade" começava fora da linha dos outros títulos
+  if (fs.existsSync(path.join(RAIZ, 'recibos_rm'))) {
+    const { ctx, pg, erros } = await abre(b, { 'sis.local': 'recibos_rm' });
+    const r = await pg.evaluate(() => {
+      const l = document.getElementById('loginScreen'); if (l) l.style.setProperty('display', 'none', 'important');
+      state.employees = [{ id: 'a1', nome: 'ATIVO TESTE', status: 'ativo', salario: 1 }, { id: 'd1', nome: 'DESLIGADO TESTE', status: 'desligado', salario: 1 }];
+      renderEmps();
+      const x = e => { const q = e.getBoundingClientRect(); return Math.round(q.left + parseFloat(getComputedStyle(e).paddingLeft)); };
+      const des = document.querySelector('#empOcultos .section-lab'), rel = [...document.querySelectorAll('#v-func .section-lab')].find(e => /contabilidade/i.test(e.textContent));
+      const zona = rel.nextElementSibling;
+      return { desligados: x(des), relatorio: x(rel), formulario: x(zona) };
+    }).catch(e => ({ erro: e.message }));
+    t.ok('recibos: títulos da aba Funcionários na mesma linha', !r.erro && r.desligados === r.relatorio && r.relatorio === r.formulario && !erros.length, JSON.stringify(r) + ' ' + erros.join(' | '));
+    await ctx.close();
+  }
+});
+
+teste('tema-suave', async (b, t) => {
+  // o escuro tem duas intensidades: o "escuro" (quase preto) e o "escuro
+  // suave" (grafite), escolhidas por rm_tom. O botão passa por claro →
+  // suave → escuro. O suave precisa ser claramente mais claro que o escuro,
+  // continuar escuro, e manter o texto legível (4,5:1).
+  // só na primeira carga: o addInitScript roda de novo em cada quadro que o
+  // sistema abrir, e regravar a chave ali desfaria a troca feita no teste
+  const antes = () => { try { if (!localStorage.getItem('rm_tom')) { localStorage.setItem('rm_tema', 'escuro'); localStorage.setItem('rm_tom', 'suave'); } } catch (e) {} };
+  for (const r of repos()) {
+    const { ctx, pg } = await abre(b, { 'sis.local': r }, 'index.html', { antes });
+    await semLogin(pg);
+    await pg.evaluate(() => { const l = document.getElementById('loginScreen'); if (l) l.style.setProperty('display', 'none', 'important'); });
+    const res = await pg.evaluate(async () => {
+      const esp = ms => new Promise(x => setTimeout(x, ms));
+      const lum = c => { const m = (c || '').match(/[\d.]+/g); if (!m) return null;
+        const f = v => { v /= 255; return v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); };
+        return 0.2126 * f(+m[0]) + 0.7152 * f(+m[1]) + 0.0722 * f(+m[2]); };
+      const opaco = c => { const m = (c || '').match(/[\d.]+/g); return m && m.length > 2 && (m.length < 4 || +m[3] > 0.5); };
+      const fundo = el => { for (; el && el.nodeType === 1; el = el.parentElement) { const c = getComputedStyle(el).backgroundColor; if (opaco(c)) return c; } return 'rgb(255,255,255)'; };
+      const erros = [], central = !!document.getElementById('theme-grid');
+      const tom = () => document.body.getAttribute('data-tom') || document.documentElement.getAttribute('data-tom');
+      if (document.body.getAttribute('data-theme') !== 'escuro' || tom() !== 'suave') erros.push('abriu sem o suave (' + document.body.getAttribute('data-theme') + '/' + tom() + ')');
+      await esp(900);
+      const ySuave = lum(fundo(document.body));
+      const txt = getComputedStyle(document.body).color, ct = (Math.max(lum(txt), ySuave) + 0.05) / (Math.min(lum(txt), ySuave) + 0.05);
+      if (ct < 4.5) erros.push('texto do corpo em ' + ct.toFixed(2) + ':1 no suave');
+      if (central) { window.setTheme('escuro'); } else { window.rmTema('escuro'); }
+      await esp(900);
+      const yForte = lum(fundo(document.body));
+      if (!(ySuave >= 0.015 && ySuave <= 0.08)) erros.push('fundo do suave fora da faixa: ' + (ySuave || 0).toFixed(4));
+      if (!(ySuave > yForte * 1.8)) erros.push('suave não é mais claro que o escuro (' + (ySuave || 0).toFixed(4) + ' × ' + (yForte || 0).toFixed(4) + ')');
+      if (central) {
+        if (!document.querySelector('[data-theme-chip="suave"]')) erros.push('sem a opção "Escuro suave" na Aparência');
+      } else {
+        const seq = []; window.rmTema('claro');
+        for (let i = 0; i < 4; i++) { window.rmTemaAlterna(); seq.push(document.documentElement.getAttribute('data-theme') + '/' + (tom() || '')); }
+        if (seq.join(' ') !== 'escuro/suave escuro/nitido escuro/forte claro/forte' && seq.join(' ') !== 'escuro/suave escuro/nitido escuro/forte claro/') erros.push('botão fora da ordem claro → suave → nítido → escuro: ' + seq.join(' '));
+      }
+      return erros;
+    }).catch(e => ['avaliação: ' + e.message]);
+    t.ok(r, !res.length, res.join(' | '));
+    await ctx.close();
+  }
+});
+
+teste('tema-escuro-nitido', async (b, t) => {
+  // "Gosto do tema preto, porém acho difícil enxergar com clareza": no escuro
+  // o texto principal (0,83) e o de apoio (0,78) saíam quase do mesmo cinza,
+  // sobre um fundo quase preto. O "escuro nítido" (rm_tom 'nitido') leva o
+  // principal quase a branco, deixa o de apoio um degrau abaixo e tira o
+  // fundo do preto -- sem nenhum texto abaixo de 4,5:1.
+  const antes = () => { try { if (!localStorage.getItem('rm_tom')) { localStorage.setItem('rm_tema', 'escuro'); localStorage.setItem('rm_tom', 'nitido'); } } catch (e) {} };
+  for (const r of repos()) {
+    const { ctx, pg } = await abre(b, { 'sis.local': r }, 'index.html', { antes });
+    await semLogin(pg);
+    await pg.evaluate(() => { const l = document.getElementById('loginScreen'); if (l) l.style.setProperty('display', 'none', 'important'); });
+    const res = await pg.evaluate(async () => {
+      const esp = ms => new Promise(x => setTimeout(x, ms));
+      // cor em "color(srgb 0.99 0.56 0.47)" vem de 0 a 1 (a mistura de cores
+      // escreve assim); "rgb(...)" de 0 a 255
+      const lum = c => { const m = (c || '').match(/[\d.]+/g); if (!m) return null; const k = /^color\(srgb/.test(c) ? 255 : 1;
+        const f = v => { v = v * k / 255; return v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); };
+        return 0.2126 * f(+m[0]) + 0.7152 * f(+m[1]) + 0.0722 * f(+m[2]); };
+      const opaco = c => { const m = (c || '').match(/[\d.]+/g); return m && m.length > 2 && (m.length < 4 || +m[3] > 0.5); };
+      const fundo = el => { for (; el && el.nodeType === 1; el = el.parentElement) { const c = getComputedStyle(el).backgroundColor; if (opaco(c)) return c; } return 'rgb(255,255,255)'; };
+      const cr = (a, b) => (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
+      const erros = [], central = !!document.getElementById('theme-grid');
+      const tom = () => document.body.getAttribute('data-tom') || document.documentElement.getAttribute('data-tom');
+      if (document.body.getAttribute('data-theme') !== 'escuro' || tom() !== 'nitido') erros.push('abriu sem o nítido (' + document.body.getAttribute('data-theme') + '/' + tom() + ')');
+      await esp(900);
+      const mede = () => { const bg = lum(fundo(document.body)), tx = lum(getComputedStyle(document.body).color); let pior = 99, qual = '';
+        document.querySelectorAll('body *').forEach(e => { if (![...e.childNodes].some(n => n.nodeType === 3 && n.textContent.trim())) return;
+          const rc = e.getBoundingClientRect(); if (!rc.width || !rc.height || rc.top > innerHeight || rc.bottom < 0) return;
+          const cs = getComputedStyle(e); if (cs.visibility === 'hidden' || +cs.opacity < 0.2) return;
+          const v = cr(lum(cs.color), lum(fundo(e))); if (v < pior) { pior = v; qual = e.textContent.trim().slice(0, 30); } });
+        const ap = getComputedStyle(document.body).getPropertyValue('--text-muted').trim();
+        return { bg, tx, pior, qual, apoio: ap ? Math.round(lum(ap.startsWith('#') ? 'rgb(' + [1, 3, 5].map(i => parseInt(ap.slice(i, i + 2), 16)).join(',') + ')' : ap) * 1000) / 1000 : null }; };
+      const N = mede();
+      if (central) window.setTheme('escuro'); else window.rmTema('escuro');
+      await esp(900);
+      const F = mede();
+      if (!central && !(N.tx > F.tx * 1.15)) erros.push('texto principal não ficou mais claro que no escuro (' + N.tx.toFixed(3) + ' × ' + F.tx.toFixed(3) + ')');
+      // na Central o texto principal já era quase branco: o apagado era o de apoio
+      if (central && !(N.apoio > F.apoio * 1.5)) erros.push('texto de apoio da Central não clareou (' + N.apoio + ' × ' + F.apoio + ')');
+      if (!(N.bg > F.bg * 1.2 && N.bg < 0.03)) erros.push('fundo não saiu do preto ou clareou demais (' + N.bg.toFixed(4) + ' × ' + F.bg.toFixed(4) + ')');
+      if (N.pior < 4.5) erros.push('texto abaixo de 4,5:1 no nítido: ' + N.pior.toFixed(2) + ' (' + N.qual + ')');
+      if (central) {
+        if (!document.querySelector('[data-theme-chip="nitido"]')) erros.push('sem a opção "Escuro nítido" na Aparência');
+        window.setTheme('nitido'); if (localStorage.getItem('rm_tom') !== 'nitido' || localStorage.getItem('rm_tema') !== 'escuro') erros.push('a Central não espalha o nítido (' + localStorage.getItem('rm_tema') + '/' + localStorage.getItem('rm_tom') + ')');
+      } else {
+        // a Central manda o nítido pela mensagem; o sistema aplica
+        window.rmTema('claro'); window.postMessage({ rm: 'tema', tema: 'escuro', tom: 'nitido' }, '*'); await esp(300);
+        if (tom() !== 'nitido') erros.push('mensagem da Central com o nítido não aplicou (' + tom() + ')');
+      }
+      return erros;
+    }).catch(e => ['avaliação: ' + e.message]);
+    t.ok(r, !res.length, res.join(' | '));
+    await ctx.close();
+  }
+});
+
+teste('porta-acompanha-o-tema', async (b, t) => {
+  // "As telas de login de cada sistema não estão pegando o tema escuro
+  // nítido": o fundo da porta era uma cor fixa (igual no escuro, no suave e
+  // no nítido), e no Obras os campos ficavam brancos com letra clara. E "a
+  // tela de login no fundo deixa esse fundo com movimento também": com o
+  // movimento ligado, ele aparece atrás do cartão (e volta ao corpo quando a
+  // porta some).
+  // o script vai como TEXTO para a página: uma função levaria só o código, sem o "tom" daqui
+  const prep = (tom) => "try { if (!sessionStorage.getItem('__p')) { sessionStorage.setItem('__p', '1'); localStorage.setItem('rm_tema', 'escuro'); localStorage.setItem('rm_tom', '" + tom + "'); localStorage.setItem('rm_mov', 'cotas'); } } catch (e) {}";
+  const mede = async (r, tom) => {
+    const central = r === 'central_rm';
+    const s = await abre(b, { 'sis.local': r }, 'index.html', { antes: prep(tom) });
+    const v = await s.pg.evaluate(async (central) => {
+      const esp = ms => new Promise(x => setTimeout(x, ms));
+      const lum = c => { const m = (c || '').match(/[\d.]+/g); if (!m) return null; const k = /^color\(srgb/.test(c) ? 255 : 1;
+        const f = v => { v = v * k / 255; return v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); };
+        return 0.2126 * f(+m[0]) + 0.7152 * f(+m[1]) + 0.0722 * f(+m[2]); };
+      const porta = document.getElementById(central ? 'lock-screen' : 'loginScreen'); if (!porta) return { sem: true };
+      porta.classList.remove('hide'); porta.hidden = false; if (getComputedStyle(porta).display === 'none') porta.style.display = 'flex';
+      await esp(900);
+      const bgv = central ? getComputedStyle(porta).getPropertyValue('--lk-fundo').trim() : getComputedStyle(porta).backgroundColor;
+      const bg = lum(bgv.startsWith('#') ? 'rgb(' + [1, 3, 5].map(i => parseInt(bgv.slice(i, i + 2), 16)).join(',') + ')' : bgv);
+      // campo translúcido (a Central usa branco a 6%): mistura com o fundo da porta antes de medir
+      const fundoPorta = bgv.startsWith('#') ? [1, 3, 5].map(i => parseInt(bgv.slice(i, i + 2), 16)) : (bgv.match(/[\d.]+/g) || [0, 0, 0]).slice(0, 3).map(Number);
+      const opaco = c => { const m = (c || '').match(/[\d.]+/g).map(Number); const al = m.length > 3 ? m[3] : 1; return 'rgb(' + [0, 1, 2].map(k => Math.round(m[k] * al + fundoPorta[k] * (1 - al))).join(',') + ')'; };
+      const campos = [...porta.querySelectorAll('input[type=email],input[type=password],input[type=text]')].filter(i => i.getBoundingClientRect().width)
+        .map(i => { const c = getComputedStyle(i), a = lum(/^rgba/.test(c.backgroundColor) ? opaco(c.backgroundColor) : c.backgroundColor), x = lum(c.color); return { fundo: Math.round(a * 1000) / 1000, cr: Math.round((Math.max(a, x) + .05) / (Math.min(a, x) + .05) * 10) / 10 }; });
+      const cv = document.getElementById('rmMovimento'), dentro = !!cv && cv.parentNode === porta;
+      let tinta = 0; if (cv) { const d = cv.getContext('2d').getImageData(0, 0, cv.width, cv.height).data; for (let i = 3; i < d.length; i += 64) if (d[i]) tinta++; }
+      const card = porta.querySelector('.login-card,.login-box,.lock-card,form') || porta, rc = card.getBoundingClientRect();
+      const topo = document.elementFromPoint(rc.left + rc.width / 2, rc.top + 20);
+      porta.style.display = 'none'; porta.classList.add('hide'); await esp(900);
+      const volta = !!cv && cv.parentNode === document.body;
+      return { bg: Math.round(bg * 10000) / 10000, campos, dentro, tinta, atras: topo !== cv, volta };
+    }, central).catch(e => ({ erro: e.message }));
+    v.erros = s.erros; await s.ctx.close(); return v;
+  };
+  for (const r of repos()) {
+    const n = await mede(r, 'nitido'); if (n.sem) continue;
+    const f = await mede(r, 'forte');
+    const prob = [];
+    if (n.erro || f.erro) prob.push(n.erro || f.erro);
+    else {
+      if (!(n.bg > f.bg * 1.3)) prob.push('fundo da porta igual no nítido e no escuro (' + n.bg + ' × ' + f.bg + ')');
+      if (n.campos.some(c => c.fundo > 0.06 || c.cr < 4.5)) prob.push('campo claro ou ilegível no escuro: ' + JSON.stringify(n.campos));
+      if (!n.dentro || n.tinta < 50 || !n.atras) prob.push('movimento não aparece atrás do cartão (dentro=' + n.dentro + ' tinta=' + n.tinta + ' atrás=' + n.atras + ')');
+      if (!n.volta) prob.push('o desenho não volta para o fundo quando a porta some');
+    }
+    t.ok(r, !prob.length && !(n.erros || []).length, prob.join(' | ') + ' ' + (n.erros || []).join(' | '));
+  }
+});
+
+teste('aparencia', async (b, t) => {
+  // o Tema RM (central_rm/comum/tema-rm.html) manda na aparência: o botão
+  // principal é da cor da marca e todo botão tem o canto da casa, em todos
+  for (const r of repos()) {
+    const { ctx, pg } = await abre(b, { 'sis.local': r });
+    await pg.evaluate(() => { const l = document.getElementById('loginScreen'); if (l) l.style.setProperty('display', 'none', 'important'); });
+    const res = await pg.evaluate(() => {
+      const erros = [], raiz = getComputedStyle(document.documentElement);
+      if (!document.getElementById('rmTemaRM')) erros.push('sem o bloco Tema RM');
+      if (typeof window.rmRegistro !== 'function' || !/rm-iniciais/.test(window.rmRegistro('Teste da Silva', ''))) erros.push('sem a peça de registro (rmRegistro)');
+      const marca = raiz.getPropertyValue('--rm-marca').trim().toLowerCase();
+      const cx = document.createElement('i'); cx.style.color = marca; document.body.appendChild(cx);
+      const rgbMarca = getComputedStyle(cx).color; cx.remove();
+      const vis = e => { const q = e.getBoundingClientRect(); return q.width > 0 && q.height > 0; };
+      const raios = [raiz.getPropertyValue('--rm-raio').trim(), raiz.getPropertyValue('--rm-raio-p').trim()];
+      document.querySelectorAll('.btn,.btn-act,.btn-sm,.btn-mini').forEach(e => {
+        if (!vis(e) || e.closest('#loginScreen')) return;
+        const c = getComputedStyle(e);
+        if (raios.indexOf(c.borderTopLeftRadius) < 0) erros.push('canto ' + c.borderTopLeftRadius + ' em "' + (e.textContent || '').trim().slice(0, 20) + '"');
+      });
+      document.querySelectorAll('.btn.primary,.btn-red,.btn.red,.btn-sm.red,.btn-act.save').forEach(e => {
+        if (!vis(e) || e.closest('#loginScreen')) return;
+        const c = getComputedStyle(e).backgroundColor;
+        if (c !== rgbMarca) erros.push('principal com fundo ' + c + ' em "' + (e.textContent || '').trim().slice(0, 20) + '"');
+      });
+      return erros.slice(0, 4);
+    }).catch(e => ['avaliação: ' + e.message]);
+    t.ok(r, !res.length, res.join(' | '));
+    await ctx.close();
+  }
+  if (fs.existsSync(path.join(RAIZ, 'central_rm', 'comum', 'vitrine.html'))) {
+    const { ctx, pg, erros } = await abre(b, { 'sis.local': 'central_rm' }, 'comum/vitrine.html');
+    const n = await pg.evaluate(() => document.querySelectorAll('#cores .cor').length).catch(() => 0);
+    t.ok('vitrine do padrão visual', !erros.length && n > 5, erros.join(' | ') || ('cores: ' + n));
+    await ctx.close();
+  }
+});
+
+
+
+/* ------------------------------------------------------------------ */
+/* EM PARALELO. A bateria roda os testes em VARIOS ao mesmo tempo (padrao:
+   um por nucleo do processador, no maximo 4), cada um no seu contexto do
+   navegador -- nada e' dividido entre eles. Com um por vez ela passava de
+   12 minutos. O relatorio sai na mesma ordem de sempre: cada teste guarda o
+   que tem a dizer e so' e' impresso quando todos os de antes ja sairam.
+   RM_TESTES_PARALELO=1 volta ao um por vez (bom para caçar teste instavel). */
+(async () => {
+  preparaFirebase(); preparaCdn(); preparaDwg();
+  const exe = process.env.CHROMIUM || (fs.existsSync('/opt/pw-browsers/chromium') ? '/opt/pw-browsers/chromium' : undefined);
+  const lanca = () => chromium.launch(exe ? { executablePath: exe } : {});
+  const lista = TESTES.filter(tt => !FILTRO || tt.nome.indexOf(FILTRO) >= 0);
+  const N = Math.max(1, Math.min(lista.length, Number(process.env.RM_TESTES_PARALELO) || Math.min(4, require('os').cpus().length || 1)));
+  const inicio = Date.now();
+  let ok = 0, falhou = 0, prox = 0, impresso = 0;
+  const saida = lista.map(() => null);
+  const imprime = () => { while (impresso < lista.length && saida[impresso]) { process.stdout.write(saida[impresso]); impresso++; } };
+  /* Cada frente tem o SEU navegador: com todos num so', um travamento dele
+     derrubava os testes de todas as frentes de uma vez. Se o navegador cair
+     no meio de um teste, ele e' aberto de novo e o teste roda outra vez --
+     a queda e' da maquina de teste, nao do sistema. So' conta o resultado da
+     rodada que terminou com o navegador de pe'. */
+  const roda = async () => {
+    let b = await lanca();
+    while (prox < lista.length) {
+      const i = prox++, tt = lista[i], t0 = Date.now();
+      let txt = '', nOk = 0, nFalha = 0;
+      for (let vez = 1; vez <= 2; vez++) {
+        txt = ''; nOk = 0; nFalha = 0;
+        const ctxT = { ok(nome, cond, det) { if (cond) { nOk++; txt += '  ✓ ' + nome + '\n'; } else { nFalha++; txt += '  ✗ ' + nome + (det ? '  — ' + det : '') + '\n'; } } };
+        try { await tt.fn(b, ctxT); } catch (e) { nFalha++; txt += '  ✗ ' + tt.nome + ' quebrou: ' + e.message + '\n'; }
+        if (b.isConnected()) break;
+        try { await b.close(); } catch (e) {}
+        b = await lanca();
+        if (vez === 1) txt = '';
+      }
+      ok += nOk; falhou += nFalha;
+      saida[i] = '\n== ' + tt.nome + '  (' + Math.round((Date.now() - t0) / 1000) + ' s)\n' + txt;
+      imprime();
+    }
+    try { await b.close(); } catch (e) {}
+  };
+  await Promise.all(Array.from({ length: N }, roda));
+  console.log('\n' + ok + ' ok, ' + falhou + ' falha(s).' + (falhou ? ' NÃO publique.' : '') + '  [' + Math.round((Date.now() - inicio) / 1000) + ' s, ' + N + ' em paralelo]');
+  process.exit(falhou ? 1 : 0);
+})();

@@ -1,0 +1,229 @@
+{
+ "caso1.dxf": {
+  "estruturas": [
+   {
+    "letra": "A",
+    "ficha": "TESOURA 01",
+    "qtd": 13,
+    "pecas": 1950,
+    "internoM": 2742.846,
+    "banzoBarras": 182,
+    "grupos": "dsup:955x26 dsup:891x26 dsup:829x26 dsup:769x26 dsup:705x52 dsup:642x52 dsup:576x52 d:3194x52 d:2867x52 d:2548x52 d:2240x52 d:2093x26 d:1950x52 d:1814x26 d:1687x52 d:1570x52 d:1467x52 d:837x52 d:772x52 d:622x52 d:571x52 d:504x52 v:2985x26 v:2807x52 v:2630x52 v:2453x52 v:2275x52 v:2098x52 v:1920x52 v:1743x52 v:1566x52 v:1388x52 v:1211x52 v:1034x52 v:856x52 v:679x52 v:590x52 v:502x52 v:429x52 v:357x52 v:288x52"
+   },
+   {
+    "letra": "B",
+    "ficha": "TRELIÇA 01",
+    "qtd": 24,
+    "pecas": 504,
+    "internoM": 277.893,
+    "banzoBarras": 48,
+    "grupos": "d:621x192 d:611x48 v:490x264"
+   },
+   {
+    "letra": "C",
+    "ficha": "TESOURA 02",
+    "qtd": 13,
+    "pecas": 390,
+    "internoM": 219.494,
+    "banzoBarras": 26,
+    "grupos": "dinfp:590x26 dsupp:689x26 d:1253x26 d:742x26 d:683x26 d:479x26 d:435x26 d:377x26 v:751x26 v:587x26 v:504x26 v:420x26 v:365x26 v:309x26 v:257x26"
+   },
+   {
+    "letra": "D",
+    "ficha": "TRELIÇA 02",
+    "qtd": 1,
+    "pecas": 121,
+    "internoM": 194.6,
+    "banzoBarras": 20,
+    "grupos": "d:1729x58 d:1721x2 v:1490x61"
+   },
+   {
+    "letra": "E",
+    "ficha": "TRELIÇA 03",
+    "qtd": 2,
+    "pecas": 18,
+    "internoM": 28.699,
+    "banzoBarras": 4,
+    "grupos": "d:1729x4 d:1721x4 v:1490x10"
+   }
+  ],
+  "lista": [
+   "U 70x200x70#3,00 | 210 | 1260.0 | 11340",
+   "L 2\"x3/16\" | 502 | 3012.0 | 10903",
+   "U 40x100x40#2,00 | 74 | 444.0 | 1421",
+   "U 30x92x30#2,00 | 89 | 534.0 | 1282",
+   "UE 100x48x15#2,25 | 432 | 2160.0 | 9331"
+  ]
+ },
+ "caso2.dxf": {
+  "estruturas": [
+   {
+    "letra": "A",
+    "ficha": "TESOURA 01",
+    "qtd": 7,
+    "pecas": 651,
+    "internoM": 875.374,
+    "banzoBarras": 88,
+    "grupos": "dsup:1193x14 dsup:1122x14 dsup:1053x14 dsup:985x14 dsup:919x14 dsup:855x14 dsup:794x14 dsup:732x14 dsup:668x14 dsup:603x14 dsup:534x14 d:2953x14 d:2812x14 d:2790x14 d:2629x14 d:2470x14 d:2314x14 d:2162x14 d:2015x14 d:1874x14 d:1740x14 d:1615x14 d:1503x14 d:1405x14 d:765x14 d:705x14 d:484x14 d:440x14 d:382x14 v:2732x7 v:2554x14 v:2375x14 v:2196x14 v:2018x14 v:1839x14 v:1661x14 v:1482x14 v:1304x14 v:1125x14 v:946x14 v:768x14 v:589x14 v:500x14 v:411x14 v:351x14 v:292x14 v:235x14"
+   },
+   {
+    "letra": "B",
+    "ficha": "TRELIÇA 01",
+    "qtd": 6,
+    "pecas": 126,
+    "internoM": 69.473,
+    "banzoBarras": 12,
+    "grupos": "d:621x48 d:611x12 v:490x66"
+   }
+  ],
+  "lista": [
+   "U 70x200x70#4,25 | 90 | 540.0 | 7344",
+   "U 18050x50 #3,75 | 150 | 900.0 | 40500",
+   "U 40x100x40#2,00 | 14 | 84.0 | 269",
+   "U 30x92x30#2,00 | 15 | 90.0 | 216",
+   "UE 125x48x20#2,30 | 180 | 1026.0 | 5664"
+  ]
+ },
+ "caso3.dxf": {
+  "estruturas": [
+   {
+    "letra": "A",
+    "ficha": "TESOURA 01",
+    "qtd": 14,
+    "pecas": 910,
+    "internoM": 884.953,
+    "banzoBarras": 117,
+    "grupos": "dinfp:998x28 dsup:846x28 dsup:793x28 dsup:737x28 dsup:683x28 dsup:629x28 dsup:572x28 dsupp:1050x28 d:1957x28 d:1945x28 d:1827x28 d:1716x28 d:1613x28 d:1520x28 d:1438x28 d:798x28 d:746x28 d:532x28 d:492x28 d:445x28 v:1686x14 v:1530x28 v:1375x28 v:1219x28 v:1064x28 v:908x28 v:753x28 v:597x28 v:520x28 v:442x28 v:390x28 v:338x28 v:288x28"
+   },
+   {
+    "letra": "B",
+    "ficha": "TRELIÇA 01",
+    "qtd": 13,
+    "pecas": 273,
+    "internoM": 150.525,
+    "banzoBarras": 26,
+    "grupos": "d:621x104 d:611x26 v:490x143"
+   },
+   {
+    "letra": "C",
+    "ficha": "TRELIÇA 02",
+    "qtd": 1,
+    "pecas": 37,
+    "internoM": 38.943,
+    "banzoBarras": 5,
+    "grupos": "dinfp:687x2 dinfp:680x2 dsupp:649x2 dsupp:642x2 d:1345x12 d:1332x2 v:988x15"
+   },
+   {
+    "letra": "D",
+    "ficha": "TESOURA 02",
+    "qtd": 7,
+    "pecas": 119,
+    "internoM": 78.354,
+    "banzoBarras": 14,
+    "grupos": "dinfp:557x7 dsup:572x7 dsupp:587x7 d:1438x7 d:1092x7 d:798x7 d:746x7 d:532x7 d:492x7 d:482x7 v:858x7 v:753x7 v:597x7 v:520x7 v:442x7 v:390x7 v:338x7"
+   },
+   {
+    "letra": "E",
+    "ficha": "TESOURA 03",
+    "qtd": 7,
+    "pecas": 273,
+    "internoM": 265.051,
+    "banzoBarras": 35,
+    "grupos": "dinfp:987x7 dsup:860x7 dsup:813x7 dsup:768x7 dsup:721x7 dsup:676x7 dsup:632x7 dsup:587x7 dsup:540x7 dsupp:1033x7 d:1942x14 d:1839x7 d:1740x7 d:1647x7 d:1559x7 d:1478x7 d:1405x7 d:1342x7 d:727x7 d:687x7 d:480x7 d:450x7 d:411x7 v:1686x7 v:1556x7 v:1424x7 v:1293x7 v:1161x7 v:1029x7 v:897x7 v:765x7 v:633x7 v:502x7 v:436x7 v:370x7 v:326x7 v:282x7 v:239x7"
+   },
+   {
+    "letra": "F",
+    "ficha": "TESOURA 04",
+    "qtd": 15,
+    "pecas": 165,
+    "internoM": 56.625,
+    "banzoBarras": 10,
+    "grupos": "dinfp:249x15 dsupp:248x15 d:484x30 d:454x15 d:415x15 v:387x15 v:338x15 v:288x15 v:238x15 v:190x15"
+   },
+   {
+    "letra": "G",
+    "ficha": "TRELIÇA 03",
+    "qtd": 1,
+    "pecas": 69,
+    "internoM": 79.914,
+    "banzoBarras": 12,
+    "grupos": "d:1404x2 d:1327x32 v:990x35"
+   },
+   {
+    "letra": "H",
+    "ficha": "TRELIÇA 04",
+    "qtd": 2,
+    "pecas": 66,
+    "internoM": 77.012,
+    "banzoBarras": 12,
+    "grupos": "d:1356x28 d:1346x4 v:990x34"
+   }
+  ],
+  "lista": [
+   "U 50x150x50#3,00 | 136 | 816.0 | 4896",
+   "U 40x140x40#2,65 | 172 | 1032.0 | 5470",
+   "U 40x75x40#2,00 | 28 | 168.0 | 461",
+   "U 30x68x30#2,00 | 29 | 174.0 | 371",
+   "U 40x100x40#2,25 | 37 | 222.0 | 799",
+   "U 30x92x30#2,00 | 83 | 498.0 | 1195",
+   "U 40x100x40#2,00 | 36 | 216.0 | 691",
+   "UE 100x40x15#2,25 | 392 | 1960.0 | 6978"
+  ]
+ },
+ "caso4.dxf": {
+  "estruturas": [
+   {
+    "letra": "A",
+    "ficha": "TESOURA 01",
+    "qtd": 14,
+    "pecas": 742,
+    "internoM": 639.763,
+    "banzoBarras": 84,
+    "grupos": "dinfp:909x28 dsup:731x28 dsup:664x28 dsup:594x28 dsup:524x28 dsupp:981x28 d:1774x28 d:1756x28 d:1611x28 d:1478x28 d:1361x28 d:771x28 d:700x28 d:493x28 d:443x28 d:383x28 v:1585x14 v:1392x28 v:1199x28 v:1006x28 v:813x28 v:621x28 v:524x28 v:428x28 v:363x28 v:299x28 v:238x28"
+   },
+   {
+    "letra": "B",
+    "ficha": "TESOURA 02",
+    "qtd": 9,
+    "pecas": 585,
+    "internoM": 538.015,
+    "banzoBarras": 75,
+    "grupos": "dinfp:959x18 dsup:815x18 dsup:762x18 dsup:710x18 dsup:657x18 dsup:605x18 dsup:548x18 dsupp:1010x18 d:1881x18 d:1869x18 d:1759x18 d:1656x18 d:1561x18 d:1476x18 d:1402x18 d:754x18 d:708x18 d:490x18 d:455x18 d:408x18 v:1586x9 v:1436x18 v:1286x18 v:1136x18 v:986x18 v:836x18 v:686x18 v:536x18 v:461x18 v:386x18 v:336x18 v:286x18 v:238x18"
+   }
+  ],
+  "lista": [
+   "U 50x125x50#3,00 | 160 | 960.0 | 5760",
+   "U 40x118x40#2,65 | 200 | 1200.0 | 5452",
+   "UE 100x40x15#2,25 | 341 | 1824.3 | 6495"
+  ]
+ },
+ "caso5.dxf": {
+  "estruturas": [
+   {
+    "letra": "A",
+    "ficha": "TESOURA 01",
+    "qtd": 13,
+    "pecas": 1950,
+    "internoM": 2742.846,
+    "banzoBarras": 182,
+    "grupos": "dsup:955x26 dsup:891x26 dsup:829x26 dsup:769x26 dsup:705x52 dsup:642x52 dsup:576x52 d:3194x52 d:2867x52 d:2548x52 d:2240x52 d:2093x26 d:1950x52 d:1814x26 d:1687x52 d:1570x52 d:1467x52 d:837x52 d:772x52 d:622x52 d:571x52 d:504x52 v:2985x26 v:2807x52 v:2630x52 v:2453x52 v:2275x52 v:2098x52 v:1920x52 v:1743x52 v:1566x52 v:1388x52 v:1211x52 v:1034x52 v:856x52 v:679x52 v:590x52 v:502x52 v:429x52 v:357x52 v:288x52"
+   },
+   {
+    "letra": "B",
+    "ficha": "TRELIÇA 01",
+    "qtd": 24,
+    "pecas": 504,
+    "internoM": 277.893,
+    "banzoBarras": 48,
+    "grupos": "d:621x192 d:611x48 v:490x264"
+   }
+  ],
+  "lista": [
+   "U 70x200x70#3,00 | 184 | 1104.0 | 9936",
+   "L 2\"x3/16\" | 467 | 2802.0 | 10143",
+   "U 40x100x40#2,00 | 50 | 300.0 | 960",
+   "U 30x92x30#2,00 | 51 | 306.0 | 734",
+   "UE 100x48x15#2,25 | 384 | 1920.0 | 8294"
+  ]
+ }
+}
