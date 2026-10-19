@@ -52,6 +52,8 @@
                         botões (Confirmar, Fechar) continuam na tela
    - encostado ........ % do orçamento na borda, relatório da contabilidade
                         fora do alinhamento
+   - lista-suspensa-padrao  a lista de sugestões do navegador abria preta e
+                        solta do campo; vale a do Recibos, em todos
    - propostas-* ...... proposta e contrato em dois Words que se
                         contradiziam (prazo, fechamento), extenso à mão
    Sai com código 1 se algum falhar: não se publica assim.
@@ -10704,6 +10706,55 @@ teste('propostas-nuvem', async (b, t) => {
   t.ok('grava só o nó da proposta (propostas_rm/docs/<id>)', r.caminho && r.caminho.length === 1 && /^propostas_rm\/docs\/[a-z0-9]+$/.test(r.caminho[0]), J);
   t.ok('recusa da nuvem avisa e a alteração fica no aparelho para subir', r.avisos === 1 && r.pendente && r.local === 'Nome Recusado', J);
   t.ok('versão velha da nuvem não apaga a que não subiu; proposta de outro aparelho chega', r.ficou === 'Nome Recusado' && r.outra === 'De Outro Aparelho', J);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
+teste('lista-suspensa-padrao', async (b, t) => {
+  // a lista de sugestões do navegador (<datalist>) abria preta, solta do
+  // campo, com uma setinha no campo (peça do Propostas e Contratos). O
+  // padrão é a do Recibos: cartões brancos presos embaixo do campo. O bloco
+  // comum troca todo list= sozinho, em qualquer sistema.
+  if (!fs.existsSync(path.join(RAIZ, 'propostas_rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'propostas_rm' });
+  await semLogin(pg);
+  await pg.evaluate(async () => { await iniciarApp(); document.getElementById('btnNova').click(); });
+  await pg.waitForTimeout(200);
+  const sel = '#ficha [data-p="pre.0.itens.0.desc"]';
+  const antes = await pg.evaluate(s => { const i = document.querySelector(s); return { list: i.hasAttribute('list'), adotado: i.getAttribute('data-rm-lista') }; }, sel);
+  await pg.click(sel);
+  await pg.waitForTimeout(150);
+  const aberta = await pg.evaluate(s => {
+    const i = document.querySelector(s), c = document.querySelector('.rm-lista.open');
+    if (!c) return { erro: 'não abriu' };
+    const a = i.getBoundingClientRect(), r = c.getBoundingClientRect(), cs = getComputedStyle(c);
+    const fundo = cs.backgroundColor.match(/\d+/g).map(Number);
+    return { n: c.querySelectorAll('.it').length, presa: Math.abs(r.top - a.bottom) <= 4 && Math.abs(r.left - a.left) <= 2 && r.width >= Math.max(a.width, 300) - 1, claro: fundo[0] > 200 && fundo[1] > 200 && fundo[2] > 200,
+      primeira: c.querySelector('.it .d').textContent };
+  }, sel);
+  await pg.type(sel, 'viga');
+  await pg.waitForTimeout(100);
+  const filtrou = await pg.evaluate(() => [...document.querySelectorAll('.rm-lista.open .it .d')].map(x => x.textContent));
+  await pg.keyboard.press('ArrowDown'); await pg.keyboard.press('ArrowDown'); await pg.keyboard.press('Enter');
+  await pg.waitForTimeout(250);
+  const teclado = await pg.evaluate(s => ({ campo: document.querySelector(s).value, doc: docs[atualId].pre[0].itens[0].desc, fechou: !document.querySelector('.rm-lista.open') }), sel);
+  // mouse, em outro campo (item da metálica)
+  const sel2 = '#ficha [data-p="met.0.linhas.0.k"]';
+  await pg.fill(sel2, '');
+  await pg.click(sel2); await pg.waitForTimeout(150);
+  await pg.click('.rm-lista.open .it:nth-child(4)'); await pg.waitForTimeout(250);
+  const mouse = await pg.evaluate(s => ({ campo: document.querySelector(s).value, doc: docs[atualId].met[0].linhas[0].k }), sel2);
+  // campo criado depois (linha nova) também é adotado
+  const novo = await pg.evaluate(async () => { document.querySelector('[data-acao="preItem"]').click(); await new Promise(x => setTimeout(x, 100));
+    const l = [...document.querySelectorAll('#ficha [data-p$=".desc"]')].pop(); return { list: l.hasAttribute('list'), adotado: !!l.getAttribute('data-rm-lista') }; });
+  const J = JSON.stringify({ antes, aberta, filtrou, teclado, mouse, novo });
+  t.ok('sem a lista do navegador: list= sai do campo', !antes.list && antes.adotado === 'dlPre' && !novo.list && novo.adotado, J);
+  t.ok('abre presa embaixo do campo, clara, com as 7 opções', aberta.n === 7 && aberta.presa && aberta.claro, J);
+  t.ok('filtra pelo que se digita', filtrou.length === 2 && filtrou.every(x => /^Viga/.test(x)), J);
+  t.ok('setas + Enter escolhem e o sistema grava', teclado.campo === 'Viga de concreto armado 20x50 cm' && teclado.doc === teclado.campo && teclado.fechou, J);
+  t.ok('clique escolhe e o sistema grava', mouse.campo === 'Telha de cobertura' && mouse.doc === 'Telha de cobertura', J);
+  const sem = repos().filter(r => fs.readFileSync(path.join(RAIZ, r, 'index.html'), 'utf8').indexOf('LISTA DE SUGESTÕES PRESA AO CAMPO') < 0);
+  t.ok('o bloco está em todos os sistemas', !sem.length, sem.join(', '));
   t.ok('sem erro na página', !erros.length, erros.join(' | '));
   await ctx.close();
 });
