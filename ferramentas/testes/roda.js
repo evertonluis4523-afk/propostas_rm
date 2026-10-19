@@ -10621,13 +10621,16 @@ teste('propostas-contrato-da-proposta', async (b, t) => {
     modeloNuvem = { contrato: { gerais: '6.1. Texto novo de teste.' } };
     const novo = novoContrato(d);
     const tela = { contrato: btn.textContent.trim(), sec: [...document.querySelectorAll('#ficha .sec>summary')].map(s => s.firstChild.textContent) };
-    return { rotAntes, prop: { cliente: prop.includes('Cliente Fictício Ltda'), total: prop.includes('R$ 752.130,00'), ext: prop.includes('setecentos e cinquenta e dois mil cento e trinta reais'), opc: prop.includes('Opcionais, fora do total acima') },
+    return { rotAntes, prop: { cliente: prop.includes('Cliente Fictício Ltda'), total: prop.includes('R$ 752.130,00'), ext: prop.includes('setecentos e cinquenta e dois mil cento e trinta reais'), opc: prop.includes('Opcionais, fora do total acima'),
+        /* os opcionais somados (88.000 + 20.000 + 15.500) e a obra com eles */
+        somaOpc: /Total dos opcionais\s*cento e vinte e três mil e quinhentos reais\s*R\$ 123\.500,00/.test(prop),
+        comOpc: /Total da obra com opcionais\s*oitocentos e setenta e cinco mil seiscentos e trinta reais\s*R\$ 875\.630,00/.test(prop) },
       c1: { pilar: /Pilar de concreto armado 25x35 × 7,40 m\s*8 un/.test(c1), total: c1.includes('R$ 875.630,00') && c1.includes('oitocentos e setenta e cinco mil seiscentos e trinta reais'), cliente: c1.includes('Cliente Fictício Ltda'),
         foro: c1.includes('Estrela/RS e Cidade Exemplo/RS'), obra: c1.includes('Rua Exemplo, 100, Cidade Exemplo/RS'), dias: c1.includes('120 (cento e vinte) dias') },
       c2: /Pilar de concreto armado 25x35 × 7,40 m\s*10 un/.test(c2), velho: d.contrato.textos.gerais.indexOf('Texto novo') < 0, novo: novo.textos.gerais === '6.1. Texto novo de teste.', tela };
   }, PROP_FICT).catch(e => ({ erro: e.message }));
   const J = JSON.stringify(r).slice(0, 1500);
-  t.ok('proposta: cliente, total sem opcionais e por extenso, opcionais à parte', r.prop && Object.values(r.prop).every(Boolean), J);
+  t.ok('proposta: cliente, total sem opcionais e por extenso, opcionais à parte, somados e com o total', r.prop && Object.values(r.prop).every(Boolean), J);
   t.ok('"＋ Gerar contrato" vira a aba "Contrato"', /Gerar contrato/.test(r.rotAntes || '') && r.tela && r.tela.contrato === 'Contrato', J);
   t.ok('contrato com as peças, o cliente, o total por extenso, o endereço da obra, o foro e o prazo', r.c1 && Object.values(r.c1).every(Boolean), J);
   t.ok('peça mudada na proposta aparece no contrato', r.c2 === true, J);
@@ -10672,7 +10675,7 @@ teste('propostas-papel-e-word', async (b, t) => {
     const pp = partes(u8), pc = partes(c8), doc = ler(u8, 'word/document.xml'), con = ler(c8, 'word/document.xml');
     const xmls = Object.keys(pp).filter(k => /\.xml$|\.rels$/.test(k));
     return { pk: u8[0] === 0x50 && u8[1] === 0x4b, nomes: Object.keys(pp).sort(), xmlOk: xmls.every(k => bem(ler(u8, k))) && Object.keys(pc).filter(k => /\.xml$|\.rels$/.test(k)).every(k => bem(ler(c8, k))),
-      logo: (pp['word/media/logo.png'] || []).length > 1000, cliente: doc.includes('Cliente Fictício Ltda'), total: doc.includes('R$ 752.130,00'),
+      logo: (pp['word/media/logo.png'] || []).length > 1000, cliente: doc.includes('Cliente Fictício Ltda'), total: doc.includes('R$ 752.130,00') && doc.includes('Total dos opcionais') && doc.includes('R$ 123.500,00') && doc.includes('Total da obra com opcionais') && doc.includes('R$ 875.630,00'),
       timbre: ler(u8, 'word/header1.xml').includes('CNPJ 28.654.965/0001-17'), contrato: con.includes('R$ 875.630,00') && con.includes('Das cláusulas gerais') };
   }).catch(e => ({ erro: e.message }));
   const J = JSON.stringify({ papel, w }).slice(0, 1500);
@@ -10683,6 +10686,90 @@ teste('propostas-papel-e-word', async (b, t) => {
   t.ok('Word: zip com documento, timbrado, rodapé e logo', w.pk && ['word/document.xml', 'word/header1.xml', 'word/footer1.xml', 'word/media/logo.png', '[Content_Types].xml'].every(k => (w.nomes || []).includes(k)) && w.logo, J);
   t.ok('Word: todo XML bem formado', w.xmlOk === true, J);
   t.ok('Word: mesmo cliente e total da folha; contrato com o total e as cláusulas', w.cliente && w.total && w.timbre && w.contrato, J);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
+/* .docx fictício no formato dos Words da RM (comprimido, como o Word grava) */
+function docxFicticio(paragrafos) {
+  const zlib = require('zlib');
+  const xe = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;');
+  const corpo = paragrafos.map(p => Array.isArray(p)
+    ? '<w:tbl><w:tr><w:tc>' + p.map(x => '<w:p><w:r><w:t xml:space="preserve">' + xe(x) + '</w:t></w:r></w:p>').join('') + '</w:tc></w:tr></w:tbl>'
+    : '<w:p><w:r><w:t xml:space="preserve">' + xe(p) + '</w:t></w:r></w:p>').join('');
+  const arqs = { '[Content_Types].xml': '<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"/>',
+    'word/document.xml': '<?xml version="1.0" encoding="UTF-8"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>' + corpo + '</w:body></w:document>' };
+  const partes = [], central = []; let pos = 0;
+  for (const [nome, txt] of Object.entries(arqs)) {
+    const n = Buffer.from(nome), dados = Buffer.from(txt, 'utf8'), z = zlib.deflateRawSync(dados);
+    let crc = 0xFFFFFFFF; for (const b of dados) { crc ^= b; for (let k = 0; k < 8; k++) crc = crc & 1 ? 0xEDB88320 ^ (crc >>> 1) : crc >>> 1; } crc = (crc ^ 0xFFFFFFFF) >>> 0;
+    const h = Buffer.alloc(30); h.writeUInt32LE(0x04034b50, 0); h.writeUInt16LE(20, 4); h.writeUInt16LE(8, 8); h.writeUInt32LE(crc, 14); h.writeUInt32LE(z.length, 18); h.writeUInt32LE(dados.length, 22); h.writeUInt16LE(n.length, 26);
+    partes.push(h, n, z);
+    const c = Buffer.alloc(46); c.writeUInt32LE(0x02014b50, 0); c.writeUInt16LE(20, 4); c.writeUInt16LE(20, 6); c.writeUInt16LE(8, 10); c.writeUInt32LE(crc, 16); c.writeUInt32LE(z.length, 20); c.writeUInt32LE(dados.length, 24); c.writeUInt16LE(n.length, 28); c.writeUInt32LE(pos, 42);
+    central.push(c, n); pos += 30 + n.length + z.length;
+  }
+  const cd = Buffer.concat(central), f = Buffer.alloc(22);
+  f.writeUInt32LE(0x06054b50, 0); f.writeUInt16LE(2, 8); f.writeUInt16LE(2, 10); f.writeUInt32LE(cd.length, 12); f.writeUInt32LE(pos, 16);
+  return Buffer.concat([...partes, cd, f]);
+}
+teste('propostas-importa-word', async (b, t) => {
+  // as propostas e contratos que já existem estão em Word: o sistema lê o
+  // .docx e monta no layout novo. Words fictícios no formato dos da RM
+  // (pontilhado nas peças, "A seguir relacionamos...", valores por extenso).
+  if (!fs.existsSync(path.join(RAIZ, 'propostas_rm'))) return;
+  const orc = docxFicticio(['Proposta de orçamento', 'Prezado Senhor;',
+    'Atendendo solicitação, apresentamos orçamento para fornecimento e montagem de uma estrutura pré-moldada a serem executados no município de Cidade Exemplo/RS, conforme dimensões descritas.',
+    'A estrutura será composta por um pavilhão de exemplo de 20x30m.',
+    '1. RESPONSABILIDADE TÉCNICA', 'O Contratado fornecerá ART referente aos serviços prestados.',
+    '2. COMPETÊNCIAS DO CONTRATANTE', 'a) Legalização perante os órgãos competentes;', 'b) Livre movimentação para a execução da obra;',
+    '3. ESTRUTURA PRÉ-MOLDADA', 'A seguir relacionamos suas dimensões e quantidades do pavilhão de exemplo:',
+    'Pilar de concreto armado 25x35x7,40mts ........................................08un.', 'Placas de concreto armado 8cm ..............................120,50m².',
+    '4. FUNDAÇÕES', 'As fundações serão do tipo sapatas isoladas. OBS.: O MATERIAL SERÁ POR CONTA DO CONTRATADO ATÉ 1,50M.',
+    '5. METÁLICA', 'A seguir relacionamos suas dimensões e quantidades do pavilhão de exemplo:', 'Telha de cobertura: Telha TP40 0,50.',
+    '6. PORTÃO', 'Não incluso no orçamento.', 'Texto solto que ninguém reconhece.', '7. ESCADA E CORRIMÃO METÁLICO', 'Uma escada metálica com corrimão incluso separadamente no orçamento.',
+    '8. PRAZOS DE OBRA E PAGAMENTO', 'Prazo para entrega da obra:', 'Prazo de 90 dias, após a liberação perante os órgãos competentes;', 'Prazo de pagamento:', '40% na assinatura do contrato;', '60% na entrega.',
+    ['Valor total das fundações R$10.000,00 (dez mil reais).', 'Valor total do pré-fabricado R$50.000,00 (cinquenta mil reais).', 'Valor total da escada metálica não incluso no valor acima R$5.000,00 (cinco mil reais).'],
+    'Proposta válida por 15 dias.', '9. IMPOSTOS E TRIBUTOS', 'Faturamento direto dos principais serviços.', 'Atenciosamente,', 'Estrela/RS, 3 de agosto de 2026.']);
+  const con = docxFicticio(['CONTRATO DE FORNECIMENTO E INSTALAÇÃO DE PAVILHÃO INDUSTRIAL',
+    'CONTRATADA: NUNES E KUHN ESTRUTURAS METALICAS LTDA (RM ESTRUTURAS), inscrita no CNPJ sob n° 28.654.965/0001-17.',
+    'CONTRATANTE: CLIENTE FICTÍCIO LTDA inscrito no CNPJ n° 00.000.000/0001-00 sediada na Rua Exemplo, nº100, Cidade Exemplo/RS CEP 00.000-000 neste ato representado pelo senhor Pessoa Exemplo, portador do CPF 000.000.000-00.',
+    'Pelo presente instrumento, as partes têm entre si o presente contrato de fornecimento e instalação de um pavilhão a ser realizado na Rua Exemplo, nº100, Cidade Exemplo/RS sob o regime de empreitada.',
+    ['1. - DO OBJETO'], '1.1.O presente instrumento tem por objeto a fabricação de um pavilhão de exemplo.', '1.2. A estrutura encomendada tem as seguintes especificações:',
+    'ESTRUTURA PRÉ-MOLDADA', 'A seguir relacionamos suas dimensões e quantidades do volume do pavilhão de exemplo:', 'Pilar de concreto armado 25x35x7,40mts .............08un.',
+    'ESQUADRIAS', 'Não incluso no contrato.', '1.3. DAS OBRIGAÇÕES DA CONTRATADA', '1.3.1. Texto fixo.',
+    ['2 - DO PRAZO'], '2.1. A obra será concluída em até 150 dias, contados da liberação.',
+    ['3 - DO PREÇO E DO PAGAMENTO'], '3.1. O CONTRATANTE pagará à CONTRATADA o preço certo e ajustado de R$ 100.000,00 (cem mil reais)',
+    'Entrada de R$ 40.000,00 (quarenta mil reais) a ser realizada no dia 10/09/2026;', 'Três parcelas mensais de R$ 20.000,00 (vinte mil reais) a ser realizada até o dia 10 de cada mês.',
+    'Estrela, 1 de setembro de 2026.', 'CONTRATANTE: CLIENTE FICTÍCIO LTDA CNPJ n° 00.000.000/0001-00']);
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'propostas_rm' });
+  await semLogin(pg);
+  await pg.evaluate(async () => { await iniciarApp(); });
+  const resumo = () => pg.evaluate(() => { const d = docs[atualId]; return { contrato: !!d.contrato, aba, cidade: d.obra.cidade, end: d.obra.endereco, trat: d.tratamento, desc: d.descricao,
+    pre: d.pre.map(g => g.titulo + ':' + g.itens.map(i => i.desc + '|' + i.qtd + '|' + i.un).join(';')), met: d.met.map(g => g.linhas.map(l => l.k + '=' + l.v).join(';')),
+    comp: d.comp.map(c => c.item + '=' + c.sit), pag: d.pagProp.map(p => p.pct + ' ' + p.quando), val: d.valores.map(v => v.etapa + '=' + v.valor + (v.opcional ? '*' : '')),
+    prazo: d.prazoDias, validade: d.validade, data: d.data, obs: d.textos.fundacoesObs, compet: d.textos.competencias, cli: d.cliente,
+    c: d.contrato && { data: d.contrato.data, prazo: d.contrato.prazoDias, pag: d.contrato.pag, tit: d.contrato.textos.titulo, obj: d.contrato.textos.objeto },
+    modal: document.getElementById('modalTxt').textContent, aberto: document.getElementById('modal').classList.contains('on'), folha: document.getElementById('folha').textContent }; });
+  await pg.setInputFiles('#arqWord', { name: 'Orçamento exemplo.docx', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', buffer: orc });
+  await pg.waitForTimeout(500);
+  const o = await resumo().catch(e => ({ erro: e.message }));
+  await pg.evaluate(() => document.getElementById('modalSim').click());
+  await pg.setInputFiles('#arqWord', { name: 'Contrato exemplo.docx', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', buffer: con });
+  await pg.waitForTimeout(500);
+  const c = await resumo().catch(e => ({ erro: e.message }));
+  const ruim = await pg.evaluate(async () => { try { await lerDocx(new TextEncoder().encode('não é word').buffer); return 'aceitou'; } catch (e) { return e.message; } });
+  const J = JSON.stringify({ c, o, ruim }).slice(0, 2500);
+  t.ok('orçamento: abertura, município, descrição', o.trat === 'Prezado Senhor' && o.cidade === 'Cidade Exemplo/RS' && o.desc === 'A estrutura será composta por um pavilhão de exemplo de 20x30m.', J);
+  t.ok('orçamento: peças do pontilhado com quantidade e unidade, no volume certo', o.pre && o.pre[0] === 'Pavilhão de exemplo:Pilar de concreto armado 25x35x7,40mts|8|un;Placas de concreto armado 8cm|120,50|m²', J);
+  t.ok('orçamento: metálica, fundação (observação sem maiúsculas) e competências', o.met && o.met[0] === 'Telha de cobertura=Telha TP40 0,50' && /^O material será por conta do CONTRATADO/.test(o.obs) && /^- Legalização/.test(o.compet), J);
+  t.ok('orçamento: incluso / à parte / não incluso', o.comp && o.comp.join() === 'Portão=nao,Escada metálica com corrimão=aparte', J);
+  t.ok('orçamento: prazo, parcelas, valores (opcional marcado), validade e data', o.prazo === 90 && o.pag.join() === '40 Na assinatura do contrato,60 Na entrega' && o.val.join() === 'Fundações=10000,Pré-fabricado=50000,Escada metálica=5000*' && o.validade === 15 && o.data === '2026-08-03', J);
+  t.ok('orçamento: abre na proposta, com o resumo do que foi lido e o que não foi', !o.contrato && o.aba === 'proposta' && o.aberto && /Lido:/.test(o.modal) && /1 trecho\(s\) não reconhecido/.test(o.modal) && /Texto solto que ninguém reconhece/.test(o.modal) && /Pilar de concreto armado/.test(o.folha), J);
+  t.ok('contrato: contratante com CNPJ, endereço, CEP e representante', c.cli && c.cli.nome === 'CLIENTE FICTÍCIO LTDA' && c.cli.doc === '00.000.000/0001-00' && c.cli.endereco === 'Rua Exemplo, nº100' && c.cli.cidade === 'Cidade Exemplo/RS' && c.cli.cep === '00000-000' && c.cli.rep === 'Pessoa Exemplo' && c.cli.repDoc === 'CPF 000.000.000-00', J);
+  t.ok('contrato: obra, objeto, peças e esquadrias', c.end === 'Rua Exemplo, nº100' && c.cidade === 'Cidade Exemplo/RS' && c.c && /pavilhão de exemplo/.test(c.c.obj) && c.pre[0] === 'Pavilhão de exemplo:Pilar de concreto armado 25x35x7,40mts|8|un' && c.comp.join() === 'Esquadrias=nao', J);
+  t.ok('contrato: prazo, valor, entrada e parcelas, data', c.c && c.c.prazo === 150 && c.val.join() === 'Valor do contrato=100000' && c.c.pag.entrada === 40000 && c.c.pag.entradaData === '2026-09-10' && c.c.pag.n === 3 && c.c.pag.dia === 10 && c.c.pag.inicio === '2026-10' && c.c.data === '2026-09-01', J);
+  t.ok('contrato: abre na aba Contrato, com as cláusulas do padrão', c.contrato && c.aba === 'contrato' && /cláusulas fixas são as do padrão/.test(c.modal) && /Das cláusulas gerais/.test(c.folha), J);
+  t.ok('arquivo que não é Word: recusa com motivo', /não é um arquivo \.docx/.test(ruim), J);
   t.ok('sem erro na página', !erros.length, erros.join(' | '));
   await ctx.close();
 });

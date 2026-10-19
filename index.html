@@ -2817,6 +2817,10 @@ body:not([data-theme="escuro"]){
 /* ---------- a folha: papel, em qualquer tema ---------- */
 .folha{background:#fff;color:#1d2127;border:1px solid var(--line);border-radius:4px;box-shadow:var(--shadow);padding:13mm 14mm;max-width:210mm;margin:0 auto;font-size:10px;line-height:1.55;min-height:120px}
 .folha.vazia{display:none}
+.imp-l{margin-top:8px;font-size:13px;color:var(--muted)}
+.imp-l b{color:var(--ink)}
+.imp-s{margin:6px 0 0;padding-left:18px;font-size:12px;color:var(--muted);max-height:220px;overflow:auto}
+.modal-box:has(.imp-l){max-width:560px}
 .folha .f-head{display:flex;justify-content:space-between;align-items:center;gap:14px;padding-bottom:3mm;border-bottom:1.5px solid #F24619}
 .folha .f-head .logo img{height:36px;width:auto;display:block}
 .folha .tb2{display:flex;gap:14px;font-size:9px;line-height:1.6;color:#6E747C}
@@ -2853,6 +2857,8 @@ body:not([data-theme="escuro"]){
 .folha table.ft tr{break-inside:avoid}
 .folha table.ft thead{display:table-header-group}
 .folha table.tot tr.grand td{border-top:1.5px solid #141414;border-bottom:0;font-size:12px;font-weight:800;padding-top:2mm;color:#141414}
+.folha table.tot tr.subt td{border-top:1px solid #c8ccd2;font-weight:700;color:#141414}
+.folha table.tot tr.depois-grand td,.folha table.tot tr.sep~tr.grand td{border-top:1.5px solid #141414}
 .folha table.tot tr.sep td{font-size:7.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#6E747C;background:#fafbfc;padding-top:2.5mm}
 .folha .f-partes{display:grid;grid-template-columns:1fr 1fr;gap:4mm;margin:1mm 0 4mm}
 .folha .f-parte{border:1px solid #eceef1;border-radius:3px;padding:3mm;font-size:9px;color:#3c424a;min-width:0;overflow-wrap:anywhere}
@@ -2963,6 +2969,8 @@ body:not([data-theme="escuro"]){
       <div class="docs-b">
         <button class="btn btn-ghost btn-sm" id="btnDup" type="button" disabled>⧉ Duplicar</button>
         <button class="btn btn-ghost btn-sm" id="btnDel" type="button" disabled>✕ Excluir</button>
+        <button class="btn btn-ghost btn-sm" id="btnImportar" type="button" title="Lê uma proposta ou um contrato em Word (.docx) e monta no layout novo">⇪ Importar Word</button>
+        <input type="file" id="arqWord" accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" hidden>
       </div>
     </div>
     <div class="abas" role="tablist">
@@ -3492,7 +3500,13 @@ function blocosProposta(d) {
   sec('Valores');
   const lv = d.valores.filter(x => !x.opcional && (x.etapa.trim() || lerValor(x.valor))).map(x => [{ t: x.etapa, sub: extenso(x.valor) }, brl(x.valor)]);
   const tab = { t: 'tab', cls: 'tot', cols: [{ t: 'Etapa' }, { t: 'Valor', dir: true, w: 26 }], linhas: lv, total: ['Total da obra', brl(tot)], totalSub: extenso(tot) };
-  if (opc.length) { tab.depois = { rot: 'Opcionais, fora do total acima', linhas: opc.map(x => [{ t: x.etapa, sub: extenso(x.valor) }, brl(x.valor)]) }; }
+  if (opc.length) {
+    /* os opcionais somados, e a obra com eles: o cliente que quer tudo não
+       precisa fazer a conta (pedido da arquiteta, 19/10/2026) */
+    const somaOpc = centavos(opc.reduce((s, x) => s + lerValor(x.valor), 0)), comOpc = centavos(tot + somaOpc);
+    tab.depois = { rot: 'Opcionais, fora do total acima', linhas: opc.map(x => [{ t: x.etapa, sub: extenso(x.valor) }, brl(x.valor)]),
+      totais: [{ rot: 'Total dos opcionais', v: brl(somaOpc), sub: extenso(somaOpc), cls: 'subt' }, { rot: 'Total da obra com opcionais', v: brl(comOpc), sub: extenso(comOpc), cls: 'grand' }] };
+  }
   bl.push(tab);
   bl.push({ t: 'p', runs: [{ t: 'Proposta válida por ' + fmtNum(d.validade, 0) + ' dias.' }] });
   if (t.impostos.trim()) { sec('Impostos e tributos'); bl.push(...textoBlocos(t.impostos, v)); }
@@ -3559,7 +3573,10 @@ function tbHTML(b) {
   const tr = l => '<tr>' + l.map((c, i) => '<td class="' + (b.cols[i].dir ? 'q' : '') + (b.cols[i].rot ? ' rot' : '') + '">' + celHTML(c) + '</td>').join('') + '</tr>';
   let h = '<table class="ft ' + (b.cls || '') + '">' + cg + th + '<tbody>' + b.linhas.map(tr).join('');
   if (b.total) h += '<tr class="grand">' + b.total.map((c, i) => '<td class="' + (b.cols[i].dir ? 'q' : '') + '">' + esc(c) + (i === 0 && b.totalSub ? '<span class="ext">' + esc(b.totalSub) + '</span>' : '') + '</td>').join('') + '</tr>';
-  if (b.depois) { h += '<tr class="sep"><td colspan="' + b.cols.length + '">' + esc(b.depois.rot) + '</td></tr>' + b.depois.linhas.map(tr).join(''); }
+  if (b.depois) {
+    h += '<tr class="sep"><td colspan="' + b.cols.length + '">' + esc(b.depois.rot) + '</td></tr>' + b.depois.linhas.map(tr).join('');
+    (b.depois.totais || []).forEach(x => { h += '<tr class="' + x.cls + '"><td>' + esc(x.rot) + '<span class="ext">' + esc(x.sub) + '</span></td>' + (b.cols.length > 2 ? '<td colspan="' + (b.cols.length - 2) + '"></td>' : '') + '<td class="q">' + esc(x.v) + '</td></tr>'; });
+  }
   return h + '</tbody></table>';
 }
 function blocosHTML(bl) {
@@ -3648,7 +3665,11 @@ function wTab(b) {
   const tr = (l, o) => '<w:tr><w:trPr><w:cantSplit/></w:trPr>' + l.map((c, i) => wCel(c, larg[i], Object.assign({ dir: b.cols[i].dir, cor: b.cols[i].rot ? '4A515B' : null, b: b.cols[i].rot }, o || {}))).join('') + '</w:tr>';
   b.linhas.forEach(l => { x += tr(l); });
   if (b.total) x += tr(b.total.map((c, i) => i === 0 && b.totalSub ? { t: c, sub: b.totalSub } : c), { b: true });
-  if (b.depois) { x += '<w:tr>' + wCel(b.depois.rot, W_LARG, { span: b.cols.length, sz: 15, caps: true, cor: '6E747C', b: true, fundo: 'FAFBFC' }) + '</w:tr>'; b.depois.linhas.forEach(l => { x += tr(l); }); }
+  if (b.depois) {
+    x += '<w:tr>' + wCel(b.depois.rot, W_LARG, { span: b.cols.length, sz: 15, caps: true, cor: '6E747C', b: true, fundo: 'FAFBFC' }) + '</w:tr>';
+    b.depois.linhas.forEach(l => { x += tr(l); });
+    (b.depois.totais || []).forEach(t2 => { const l = b.cols.map(() => ''); l[0] = { t: t2.rot, sub: t2.sub }; l[l.length - 1] = t2.v; x += tr(l, { b: true }); });
+  }
   return x + '</w:tbl>' + wPar('', { depois: 60 });
 }
 function wCorpo(bl) {
@@ -4091,7 +4112,281 @@ async function iniciarApp() {
 }
 
 /* para os testes e para quem precisar conferir pelo console */
-window.__prop = { novoDoc, novoContrato, normalizar, blocosProposta, blocosContrato, blocosHTML, extenso, totalProposta, totalContrato, parcelasContrato, avisos, docxBytes, lerValor,
+
+/* ═══════════════════════════════════════════════════════════
+   IMPORTAR WORD
+   As propostas e contratos que já existem estão em Word. Aqui o .docx é
+   lido e cada parte reconhecida vai para o seu campo: cliente, volumes e
+   peças (as linhas de pontilhado "Pilar ......... 05un."), metálica,
+   incluso / não incluso, prazo, parcelas e valores. O que não se reconhece
+   não some: aparece numa lista para conferir. As cláusulas fixas do
+   contrato não vêm do arquivo -- ficam as do padrão do sistema.
+═══════════════════════════════════════════════════════════ */
+async function lerDocx(buf) {
+  const u = new Uint8Array(buf), dv = new DataView(buf);
+  if (u[0] !== 0x50 || u[1] !== 0x4b) throw new Error('não é um arquivo .docx (se for .doc antigo, abra no Word e salve como .docx)');
+  /* o diretório do zip fica no fim: acha o registro final e percorre */
+  let fim = -1;
+  for (let i = u.length - 22; i >= Math.max(0, u.length - 65557); i--) if (dv.getUint32(i, true) === 0x06054b50) { fim = i; break; }
+  if (fim < 0) throw new Error('arquivo .docx danificado');
+  const n = dv.getUint16(fim + 10, true);
+  let p = dv.getUint32(fim + 16, true), alvo = null;
+  for (let k = 0; k < n; k++) {
+    const metodo = dv.getUint16(p + 10, true), tam = dv.getUint32(p + 20, true), ln = dv.getUint16(p + 28, true), le = dv.getUint16(p + 30, true), lc = dv.getUint16(p + 32, true), off = dv.getUint32(p + 42, true);
+    const nome = new TextDecoder().decode(u.slice(p + 46, p + 46 + ln));
+    if (nome === 'word/document.xml') alvo = { metodo, tam, off };
+    p += 46 + ln + le + lc;
+  }
+  if (!alvo) throw new Error('o arquivo não tem o texto de um documento do Word');
+  const ini = alvo.off + 30 + dv.getUint16(alvo.off + 26, true) + dv.getUint16(alvo.off + 28, true);
+  let dados = u.slice(ini, ini + alvo.tam);
+  if (alvo.metodo === 8) dados = new Uint8Array(await new Response(new Blob([dados]).stream().pipeThrough(new DecompressionStream('deflate-raw'))).arrayBuffer());
+  const xml = new DOMParser().parseFromString(new TextDecoder().decode(dados), 'application/xml');
+  /* parágrafos na ordem do documento, inclusive os de dentro de tabela */
+  const W = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
+  const linhas = [];
+  [...xml.getElementsByTagNameNS(W, 'p')].forEach(par => {
+    let t = '';
+    par.querySelectorAll('*').forEach(e => { if (e.namespaceURI !== W) return; if (e.localName === 't') t += e.textContent; else if (e.localName === 'tab') t += ' '; else if (e.localName === 'br') t += ' '; });
+    t = t.replace(/\s+/g, ' ').trim();
+    if (t) linhas.push({ t, lista: !!par.getElementsByTagNameNS(W, 'numPr').length });
+  });
+  return linhas;
+}
+const NUM_EXT = { uma: 1, um: 1, duas: 2, dois: 2, tres: 3, 'três': 3, quatro: 4, cinco: 5, seis: 6, sete: 7, oito: 8, nove: 9, dez: 10, onze: 11, doze: 12, treze: 13, quatorze: 14, catorze: 14, quinze: 15, dezesseis: 16, dezoito: 18, vinte: 20, 'vinte e quatro': 24 };
+function frase(s) {
+  /* TEXTO TODO EM MAIÚSCULAS vira frase, guardando CONTRATANTE/CONTRATADO, siglas e UF */
+  s = String(s || '').trim();
+  const letras = s.replace(/[^A-Za-zÀ-ú]/g, '');
+  if (!letras || letras !== letras.toUpperCase()) return s;
+  const fica = /^(CONTRATANTE|CONTRATAD[OA]|ART|PPCI|RS|SC|PR|CNPJ|CPF|CEI|CND|INSS|EPIS?|RAL)$/;
+  const t = s.toLowerCase().replace(/[a-zà-ú]+/gi, w => fica.test(w.toUpperCase()) ? w.toUpperCase() : w);
+  return t.charAt(0).toUpperCase() + t.slice(1);
+}
+function unidade(u) {
+  u = String(u || '').toLowerCase().replace(/\.$/, '');
+  if (/^(un|und|unid|pç|pc|p[çc]s)$/.test(u)) return 'un';
+  if (/^(m2|m²)$/.test(u)) return 'm²';
+  if (/^(m3|m³)$/.test(u)) return 'm³';
+  if (/^(m|mt|mts|ml)$/.test(u)) return 'm';
+  if (/^kg$/.test(u)) return 'kg';
+  if (/^(cj|conj)$/.test(u)) return 'cj';
+  return u && UNIDADES.includes(u) ? u : 'un';
+}
+const MESES_RE = MESES.join('|');
+function dataDoTexto(s) {
+  const m = new RegExp('(\\d{1,2})\\s+de\\s+(' + MESES_RE + ')\\s+de\\s+(\\d{4})', 'i').exec(s || '');
+  return m ? m[3] + '-' + String(MESES.indexOf(m[2].toLowerCase()) + 1).padStart(2, '0') + '-' + String(m[1]).padStart(2, '0') : '';
+}
+/* que seção um título abre ("3. ESTRUTURA PRÉ-MOLDADA", "1 - DO OBJETO") */
+function secaoDe(t) {
+  const s = t.replace(/^\d+(\.\d+)*\s*[.\-–]*\s*-?\s*/, '').replace(/:$/, '').trim();
+  const letras = s.replace(/[^A-Za-zÀ-ú]/g, '');
+  if (!letras || letras !== letras.toUpperCase() || s.length > 70) return null;
+  const k = s.toUpperCase();
+  if (/PR[ÉE]-?MOLDAD/.test(k)) return { k: 'pre' };
+  if (/FUNDA[ÇC]/.test(k)) return { k: 'fund' };
+  if (/MET[ÁA]LICA/.test(k) && !/ESCADA/.test(k)) return { k: 'met' };
+  if (/RESPONSABILIDADE/.test(k)) return { k: 'resp' };
+  if (/COMPET[ÊE]NCIAS/.test(k)) return { k: 'competencias' };
+  if (/PRAZO/.test(k)) return { k: 'prazo' };
+  if (/IMPOSTOS|TRIBUTOS/.test(k)) return { k: 'impostos' };
+  if (/OBSERVA[ÇC]/.test(k)) return { k: 'obs' };
+  if (/OBJETO/.test(k)) return { k: 'objeto' };
+  if (/PRE[ÇC]O|PAGAMENTO/.test(k)) return { k: 'preco' };
+  if (/OBRIGA[ÇC]|ENCARGOS|SEGURAN[ÇC]A|CL[ÁA]USULAS|FATURAMENTO|MORA/.test(k)) return { k: 'fixo' };
+  if (/SERRALHERIA|SELHARIA|FUNILARIA|ESCADA|PROJETO|PORT[ÃA]O|BANHEIRO|COZINHA|ESCRIT[ÓO]RIO|ESQUADRIA|PISO|EL[ÉE]TRIC|HIDR[ÁA]UL/.test(k))
+    return { k: 'compl', nome: frase(s.replace(/\bSELHARIA\b/, 'SERRALHERIA').replace(/\s*\/\s*/g, ', ')) };
+  return null;
+}
+function lerValoresDe(t) { const m = /R\$?\s*([\d.]+,\d{2})/.exec(t); return m ? lerValor(m[1]) : 0; }
+function interpretar(linhas) {
+  const d = novoDoc(), lidos = [], sobras = [];
+  const contrato = linhas.some(l => /^CONTRATANTE\s*:/i.test(l.t)) || /^CONTRATO\b/i.test((linhas[0] || {}).t || '');
+  d.pre = []; d.met = []; d.valores = [];
+  let comp = [], pagProp = [], sec = null, grupo = null, fundTxt = [], fundObs = '', compet = [], resp = [], impostos = [], intro = [], fixo = false, objeto = '';
+  let compAtual = null;
+  const c = contrato ? novoContrato(d) : null;
+  for (let i = 0; i < linhas.length; i++) {
+    const t = linhas[i].t;
+    /* ---- partes do contrato ---- */
+    if (contrato) {
+      let m;
+      if (!fixo && /^CONTRATANTE\s*:/i.test(t) && !/CNPJ\s*28\.654/.test(t)) {
+        const cl = d.cliente;
+        if ((m = /CONTRATANTE\s*:\s*(.+?)\s*(?:,|\binscrit[oa]\b)/i.exec(t))) cl.nome = m[1].trim();
+        if ((m = /(?:CNPJ|CPF)\s*(?:sob\s*)?(?:n[º°o.]*\s*)?([\d./-]{11,})/i.exec(t))) cl.doc = m[1].replace(/[.,]$/, '');
+        if ((m = /(?:sediad[oa]|residente|domiciliad[oa]|localizad[oa])\s+n[ao]\s+(.+?),?\s+([A-Za-zÀ-ú' ]+\/[A-Z]{2})\s*,?\s*CEP\s*([\d.\-]+)/i.exec(t))) { cl.endereco = m[1].trim(); cl.cidade = m[2].trim(); cl.cep = m[3].replace(/\.(?=\d{3}-)/, ''); }
+        if ((m = /representad[oa]\s+pel[oa]\s+(?:senhor[a]?|sr\.?|sra\.?)\s+(.+?),\s*portador[a]?\s+d[oa]\s+(CPF|RG)\s*(?:n[º°o.]*\s*)?([\d.\-\/xX]+)/i.exec(t))) { cl.rep = m[1].trim(); cl.repDoc = m[2].toUpperCase() + ' ' + m[3].replace(/[.,]$/, ''); }
+        lidos.push('Contratante: ' + (cl.nome || '?')); continue;
+      }
+      if (/^CONTRATAD[AO]\s*:/i.test(t)) {
+        if ((m = /representad[oa]\s+pel[oa]\s+(?:senhor[a]?|sr\.?|sra\.?)\s+(.+?),\s*portador[a]?\s+d[oa]\s+(CPF|RG)\s*(?:n[º°o.]*\s*)?([\d.\-\/xX]+)/i.exec(t)) && !(config.rep || '').trim()) {
+          config.rep = m[1].trim(); config.repDoc = m[2].toUpperCase() + ' ' + m[3].replace(/[.,]$/, ''); salvarConfig(); lidos.push('Representante da RM');
+        }
+        continue;
+      }
+      if (/^Pelo presente instrumento/i.test(t)) {
+        if ((m = /realizad[oa]\s+n[ao]\s+(.+?)\s*,?\s+sob o regime/i.exec(t))) {
+          const e = m[1].trim(), mm = /^(.*),\s*([^,]+\/[A-Z]{2})$/.exec(e);
+          if (mm) { d.obra.endereco = mm[1].trim(); d.obra.cidade = mm[2].trim(); } else d.obra.endereco = e;
+          lidos.push('Endereço da obra');
+        }
+        continue;
+      }
+      if (i === 0 && /^CONTRATO\b/i.test(t)) { c.textos.titulo = frase(t); continue; }
+      if (/^1\.1\.?\s*(?=[A-Za-zÀ-ú])/.test(t)) { objeto = t.replace(/^1\.1\.?\s*/, ''); lidos.push('Objeto (1.1)'); sec = null; continue; }
+      if (/^1\.2\.?\s*(?=[A-Za-zÀ-ú])/.test(t)) continue;
+      if (/^1\.3\.?\s*(?=[A-Za-zÀ-ú])/.test(t)) { fixo = true; continue; }
+      if (/^2\.1\.?\s*(?=[A-Za-zÀ-ú])/.test(t)) {
+        c.textos.prazo = t.replace(/^2\.1\.?\s*/, '');
+        const dias = (t.match(/(\d+)\s*(?:\([^)]*\)\s*)?dias/g) || []).map(x => parseInt(x, 10)).filter(Boolean);
+        if (dias.length) { c.prazoDias = Math.max.apply(null, dias); d.prazoDias = c.prazoDias; }
+        lidos.push('Prazo (2.1)'); continue;
+      }
+      if (/^3\.1\.?\s*(?=[A-Za-zÀ-ú])/.test(t)) { const v = lerValoresDe(t); if (v) { d.valores = [{ etapa: 'Valor do contrato', valor: v, opcional: false, contrato: true }]; lidos.push('Valor do contrato'); } continue; }
+      if (/^(?:a\)\s*)?Entrada\s+de\s+R\$/i.test(t)) {
+        c.pag.entrada = lerValoresDe(t);
+        if ((m = /(\d{2})\/(\d{2})\/(\d{4})/.exec(t))) { c.pag.entradaData = m[3] + '-' + m[2] + '-' + m[1]; c.pag.inicio = maisMeses(c.pag.entradaData, 1, 1).slice(0, 7); }
+        lidos.push('Entrada'); continue;
+      }
+      if ((m = /^(?:[a-z]\)\s*)?(\d+|[a-zçêã ]+?)\s+parcelas?\s+mensa/i.exec(t))) {
+        const q = /^\d+$/.test(m[1]) ? +m[1] : NUM_EXT[m[1].trim().toLowerCase()];
+        if (q) c.pag.n = q;
+        const dd = /dia\s+(\d{1,2})/i.exec(t); if (dd) c.pag.dia = +dd[1];
+        lidos.push('Parcelas'); continue;
+      }
+      if (fixo) {
+        const dt = dataDoTexto(t); if (dt && /^[A-Za-zÀ-ú ]+(\/[A-Z]{2})?,\s*\d/.test(t)) { c.data = dt; d.data = dt; }
+        continue;
+      }
+    }
+    /* ---- títulos de seção ---- */
+    const s = secaoDe(t);
+    if (s) {
+      sec = s.k; grupo = null; compAtual = null;
+      if (s.k === 'compl') { compAtual = { item: s.nome, sit: 'incluso', det: '' }; comp.push(compAtual); }
+      if (s.k === 'obs' && contrato) fixo = false;
+      continue;
+    }
+    /* ---- linhas soltas, em qualquer lugar ---- */
+    let m;
+    if (/^Prezad[oa]s?\s+Senhor/i.test(t)) { d.tratamento = t.replace(/[;:,.\s]+$/, ''); continue; }
+    if (/^Atenciosamente/i.test(t)) continue;
+    if ((m = /^Valor\s+(?:total\s+)?(?:d[oa]s?\s+)?(.+?)\s+(n[ãa]o\s+inclus[oa]\s+no\s+valor\s+acima\s+)?R\$?\s*([\d.]+,\d{2})/i.exec(t))) {
+      let et = m[1].replace(/^(pisos?)\b/i, 'Piso').trim(); et = et.charAt(0).toUpperCase() + et.slice(1);
+      d.valores.push({ etapa: et, valor: lerValor(m[3]), opcional: !!m[2], contrato: true }); continue;
+    }
+    if ((m = /^Proposta\s+v[áa]lida\s+por\s+(\d+)\s+dias/i.exec(t))) { d.validade = +m[1]; continue; }
+    if (/^[A-Za-zÀ-ú ]+\/[A-Z]{2},\s*\d{1,2}\s+de\s/.test(t)) { const dt = dataDoTexto(t); if (dt) { d.data = dt; if (c) c.data = dt; } continue; }
+    if (/^[\d./-]{14,18}$/.test(t) || /^RM ESTRUTURAS/i.test(t) || /^\.{5,}$/.test(t) || /^_{5,}/.test(t) || /^Proposta de or[çc]amento$/i.test(t)) continue;
+    if (contrato && /^(CONTRATANTE|CONTRATAD[OA])\s*:/i.test(t)) continue;
+    /* ---- dentro das seções ---- */
+    if (sec === 'pre' || sec === 'met') {
+      if ((m = /^A seguir relacionamos.*?(?:\bd[oa]s?\s+(?:volume|pavilh[ãa]o)\s+d[oa]s?\s+|\bd[oa]s?\s+)([^:]+?)\s*:?\s*$/i.exec(t)) || /^A seguir relacionamos/i.test(t)) {
+        let tit = m && m[1] ? m[1].trim() : '';
+        if (/^(suas\s+)?dimens|quantidades$/i.test(tit)) tit = '';
+        grupo = sec === 'pre' ? { titulo: tit ? tit.charAt(0).toUpperCase() + tit.slice(1) : '', itens: [] } : { titulo: tit ? tit.charAt(0).toUpperCase() + tit.slice(1) : '', linhas: [] };
+        (sec === 'pre' ? d.pre : d.met).push(grupo); continue;
+      }
+      if (sec === 'pre') {
+        if ((m = /^(.*?)\s*\.{3,}\s*([\d.,]+)\s*([A-Za-z²³]*)\.?\s*$/.exec(t))) {
+          if (!grupo) { grupo = { titulo: '', itens: [] }; d.pre.push(grupo); }
+          grupo.itens.push({ desc: m[1].replace(/\s+/g, ' ').trim(), qtd: String(m[2]).replace(/^0+(?=\d)/, '').replace(/\.$/, ''), un: unidade(m[3]) }); continue;
+        }
+      } else if ((m = /^([^:]{3,60}):\s*(.+)$/.exec(t))) {
+        if (!grupo) { grupo = { titulo: '', linhas: [] }; d.met.push(grupo); }
+        grupo.linhas.push({ k: m[1].trim(), v: m[2].replace(/\.$/, '').trim() }); continue;
+      }
+    }
+    if (sec === 'fund') {
+      const o = t.search(/OBS\.?\s*:/i);
+      if (o >= 0) { if (o > 0) fundTxt.push(t.slice(0, o).trim()); fundObs = frase(t.slice(o).replace(/^OBS\.?\s*:\s*/i, '')); }
+      else fundTxt.push(t);
+      continue;
+    }
+    /* só a linha que diz incluso / não incluso / à parte é do item; outra
+       coisa logo depois do título não pode virar "incluso" calada */
+    if (sec === 'compl' && compAtual && /inclus|separadamente|[àa] parte/i.test(t)) {
+      if (/n[ãa]o\s+inclus/i.test(t)) compAtual.sit = 'nao';
+      else if (/separadamente|[àa] parte/i.test(t)) compAtual.sit = 'aparte';
+      else compAtual.sit = 'incluso';
+      const det = t.replace(/^[-–•]\s*/, '').replace(/\s*(inclus[oa]s?|n[ãa]o\s+inclus[oa]s?).*$/i, '').replace(/^(uma|um)\s+/i, '').trim();
+      if (det && det.toLowerCase() !== compAtual.item.toLowerCase() && det.length < 80 && !/^n[ãa]o$/i.test(det)) compAtual.det = det;
+      continue;
+    }
+    if (sec === 'resp') { resp.push(t); continue; }
+    if (sec === 'competencias') { compet.push('- ' + t.replace(/^[a-z]\)\s*/i, '').replace(/^[-–•]\s*/, '')); continue; }
+    if (sec === 'impostos') { impostos.push(t); continue; }
+    if (sec === 'prazo') {
+      if ((m = /^Prazo\s+de\s+(\d+)\s+dias\s*,?\s*(.*?)[;.]?$/i.exec(t))) { d.prazoDias = +m[1]; if (m[2]) d.textos.prazoTexto = m[2]; continue; }
+      if ((m = /^(\d+(?:,\d+)?)\s*%\s*(.+?)[;.]?$/.exec(t))) { const q = m[2].trim(); pagProp.push({ pct: lerValor(m[1]), quando: q.charAt(0).toUpperCase() + q.slice(1) }); continue; }
+      if (/^Prazo (para|de) (entrega|pagamento)/i.test(t)) continue;
+    }
+    if (!sec && !contrato) {
+      if (/^Atendendo/i.test(t)) { if ((m = /munic[íi]pio de\s+(.+?)(?:,|\s+conforme|\.)/i.exec(t))) { d.obra.cidade = m[1].trim(); lidos.push('Município da obra'); } continue; }
+      intro.push(t); continue;
+    }
+    if (contrato && (sec === 'obs' || sec === 'objeto' || sec === 'preco')) continue;
+    sobras.push(t);
+  }
+  /* o que se juntou ao longo do arquivo */
+  if (intro.length) { d.descricao = intro.join('\n'); lidos.push('Descrição'); }
+  if (fundTxt.length) d.textos.fundacoes = fundTxt.join('\n');
+  if (fundObs) d.textos.fundacoesObs = fundObs;
+  if (resp.length) d.textos.responsabilidade = resp.join('\n');
+  if (compet.length) d.textos.competencias = compet.join('\n');
+  if (impostos.length) d.textos.impostos = impostos.join('\n');
+  /* "Projeto + PPCI incluso" sob o título PROJETO: o detalhe é o nome mais
+     completo e fica no lugar; "Calha, algeroz e capa de muro" sob
+     SERRALHERIA E FUNILARIA é outra coisa e vai entre parênteses */
+  const primeira = s => (s.toLowerCase().match(/[a-zà-ú]+/) || [''])[0];
+  if (comp.length) d.comp = comp.map(x => {
+    const det = (x.det || '').replace(/[\s,]+(e|ou)$/i, '').trim();
+    if (!det) return { item: x.item, sit: x.sit };
+    if (primeira(det) === primeira(x.item)) return { item: det.charAt(0).toUpperCase() + det.slice(1), sit: x.sit };
+    return { item: x.item + ' (' + det.charAt(0).toLowerCase() + det.slice(1) + ')', sit: x.sit };
+  });
+  if (pagProp.length) d.pagProp = pagProp;
+  d.pre = d.pre.filter(g => g.itens.length);
+  d.met = d.met.filter(g => g.linhas.length);
+  if (!d.pre.length) d.pre = [{ titulo: '', itens: [{ desc: '', qtd: '', un: 'un' }] }];
+  if (!d.met.length) d.met = [{ titulo: '', linhas: MET_CAMPOS.map(k => ({ k, v: '' })) }];
+  if (!d.valores.length) d.valores = novoDoc().valores;
+  if (contrato) {
+    if (objeto) { c.textos.objeto = objeto; }
+    if (!c.prazoDias) c.prazoDias = d.prazoDias;
+    d.contrato = c; d.status = 'assinado';
+  }
+  const pecas = d.pre.reduce((s, g) => s + g.itens.filter(i => i.desc).length, 0);
+  if (pecas) lidos.push(pecas + ' peça(s) em ' + d.pre.length + ' volume(s)');
+  const ml = d.met.reduce((s, g) => s + g.linhas.filter(l => l.v).length, 0);
+  if (ml) lidos.push(ml + ' linha(s) da metálica');
+  if (comp.length) lidos.push(comp.length + ' item(ns) complementar(es)');
+  if (d.valores.some(v => v.valor)) lidos.push(d.valores.filter(v => v.valor).length + ' valor(es)');
+  if (pagProp.length) lidos.push(pagProp.length + ' parcela(s) da proposta');
+  return { doc: d, contrato, lidos, sobras };
+}
+async function importarWord(arquivo) {
+  let r;
+  try { r = interpretar(await lerDocx(await arquivo.arrayBuffer())); }
+  catch (e) { avisoTopo('Não consegui ler o Word: ' + (e && e.message || e)); return null; }
+  const d = r.doc;
+  docs[d.id] = d; aba = r.contrato ? 'contrato' : 'proposta';
+  abrir(d.id); alterou(d, true);
+  $('modalTxt').innerHTML = '<b>' + (r.contrato ? 'Contrato importado' : 'Proposta importada') + ' de "' + esc(arquivo.name) + '"</b>'
+    + '<div class="imp-l">Lido: ' + esc(r.lidos.join(' · ') || 'nada reconhecido') + '</div>'
+    + (r.contrato ? '<div class="imp-l">As cláusulas fixas são as do padrão do sistema.</div>' : '')
+    + (r.sobras.length ? '<div class="imp-l"><b>Confira</b> — ' + r.sobras.length + ' trecho(s) não reconhecido(s), não entraram:</div><ul class="imp-s">' + r.sobras.slice(0, 12).map(s => '<li>' + esc(s.length > 140 ? s.slice(0, 140) + '…' : s) + '</li>').join('') + '</ul>' : '<div class="imp-l">Tudo reconhecido.</div>');
+  $('modalNao').style.display = 'none'; $('modalSim').textContent = 'Conferir';
+  $('modal').classList.add('on');
+  $('modalSim').onclick = () => { $('modal').classList.remove('on'); $('modalNao').style.display = ''; $('modalSim').textContent = 'Confirmar'; };
+  return r;
+}
+$('btnImportar').addEventListener('click', () => $('arqWord').click());
+$('arqWord').addEventListener('change', async e => { const f = e.target.files[0]; e.target.value = ''; if (f) await importarWord(f); });
+
+window.__prop = { lerDocx, interpretar, importarWord, novoDoc, novoContrato, normalizar, blocosProposta, blocosContrato, blocosHTML, extenso, totalProposta, totalContrato, parcelasContrato, avisos, docxBytes, lerValor,
   docs: () => docs, abrir, config: () => config };
 
 document.querySelectorAll('img.rm-logo,img.f-logo').forEach(i => { i.src = LOGO; });
@@ -4650,7 +4945,7 @@ if ('serviceWorker' in navigator) {
 })();
 </script>
 <script>/* versão publicada (PADRAO_RM.md §3): sobe a cada publicação, junto com o CACHE do sw.js */
-const APP_VER='v2';
+const APP_VER='v3';
 </script>
 <script id="rmVersaoBloco">
 /* ===== SELO DE VERSÃO — igual em todos os sistemas (PADRAO_RM.md §3) =====
