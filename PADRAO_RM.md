@@ -138,6 +138,12 @@ embutido e no de arquivo (`rm-logo.svg`), teste `logo-em-arquivo-no-escuro`.
   `AAAA-MM-DD` vira objeto com `rmDataDe(iso)`. `new Date().toISOString()`
   é o dia de Londres -- aqui vira amanhã às 21h -- e `new Date('AAAA-MM-DD')`
   é o dia anterior aqui. O verificador recusa o primeiro.
+- **Lista de sugestões** (escolher peça, obra, pessoa já cadastrada): sempre a
+  do Recibos -- cartões claros presos embaixo do campo, o item em destaque no
+  tom da marca, setas e Enter --, nunca a lista preta do navegador. Basta o
+  `<input list="...">` com o `<datalist>`: o bloco comum
+  `comum/lista-suspensa.html` troca o desenho sozinho em todos os sistemas
+  (teste `lista-suspensa-padrao`).
 - **Contraste e toque:** texto a 4,5:1 (3:1 no grande), botão com pelo menos
   24 px de área de toque, no claro e no escuro (teste `contraste-toque`).
 - **Cor só pelo tema** (o escuro é derivado do claro, e só alcança o que está
