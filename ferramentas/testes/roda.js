@@ -6060,6 +6060,41 @@ teste('recibos-conferencia-cabe-na-tela', async (b, t) => {
   await ctx.close();
 });
 
+teste('recibos-ficha-acompanha-a-linha', async (b, t) => {
+  // Salários: a ficha (detalhe do pagamento/adiantamento) abria no alto da
+  // tabela -- a folha (.sheet) com overflow:hidden anulava o sticky -- e quem
+  // clicava num nome lá embaixo não via a ficha. E com o sticky de volta, o
+  // nome da pessoa não pode ficar atrás da barra do alto.
+  if (!fs.existsSync(path.join(RAIZ, 'recibos_rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'recibos_rm' }, 'index.html', { relogio: '2026-10-17T12:00:00-03:00', fuso: 'America/Sao_Paulo', viewport: { width: 1600, height: 820 } });
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    const l = document.getElementById('loginScreen'); if (l) l.style.setProperty('display', 'none', 'important');
+    state.employees = Array.from({ length: 48 }, (_, i) => ({ id: 'fx' + i, nome: 'PESSOA ' + String(i + 1).padStart(2, '0') + ' TESTE', funcao: 'Auxiliar', docTipo: 'CPF', doc: '', status: 'ativo',
+      salario: 2500 + i, metodo: 'banco', emprestimos: [], historicoSalario: [], historicoFuncao: [], fichasEpi: [], folhaExtra: [] }));
+    document.querySelector('.vtab[data-v="sal"]').click(); await esp(400);
+    const barra = () => document.querySelector('.appbar').getBoundingClientRect().bottom;
+    const mede = async (tr) => {
+      tr.querySelector('td:nth-child(2)').click(); await esp(300);
+      const f = document.getElementById('salFicha').getBoundingClientRect(), l = tr.getBoundingClientRect(), nome = document.getElementById('fichaNome').getBoundingClientRect();
+      return { fichaTopo: Math.round(f.top), fichaBase: Math.round(f.bottom), nomeTopo: Math.round(nome.top), barra: Math.round(barra()), linha: [Math.round(l.top), Math.round(l.bottom)], vh: innerHeight };
+    };
+    const trs = () => [...document.querySelectorAll('#salBody tr[data-sficha]')];
+    window.scrollTo(0, document.documentElement.scrollHeight); await esp(150);
+    const fim = await mede(trs()[46]);
+    fecharFicha(); await esp(100);
+    const meio = trs()[24]; meio.scrollIntoView({ block: 'center' }); await esp(150);
+    const noMeio = await mede(meio);
+    return { fim, noMeio };
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  const vis = m => m && m.nomeTopo >= m.barra && m.fichaTopo < m.vh && m.linha[0] >= m.barra && m.linha[1] <= m.vh;
+  t.ok('clicando numa das últimas linhas, a ficha aparece na tela, com o nome à vista, junto da linha', !r.erro && vis(r.fim), J);
+  t.ok('clicando no meio da lista, a ficha fica logo abaixo da barra, ao lado da linha', !r.erro && vis(r.noMeio) && r.noMeio.fichaTopo - r.noMeio.barra <= 20, J);
+  t.ok('sem erro na página', !erros.length, J);
+  await ctx.close();
+});
+
 teste('recibos-contabilidade-mes-anterior', async (b, t) => {
   // O relatório para a contabilidade abria o "adiantamento pago no mês" no mês
   // corrente: no dia 2 de outubro, outubro -- que ainda não teve adiantamento.
