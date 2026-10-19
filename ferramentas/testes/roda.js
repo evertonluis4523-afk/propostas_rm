@@ -7423,8 +7423,9 @@ teste('contas-anexos-na-nuvem', async (b, t) => {
 });
 
 teste('contas-link-curto', async (b, t) => {
-  // o link do acompanhamento leva o nome da conta do GitHub no endereço. Com
-  // um link curto salvo nas configurações, o Copiar e o WhatsApp mandam ele.
+  // o link do acompanhamento levava o nome da conta do GitHub no endereço:
+  // agora sai pelo Cloudflare, sem ele. Com um link curto salvo nas
+  // configurações, o Copiar e o WhatsApp mandam o curto.
   if (!fs.existsSync(path.join(RAIZ, 'rm_contas'))) return;
   const { ctx, pg, erros } = await abre(b, { 'sis.local': 'rm_contas' });
   await semLogin(pg);
@@ -7433,13 +7434,15 @@ teste('contas-link-curto', async (b, t) => {
     let aberto = ''; window.open = (u) => { aberto = decodeURIComponent(u); return null; };
     acompAbrirJanela(); const antes = acompUrlEnvio();
     document.getElementById('acompCurto').value = 'https://evertonluis4523-afk.github.io/rm_contas/aberto.html'; acompSalvaCurto();
+    document.getElementById('acompCurto').value = 'https://rm-estruturas.pages.dev/rm_contas/aberto.html'; acompSalvaCurto();
     const recusou = acompUrlEnvio() === antes;
     document.getElementById('acompCurto').value = 'https://tinyurl.com/rm-teste'; acompSalvaCurto();
     acompLink('whats');
     return { antes, recusou, depois: acompUrlEnvio(), tela: document.getElementById('acompUrl').textContent, aberto, grav };
   }).catch(e => ({ erro: e.message }));
   const J = JSON.stringify(r) + ' ' + erros.join(' | ');
-  t.ok('sem link curto, envia o endereço de sempre; o próprio endereço do GitHub não vale como curto', !r.erro && /github\.io/.test(r.antes) && r.recusou, J);
+  t.ok('sem link curto, envia o endereço do Cloudflare, sem o nome da conta do GitHub', !r.erro && r.antes === 'https://rm-estruturas.pages.dev/rm_contas/aberto.html' && !/evertonluis/.test(r.antes), J);
+  t.ok('o próprio endereço do site (GitHub ou Cloudflare) não vale como curto', !r.erro && r.recusou, J);
   t.ok('com o link curto salvo (nas configurações da nuvem), a janela e o WhatsApp usam ele', !r.erro && r.depois === 'https://tinyurl.com/rm-teste' && r.tela === r.depois
     && /tinyurl\.com\/rm-teste/.test(r.aberto) && !/github\.io/.test(r.aberto) && r.grav.some(g => g[0] === 'contas_pagar' && g[1] === 'https://tinyurl.com/rm-teste') && !erros.length, J);
   await ctx.close();
@@ -11148,6 +11151,16 @@ teste('central-site-de-origem', async (b, t) => {
   if (!fs.existsSync(path.join(RAIZ, 'central_rm', 'migra.html'))) return;
   const { ctx, pg, erros } = await abre(b, { 'sis.local': 'central_rm' });
   const r = await pg.evaluate(() => ({ contas: (BASE_SYSTEMS.find(s => s.id === 'contas') || {}).url, epi: (document.getElementById('tl-epi-url') || {}).textContent }));
+  /* sistema renomeado no lápis quando tudo morava no github.io: o endereço
+     gravado junto não pode prender o sistema no GitHub */
+  const lapis = await pg.evaluate(() => {
+    CURRENT_EMAIL = 'evertonluis4523@gmail.com';
+    localStorage.setItem('rm_overrides', JSON.stringify({ contas: { name: 'Contas X', url: 'https://evertonluis4523-afk.github.io/rm_contas/' },
+      cheques: { url: 'https://rm-estruturas.pages.dev/controle_cheques/' }, compras: { url: 'https://outro.exemplo.com/compras/' } }));
+    const u = id => (allSystems(true).find(s => s.id === id) || {}).url;
+    const o = { contas: u('contas'), nome: (allSystems(true).find(s => s.id === 'contas') || {}).name, cheques: u('cheques'), compras: u('compras') };
+    localStorage.removeItem('rm_overrides'); return o;
+  }).catch(e => ({ erro: e.message }));
   await ctx.close();
   // chegada da passagem: grava só preferência, limpa o endereço e não repete
   const dados = Buffer.from(JSON.stringify({ rm_tema: 'escuro', rm_fundo: 'trelica', 'rm_density:pessoa@exemplo.com': 'compacta', recibos_rm_dados: 'NAO', rm_senha: 'NAO' })).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
@@ -11169,8 +11182,11 @@ teste('central-site-de-origem', async (b, t) => {
   await c4.waitForTimeout(800); foiPara = c4.url(); await c4ctx.close();
   const levou = (/#rm-migra=([^&]*)/.exec(foiPara) || [])[1] || '';
   const conteudo = levou ? JSON.parse(Buffer.from(levou.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8')) : {};
-  const J = JSON.stringify({ r, chegou, recusou, foiPara: foiPara.slice(0, 120), conteudo });
-  t.ok('sistemas e o link da Ficha de EPI no endereço em que a Central abriu', r.contas === 'http://sis.local/rm_contas/' && r.epi === 'http://sis.local/recibos_rm/epi.html', J);
+  const J = JSON.stringify({ r, lapis, chegou, recusou, foiPara: foiPara.slice(0, 120), conteudo });
+  t.ok('sistema editado no lápis com endereço antigo abre pelo site da Central; endereço de fora fica', lapis.contas === 'http://sis.local/rm_contas/' && lapis.nome === 'Contas X'
+    && lapis.cheques === 'http://sis.local/controle_cheques/' && lapis.compras === 'https://outro.exemplo.com/compras/', J);
+  t.ok('sistemas abrem no endereço em que a Central abriu', r.contas === 'http://sis.local/rm_contas/', J);
+  t.ok('link da Ficha de EPI enviado sempre pelo Cloudflare, sem o nome da conta do GitHub', r.epi === 'https://rm-estruturas.pages.dev/recibos_rm/epi.html', J);
   t.ok('chegada: grava tema, fundo e preferência da conta; dado de sistema e senha não', chegou.tema === 'escuro' && chegou.fundo === 'trelica' && chegou.dens === 'compacta' && !chegou.dado && !chegou.senha, J);
   t.ok('chegada: marca como feita e limpa o endereço', chegou.feito === '1' && !chegou.hash, J);
   t.ok('a página do endereço antigo não manda nada para fora do site da RM', /inválido/.test(recusou.txt) && /sis\.local/.test(recusou.url), J);

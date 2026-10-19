@@ -318,7 +318,15 @@ Tudo que imprime segue a mesma papelaria:
   - No endereço novo, a Central traz uma vez as preferências do antigo
     (`central_rm/migra.html`): só aparência e organização da tela, nunca dado
     de sistema; a volta só vai para o site da RM.
-  - Testes `site-unico-montagem`, `programa-duas-fontes`, `central-site-de-origem`.
+  - Endereço gravado de um dos dois sites (o lápis da Central grava o
+    endereço inteiro) vale pelo caminho: abre do mesmo site da Central.
+  - **Link que vai para outra pessoa** (Copiar, WhatsApp, link de instalação)
+    sai **sempre** pelo principal, nunca montado de `location`: o endereço do
+    GitHub leva o nome da conta (parecido com o e-mail) e aparece na prévia
+    do WhatsApp. Hoje: Ficha de EPI (Central) e Contas em aberto (Contas a
+    Pagar).
+  - Testes `site-unico-montagem`, `programa-duas-fontes`, `central-site-de-origem`,
+    `contas-link-curto`.
 - Os blocos comuns ficam **copiados dentro de cada index.html** (não num
   arquivo carregado de fora): a cópia offline do programa instalado baixa só o
   index.html, e um arquivo compartilhado com defeito derrubaria todos os
