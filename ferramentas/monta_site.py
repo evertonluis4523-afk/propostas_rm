@@ -78,6 +78,12 @@ def monta(raiz, destino):
         os.makedirs(os.path.join(destino, s))
         copia(origem, os.path.join(destino, s))
         lista[s] = {'versao': versao_de(origem), 'commit': commit_de(origem)}
+    # página de instalação do programa num endereço curto (/instalar/), sem o
+    # nome da conta do GitHub no link que se envia
+    inst = os.path.join(raiz, 'central_rm', 'instalar.html')
+    if os.path.isfile(inst):
+        os.makedirs(os.path.join(destino, 'instalar'))
+        shutil.copy2(inst, os.path.join(destino, 'instalar', 'index.html'))
     # a raiz abre a Central
     with open(os.path.join(destino, 'index.html'), 'w', encoding='utf-8') as f:
         f.write('<!doctype html><html lang="pt-BR"><head><meta charset="utf-8">'
