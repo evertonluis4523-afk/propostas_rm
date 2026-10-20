@@ -80,6 +80,10 @@ embutido e no de arquivo (`rm-logo.svg`), teste `logo-em-arquivo-no-escuro`.
   nuvem.
 - **Fonte:** Satoshi, embutida no próprio HTML (`@font-face` com data URI).
   Nenhuma fonte de fora (Google Fonts etc.).
+  Única exceção: a **folha** do Propostas e Contratos (proposta/contrato no
+  papel) pode sair em Arial, a fonte dos documentos de orçamento e contrato,
+  por escolha em Configurações (o padrão continua Satoshi). A Arial é a do
+  computador, não se embute. O Word desses documentos é sempre Arial.
 - **Barra do alto:** 52 px de altura em todos os sistemas (bloco "A BARRA DO
   ALTO TEM UMA ALTURA SO'"). Título do sistema à esquerda, selo de versão ao lado.
 - **Selo de versão:** `const APP_VER='vNN'` no script + bloco idêntico

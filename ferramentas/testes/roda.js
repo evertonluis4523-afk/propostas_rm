@@ -11035,6 +11035,10 @@ teste('propostas-tipo-chave-na-mao', async (b, t) => {
     const desceu = p.comp.map(x => x.item);
     document.querySelector('#ficha [data-acao="compUp"][data-i="2"]').click(); await esp(50);
     o.ordem = { antes, desceu, subiu: p.comp.map(x => x.item) };
+    /* as setas ficam empilhadas numa coluna estreita: o nome do item fica com o espaço */
+    const sec = [...document.querySelectorAll('#ficha details.sec')].find(x => /Itens complementares/.test(x.querySelector('summary').textContent)); sec.open = true; await esp(30);
+    const lin = document.querySelector('#ficha .l-comp'), up = lin.querySelector('[data-acao="compUp"]').getBoundingClientRect(), dn = lin.querySelector('[data-acao="compDown"]').getBoundingClientRect(), it = lin.querySelector('[data-p$=".item"]').getBoundingClientRect();
+    o.setas = { larg: Math.round(Math.max(up.right, dn.right) - Math.min(up.left, dn.left)), empilhadas: dn.top >= up.bottom - 1 && Math.abs(dn.left - up.left) < 1, item: Math.round(it.width), linha: Math.round(lin.getBoundingClientRect().width) };
     return o;
   }, PROP_FICT).catch(e => ({ erro: e.message }));
   const J = JSON.stringify(r).slice(0, 2500) + ' ' + erros.join(' | ');
@@ -11049,6 +11053,8 @@ teste('propostas-tipo-chave-na-mao', async (b, t) => {
   t.ok('cortesia: a etapa sai como brinde e o valor fica fora do total (e do contrato)', !r.erro && r.cortesia.total === 693010 && r.cortesia.folha && r.cortesia.contrato === 816510, J);
   const o2 = r.ordem || {};
   t.ok('itens complementares sobem e descem', !r.erro && o2.desceu[0] === o2.antes[1] && o2.desceu[1] === o2.antes[0] && o2.subiu[1] === o2.antes[2] && o2.subiu[2] === o2.antes[0] && !erros.length, J);
+  const st = r.setas || {};
+  t.ok('setas de subir e descer empilhadas numa coluna estreita (o item fica com o espaço)', !r.erro && st.empilhadas && st.larg <= 20 && st.item >= st.linha - 70, J);
   await ctx.close();
 });
 
@@ -11170,6 +11176,61 @@ teste('propostas-contrato-chave', async (b, t) => {
   t.ok('contrato padrão continua como era', !r.erro && r.padrao.semGarantia && r.padrao.multa && r.padrao.semPf, J);
   t.ok('cliente pessoa física: nacionalidade, profissão, estado civil e RG no contrato', !r.erro && r.chave.pf, J);
   t.ok('dados bancários das Configurações saem no contrato, nos dois tipos', !r.erro && r.banco && r.banco.banco === 'Banco Exemplo' && r.chave.banco && r.padrao.banco && !erros.length, J);
+  await ctx.close();
+});
+
+teste('propostas-mudar-tipo', async (b, t) => {
+  // o cliente pediu chave na mão no meio da negociação (ou desistiu dela):
+  // a proposta muda de tipo sem recomeçar, a versão de antes pode ficar nas
+  // revisões, e o contrato já gerado troca só as cláusulas não mexidas.
+  if (!fs.existsSync(path.join(RAIZ, 'propostas_rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'propostas_rm' });
+  await semLogin(pg);
+  const r = await pg.evaluate(async (FICT) => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    if (!document.getElementById('btnTipo')) return { semRecurso: true };
+    await iniciarApp();
+    const folha = () => document.getElementById('folha').textContent.replace(/\s+/g, ' ');
+    const secoes = () => [...document.querySelectorAll('#ficha details.sec summary')].map(x => x.textContent);
+    const m = modeloAtual(), difs = Object.keys(m.contrato).filter(k => m.contrato[k] !== m.contratoChave[k]);
+    const o = { difs: difs.length };
+    const d = eval(FICT); d.numero = '2026-031'; docs[d.id] = d; abrir(d.id); await esp(50);
+    const total0 = totalProposta(d);
+    d.contrato = novoContrato(d); const kMao = difs[0]; d.contrato.textos[kMao] = 'Cláusula escrita à mão.'; alterou(d, true); await esp(50);
+    o.rot1 = document.getElementById('btnTipo').textContent;
+    document.getElementById('btnTipo').click(); await esp(30);
+    o.pergunta = document.getElementById('modalTxt').textContent.replace(/\s+/g, ' ');
+    o.guardaMarcado = document.getElementById('tipoGuarda').checked;
+    document.getElementById('modalSim').click(); await esp(120);
+    o.chave = { tipo: d.tipo, cliente: d.cliente.nome, total: totalProposta(d) === total0, servicos: d.cnm.itens.length === CNM_NOVA.length, rev: d.rev,
+      revTipo: JSON.parse(d.revisoes[0].json).tipo, mao: d.contrato.textos[kMao], trocou: difs.slice(1).every(k => d.contrato.textos[k] === m.contratoChave[k]),
+      secao: secoes().some(x => /Chave na mão/.test(x)), titulo: document.getElementById('docTitulo').textContent, rot2: document.getElementById('btnTipo').textContent };
+    /* volta para o padrão pela caixa Tipo da ficha, sem guardar revisão */
+    d.cnm.itens[0].valor = 5000; alterou(d, true); await esp(50);
+    const total1 = totalProposta(d);
+    const sel = document.querySelector('#ficha [data-p="tipo"]'); sel.value = 'padrao'; sel.dispatchEvent(new Event('input', { bubbles: true })); await esp(30);
+    o.selFicou = sel.value;
+    document.getElementById('tipoGuarda').checked = false;
+    document.getElementById('modalSim').click(); await esp(120);
+    o.padrao = { tipo: d.tipo, rev: d.rev, nRev: d.revisoes.length, guardado: d.cnm.itens[0].valor, total: totalProposta(d) === total0 && total1 > total0,
+      mao: d.contrato.textos[kMao], voltou: difs.slice(1).every(k => d.contrato.textos[k] === m.contrato[k]), semSecao: !secoes().some(x => /Chave na mão/.test(x)) };
+    /* voltar à Rev. 0 (padrão) estando em chave na mão: o contrato acompanha */
+    document.getElementById('btnTipo').click(); await esp(30); document.getElementById('tipoGuarda').checked = false; document.getElementById('modalSim').click(); await esp(120);
+    o.servicosVoltaram = d.tipo === 'chave' && d.cnm.itens[0].valor === 5000;
+    document.querySelector('#ficha [data-revvolta="0"]').click(); await esp(30); document.getElementById('modalSim').click(); await esp(120);
+    o.rev0 = { tipo: d.tipo, contrato: difs.slice(1).every(k => d.contrato.textos[k] === m.contrato[k]), mao: d.contrato.textos[kMao] };
+    document.getElementById('abaContrato').click(); await esp(150);
+    o.folhaPadrao = !/4\.12\./.test(folha());
+    return o;
+  }, PROP_FICT).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  if (r.semRecurso) { t.ok('proposta muda de tipo sem recomeçar', false, 'sem o botão de mudar o tipo'); await ctx.close(); return; }
+  const c = r.chave || {}, p = r.padrao || {};
+  t.ok('botão "Passar para chave na mão", que pergunta antes e oferece guardar a versão de agora', !r.erro && r.rot1 === '⇄ Passar para chave na mão' && /Nada se recomeça/.test(r.pergunta) && r.guardaMarcado, J);
+  t.ok('padrão → chave na mão: cliente e valores ficam, entram os serviços, a versão padrão vira a Rev. 0', !r.erro && c.tipo === 'chave' && c.cliente === 'Cliente Fictício Ltda' && c.total && c.servicos && c.rev === 1 && c.revTipo === 'padrao' && c.secao && /chave na mão 2026-031 · Rev\. 1|chave na mão.*Rev\. 1/i.test(c.titulo) && c.rot2 === '⇄ Passar para padrão', J);
+  t.ok('contrato já gerado: troca as cláusulas não mexidas e mantém a escrita à mão (e avisa)', !r.erro && r.difs > 1 && c.trocou && c.mao === 'Cláusula escrita à mão.' && /cláusula que você mudou à mão fica como estava/.test(r.pergunta), J);
+  t.ok('chave na mão → padrão pela caixa Tipo: pergunta, serviços guardados sem somar, sem revisão nova quando desmarcado', !r.erro && r.selFicou === 'chave' && p.tipo === 'padrao' && p.rev === 1 && p.nRev === 1 && p.guardado === 5000 && p.total && p.voltou && p.mao === 'Cláusula escrita à mão.' && p.semSecao && r.servicosVoltaram, J);
+  t.ok('voltar a uma revisão do outro tipo leva o contrato junto', !r.erro && r.rev0 && r.rev0.tipo === 'padrao' && r.rev0.contrato && r.rev0.mao === 'Cláusula escrita à mão.' && r.folhaPadrao && !erros.length, J);
   await ctx.close();
 });
 
@@ -11468,9 +11529,12 @@ teste('propostas-importa-word', async (b, t) => {
 });
 
 teste('propostas-tamanho-da-letra', async (b, t) => {
-  // a arquiteta achou a letra pequena no papel: a "Normal" ficou 15% maior e
-  // há o ajuste em Configurações, que vale para tela, PDF e Word. O timbrado
-  // continua no tamanho do padrão.
+  // a arquiteta achou a letra pequena no papel: há o ajuste em Configurações,
+  // que vale para tela, PDF e Word. Cada opção mostra o número de verdade
+  // (pt do texto corrido), e o PDF e o Word saem com esse mesmo número --
+  // antes eram 8,6 pt no PDF e 11 pt no Word na "Normal". O timbrado
+  // continua no tamanho do padrão. A fonte da folha pode ser a Arial dos
+  // documentos (configuração, não regra); o Word é sempre Arial.
   if (!fs.existsSync(path.join(RAIZ, 'propostas_rm'))) return;
   const { ctx, pg, erros } = await abre(b, { 'sis.local': 'propostas_rm' });
   await semLogin(pg);
@@ -11482,23 +11546,39 @@ teste('propostas-tamanho-da-letra', async (b, t) => {
     const partes = u => { const out = {}; const dv = new DataView(u.buffer); let p = 0;
       while (p + 30 < u.length && dv.getUint32(p, true) === 0x04034b50) { const n = dv.getUint16(p + 26, true), tam = dv.getUint32(p + 18, true);
         out[new TextDecoder().decode(u.slice(p + 30, p + 30 + n))] = new TextDecoder().decode(u.slice(p + 30 + n, p + 30 + n + tam)); p += 30 + n + tam; } return out; };
-    const normal = { p: px('#folha .f-p'), tb2: px('#folhaPapel .tb2') };
+    const fam = () => getComputedStyle(document.querySelector('#folha .f-p')).fontFamily;
+    const normal = { p: px('#folha .f-p'), tb2: px('#folhaPapel .tb2'), fam: fam() };
     const w1 = partes(await docxBytes(blocosProposta(d)));
     document.getElementById('btnModelo').click(); await esp(50);
     const opcoes = [...document.querySelectorAll('#cfgLetra [data-letra]')].map(x => x.dataset.letra + (x.classList.contains('on') ? '*' : ''));
+    const rotulos = [...document.querySelectorAll('#cfgLetra [data-letra]')].map(x => x.textContent.replace(/\s+/g, ' ').trim());
+    const fontes = [...document.querySelectorAll('#cfgFonte [data-fonte]')].map(x => x.dataset.fonte + (x.classList.contains('on') ? '*' : ''));
     document.querySelector('#cfgLetra [data-letra="grande"]').click(); await esp(30);
     const previa = px('#folha .f-p');
+    document.querySelector('#cfgFonte [data-fonte="arial"]').click(); await esp(30);
+    const previaFonte = fam();
     document.getElementById('modeloSalvar').click(); await esp(50);
-    const grande = { p: px('#folha .f-p'), tb2: px('#folhaPapel .tb2'), cfg: config.letra, guardado: JSON.parse(localStorage.getItem('rm_propostas_v1')).config.letra };
+    const salvo = JSON.parse(localStorage.getItem('rm_propostas_v1')).config;
+    const grande = { p: px('#folha .f-p'), tb2: px('#folhaPapel .tb2'), cfg: config.letra, guardado: salvo.letra, fonte: config.fonte, fonteGuardada: salvo.fonte, fam: fam() };
     const w2 = partes(await docxBytes(blocosProposta(d)));
     const sz = x => (/<w:rPrDefault><w:rPr>.*?<w:sz w:val="(\d+)"/.exec(x) || [])[1];
-    return { normal, opcoes, previa, grande, docNormal: sz(w1['word/styles.xml']), docGrande: sz(w2['word/styles.xml']), cabGrande: /w:val="15"/.test(w2['word/header1.xml']) };
+    /* volta para a Satoshi */
+    document.getElementById('btnModelo').click(); await esp(50);
+    const marcadaArial = document.querySelector('#cfgFonte [data-fonte="arial"]').classList.contains('on');
+    document.querySelector('#cfgFonte [data-fonte="rm"]').click(); document.getElementById('modeloSalvar').click(); await esp(50);
+    return { normal, opcoes, rotulos, fontes, previa, previaFonte, grande, marcadaArial, voltou: fam(), docNormal: sz(w1['word/styles.xml']), docGrande: sz(w2['word/styles.xml']),
+      arialWord: /w:ascii="Arial"/.test(w1['word/styles.xml']) && /w:ascii="Arial"/.test(w2['word/styles.xml']), cabGrande: /w:val="15"/.test(w2['word/header1.xml']) };
   }, PROP_FICT).catch(e => ({ erro: e.message }));
   const J = JSON.stringify(r);
-  t.ok('letra Normal 15% maior que a primeira versão (10 px → 11,5 px)', !r.erro && Math.abs(r.normal.p - 11.5) < 0.05, J);
-  t.ok('Configurações: Pequena, Normal (marcada), Grande, Muito grande', r.opcoes && r.opcoes.join() === 'pequena,normal*,grande,maior', J);
-  t.ok('escolher já mostra na folha; salvar grava para todos', Math.abs(r.previa - 13) < 0.05 && Math.abs(r.grande.p - 13) < 0.05 && r.grande.cfg === 'grande' && r.grande.guardado === 'grande', J);
-  t.ok('o Word acompanha (19 → 22 → 25 meios-pontos); o timbrado não muda', r.docNormal === '22' && r.docGrande === '25' && r.cabGrande && r.normal.tb2 === 9 && r.grande.tb2 === 9, J);
+  const g = r.grande || {};
+  t.ok('letra Normal: texto de 10 pt no papel (13,33 px)', !r.erro && Math.abs(r.normal.p - 13.333) < 0.05, J);
+  t.ok('Configurações: Pequena, Normal (marcada), Grande, Muito grande, cada uma com o número em pt', r.opcoes && r.opcoes.join() === 'pequena,normal*,grande,maior'
+    && r.rotulos.join('|') === 'Pequenatexto 9 pt|Normaltexto 10 pt · recomendada|Grandetexto 11 pt|Muito grandetexto 12 pt', J);
+  t.ok('escolher já mostra na folha; salvar grava para todos (Grande = 11 pt = 14,67 px)', Math.abs(r.previa - 14.667) < 0.05 && Math.abs(g.p - 14.667) < 0.05 && g.cfg === 'grande' && g.guardado === 'grande', J);
+  t.ok('o Word sai no mesmo pt do PDF (20 → 22 meios-pontos); o timbrado não muda', r.docNormal === '20' && r.docGrande === '22' && r.cabGrande && r.normal.tb2 === 9 && g.tb2 === 9, J);
+  t.ok('fonte da folha: Satoshi (marcada) ou Arial; Arial grava e vale na folha; volta para a Satoshi', r.fontes && r.fontes.join() === 'rm*,arial' && /Satoshi/.test(r.normal.fam)
+    && /^Arial/.test(r.previaFonte) && /^Arial/.test(g.fam) && g.fonte === 'arial' && g.fonteGuardada === 'arial' && r.marcadaArial && /Satoshi/.test(r.voltou), J);
+  t.ok('o Word continua em Arial', r.arialWord, J);
   t.ok('sem erro na página', !erros.length, erros.join(' | '));
   await ctx.close();
 });
