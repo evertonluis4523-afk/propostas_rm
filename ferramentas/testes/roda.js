@@ -10789,6 +10789,58 @@ const PROP_FICT = `(() => {
   return d;
 })()`;
 
+teste('propostas-salvos', async (b, t) => {
+  // a tela abria sempre na última proposta mexida. Agora abre limpa, com as
+  // propostas e os contratos salvos em dois blocos; clicar abre para editar,
+  // "Salvar e fechar" volta para a lista; proposta nova deixada em branco
+  // não vira item salvo.
+  if (!fs.existsSync(path.join(RAIZ, 'propostas_rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'propostas_rm' }, 'index.html', { antes: () => { try {
+    const v = (etapa, valor) => ({ etapa, valor, opcional: false, contrato: true });
+    const docs = {
+      p1: { id: 'p1', numero: '2026-001', status: 'negociacao', alterado: 3, data: '2026-10-01', cliente: { nome: 'Cliente Um Teste' }, obra: { cidade: 'Cidade A/RS' }, valores: [v('Pré-fabricado', 1000)] },
+      p2: { id: 'p2', numero: '2026-002', status: 'assinado', alterado: 2, data: '2026-09-01', cliente: { nome: 'Cliente Dois Teste' }, obra: { cidade: 'Cidade B/RS' }, valores: [v('Metálica', 2500)], contrato: { data: '2026-09-20' } },
+      p3: { id: 'p3', numero: '2026-003', status: 'perdida', alterado: 1, data: '2026-08-01', cliente: { nome: 'Cliente Tres Teste' }, obra: { cidade: 'Cidade C/RS' }, valores: [v('Fundações', 300)] } };
+    localStorage.setItem('rm_propostas_v1', JSON.stringify({ docs, pendentes: {}, config: {} }));
+    localStorage.setItem('rm_propostas_v1_aberto', 'p1');
+  } catch (e) {} } });
+  await semLogin(pg);
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    if (!document.getElementById('inicio')) return { semRecurso: true };
+    await iniciarApp(); await esp(50);
+    const vis = id => { const e = document.getElementById(id); return !!e && e.getClientRects().length > 0; };
+    const itens = id => [...document.querySelectorAll('#' + id + ' .salvo')].map(x => x.querySelector('.s-nome').textContent);
+    const o = {};
+    o.inicio = { aberta: atualId, salvos: vis('inicio'), ficha: vis('ficha'), props: itens('listaProp'), conts: itens('listaCont'), n: [document.getElementById('nProp').textContent, document.getElementById('nCont').textContent] };
+    document.querySelector('#listaCont .salvo').click(); await esp(50);
+    o.abriuContrato = { id: atualId, aba, salvos: vis('inicio'), ficha: vis('ficha') };
+    document.getElementById('btnFechar').click(); await esp(50);
+    o.fechou = { id: atualId, salvos: vis('inicio') };
+    document.getElementById('iniNova').click(); await esp(50);
+    const nova = atualId;
+    document.getElementById('btnFechar').click(); await esp(50);
+    o.branco = { descartada: !docs[nova], n: Object.keys(docs).length };
+    document.getElementById('iniNova').click(); await esp(50);
+    const nome = document.querySelector('#ficha [data-p="cliente.nome"]'); nome.value = 'Cliente Quatro Teste'; nome.dispatchEvent(new Event('input', { bubbles: true })); await esp(50);
+    document.getElementById('btnFechar').click(); await esp(50);
+    o.preenchida = { n: Object.keys(docs).length, primeiro: itens('listaProp')[0] };
+    const bus = document.getElementById('salvoBusca'); bus.value = 'cidade b'; bus.dispatchEvent(new Event('input', { bubbles: true }));
+    o.busca = { props: itens('listaProp'), conts: itens('listaCont') };
+    return o;
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  if (r.semRecurso) { t.ok('tela de salvos no Propostas', false, 'sem #inicio'); await ctx.close(); return; }
+  t.ok('abre limpa, sem a última proposta aberta, nos salvos', !r.erro && r.inicio.aberta === null && r.inicio.salvos && !r.inicio.ficha, J);
+  t.ok('bloco Propostas com todas (a mais recente primeiro) e bloco Contratos só com as que têm contrato', !r.erro
+    && r.inicio.props.join('|') === 'Cliente Um Teste|Cliente Dois Teste|Cliente Tres Teste' && r.inicio.conts.join('|') === 'Cliente Dois Teste' && r.inicio.n.join() === '3,1', J);
+  t.ok('clicar no contrato abre ele, na aba Contrato, para editar', !r.erro && r.abriuContrato.id === 'p2' && r.abriuContrato.aba === 'contrato' && !r.abriuContrato.salvos && r.abriuContrato.ficha, J);
+  t.ok('Salvar e fechar volta para os salvos', !r.erro && r.fechou.id === null && r.fechou.salvos, J);
+  t.ok('proposta nova deixada em branco não vira item salvo; preenchida, aparece no alto', !r.erro && r.branco.descartada && r.branco.n === 3 && r.preenchida.n === 4 && r.preenchida.primeiro === 'Cliente Quatro Teste', J);
+  t.ok('procurar filtra os dois blocos', !r.erro && r.busca.props.join() === 'Cliente Dois Teste' && r.busca.conts.join() === 'Cliente Dois Teste' && !erros.length, J);
+  await ctx.close();
+});
+
 teste('propostas-extenso-e-contas', async (b, t) => {
   if (!fs.existsSync(path.join(RAIZ, 'propostas_rm'))) return;
   const { ctx, pg, erros } = await abre(b, { 'sis.local': 'propostas_rm' });
