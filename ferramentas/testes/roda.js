@@ -11090,6 +11090,44 @@ teste('propostas-complementares-com-valor', async (b, t) => {
   await ctx.close();
 });
 
+teste('propostas-importa-revisao', async (b, t) => {
+  // importando um Word, o trecho que o sistema não reconhece ia para uma
+  // lista e ficava de fora. Agora entra numa revisão: onde vai (descrição,
+  // item complementar, valor...), o texto e o valor -- e só então entra.
+  if (!fs.existsSync(path.join(RAIZ, 'propostas_rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'propostas_rm' });
+  await semLogin(pg);
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    if (!window.__prop.abrirRevisao) return { semRecurso: true };
+    await iniciarApp();
+    const d = novoDoc('padrao'); docs[d.id] = d; abrir(d.id);
+    const nComp = d.comp.length, nVal = d.valores.length;
+    window.__prop.abrirRevisao(d, { contrato: false, lidos: ['Descrição'], sobras: [
+      'Uma escada metálica com corrimão fornecida como cortesia sem custo adicional.',
+      'Observação: Proposta com contenção de 1,40m acréscimo de +R$19.600,00 (dezenove mil e seiscentos reais).',
+      'Texto solto de exemplo sobre a obra.',
+      'Linha que não deve entrar.'] }, 'Exemplo.docx');
+    await esp(50);
+    const caixas = [...document.querySelectorAll('#modalTxt .imp-r')];
+    const o = { aberta: document.getElementById('modal').classList.contains('on'), n: caixas.length, botao: document.getElementById('modalSim').textContent,
+      palpites: caixas.map(c => c.querySelector('[data-imp-o]').value), textos: caixas.map(c => c.querySelector('[data-imp-t]').value), valor: caixas[1].querySelector('[data-imp-v]').value };
+    const ig = caixas[3].querySelector('[data-imp-o]'); ig.value = ''; ig.dispatchEvent(new Event('change'));
+    document.getElementById('modalSim').click(); await esp(100);
+    const novoComp = d.comp.slice(nComp), novoVal = d.valores.slice(nVal);
+    o.depois = { comp: novoComp.map(c => c.item + '|' + c.sit), val: novoVal.map(v => v.etapa + '|' + v.valor + '|' + v.opcional), desc: d.descricao, total: totalProposta(d), fechou: !document.getElementById('modal').classList.contains('on') };
+    return o;
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  if (r.semRecurso) { t.ok('revisão dos trechos não reconhecidos na importação', false, 'sem abrirRevisao'); await ctx.close(); return; }
+  t.ok('os trechos não reconhecidos abrem numa revisão, com palpite de onde entram', !r.erro && r.aberta && r.n === 4 && r.botao === 'Aplicar e conferir'
+    && r.palpites.join() === 'comp:cortesia,valor,desc,desc' && r.valor === '19.600,00', J);
+  t.ok('o texto que entra já vem limpo (sem "Observação:", sem o R$, sem "como cortesia")', !r.erro && r.textos[0] === 'Uma escada metálica com corrimão' && r.textos[1] === 'Proposta com contenção de 1,40m', J);
+  t.ok('aplicando: cortesia nos complementares, valor em Valores, texto na descrição, ignorado fica de fora', !r.erro && r.depois.comp.join() === 'Uma escada metálica com corrimão|cortesia'
+    && r.depois.val.join() === 'Proposta com contenção de 1,40m|19600|false' && /Texto solto de exemplo/.test(r.depois.desc) && !/não deve entrar/.test(r.depois.desc) && r.depois.total === 19600 && r.depois.fechou && !erros.length, J);
+  await ctx.close();
+});
+
 teste('propostas-extenso-e-contas', async (b, t) => {
   if (!fs.existsSync(path.join(RAIZ, 'propostas_rm'))) return;
   const { ctx, pg, erros } = await abre(b, { 'sis.local': 'propostas_rm' });
@@ -11298,7 +11336,7 @@ teste('propostas-importa-word', async (b, t) => {
   t.ok('orçamento: metálica, fundação (observação sem maiúsculas) e competências', o.met && o.met[0] === 'Telha de cobertura=Telha TP40 0,50' && /^O material será por conta do CONTRATADO/.test(o.obs) && /^- Legalização/.test(o.compet), J);
   t.ok('orçamento: incluso / à parte / não incluso', o.comp && o.comp.join() === 'Portão=nao,Escada metálica com corrimão=aparte', J);
   t.ok('orçamento: prazo, parcelas, valores (opcional marcado), validade e data', o.prazo === 90 && o.pag.join() === '40 Na assinatura do contrato,60 Na entrega' && o.val.join() === 'Fundações=10000,Pré-fabricado=50000,Escada metálica=5000*' && o.validade === 15 && o.data === '2026-08-03', J);
-  t.ok('orçamento: abre na proposta, com o resumo do que foi lido e o que não foi', !o.contrato && o.aba === 'proposta' && o.aberto && /Lido:/.test(o.modal) && /1 trecho\(s\) não reconhecido/.test(o.modal) && /Texto solto que ninguém reconhece/.test(o.modal) && /Pilar de concreto armado/.test(o.folha), J);
+  t.ok('orçamento: abre na proposta, com o resumo do que foi lido e o que não foi', !o.contrato && o.aba === 'proposta' && o.aberto && /Lido:/.test(o.modal) && /1 trecho\(s\) que o sistema não soube onde pôr/.test(o.modal) && /Texto solto que ninguém reconhece/.test(o.modal) && /Pilar de concreto armado/.test(o.folha), J);
   t.ok('contrato: contratante com CNPJ, endereço, CEP e representante', c.cli && c.cli.nome === 'CLIENTE FICTÍCIO LTDA' && c.cli.doc === '00.000.000/0001-00' && c.cli.endereco === 'Rua Exemplo, nº100' && c.cli.cidade === 'Cidade Exemplo/RS' && c.cli.cep === '00000-000' && c.cli.rep === 'Pessoa Exemplo' && c.cli.repDoc === 'CPF 000.000.000-00', J);
   t.ok('contrato: obra, objeto, peças e esquadrias', c.end === 'Rua Exemplo, nº100' && c.cidade === 'Cidade Exemplo/RS' && c.c && /pavilhão de exemplo/.test(c.c.obj) && c.pre[0] === 'Pavilhão de exemplo:Pilar de concreto armado 25x35x7,40mts|8|un' && c.comp.join() === 'Esquadrias=nao', J);
   t.ok('contrato: prazo, valor, entrada e parcelas, data', c.c && c.c.prazo === 150 && c.val.join() === 'Valor do contrato=100000' && c.c.pag.entrada === 40000 && c.c.pag.entradaData === '2026-09-10' && c.c.pag.n === 3 && c.c.pag.dia === 10 && c.c.pag.inicio === '2026-10' && c.c.data === '2026-09-01', J);
