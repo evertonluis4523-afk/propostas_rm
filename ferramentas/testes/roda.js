@@ -10855,9 +10855,9 @@ teste('propostas-salvos', async (b, t) => {
     /* sem acento e em maiúsculas: acha "Teutônia" */
     const bus = document.getElementById('salvoBusca'); bus.value = 'TEUTONIA'; bus.dispatchEvent(new Event('input', { bubbles: true }));
     o.busca = { props: itens('listaProp'), conts: itens('listaCont') };
-    /* a busca de dentro da proposta também: "tres" acha "Três" */
-    abrir('p1'); const db = document.getElementById('docBusca'); db.value = 'tres'; db.dispatchEvent(new Event('input', { bubbles: true }));
-    o.buscaDentro = [...document.querySelectorAll('#docSel option')].map(x => x.textContent);
+    /* "tres" acha "Três" */
+    bus.value = 'tres'; bus.dispatchEvent(new Event('input', { bubbles: true }));
+    o.buscaTres = itens('listaProp');
     return o;
   }).catch(e => ({ erro: e.message }));
   const J = JSON.stringify(r) + ' ' + erros.join(' | ');
@@ -10869,7 +10869,7 @@ teste('propostas-salvos', async (b, t) => {
   t.ok('Salvar e fechar volta para os salvos', !r.erro && r.fechou.id === null && r.fechou.salvos, J);
   t.ok('proposta nova deixada em branco não vira item salvo; preenchida, aparece no alto', !r.erro && r.branco.descartada && r.branco.n === 3 && r.preenchida.n === 4 && r.preenchida.primeiro === 'Cliente Quatro Teste', J);
   t.ok('procurar filtra os dois blocos, sem precisar de acento nem maiúscula', !r.erro && r.busca.props.join() === 'Cliente Dois Teste' && r.busca.conts.join() === 'Cliente Dois Teste', J);
-  t.ok('a busca de dentro da proposta também acha sem acento', !r.erro && r.buscaDentro.length === 1 && /Cliente Três Teste/.test(r.buscaDentro[0]) && !erros.length, J);
+  t.ok('"tres" acha "Três"', !r.erro && r.buscaTres.join() === 'Cliente Três Teste' && !erros.length, J);
   await ctx.close();
 });
 
@@ -11125,6 +11125,127 @@ teste('propostas-importa-revisao', async (b, t) => {
   t.ok('o texto que entra já vem limpo (sem "Observação:", sem o R$, sem "como cortesia")', !r.erro && r.textos[0] === 'Uma escada metálica com corrimão' && r.textos[1] === 'Proposta com contenção de 1,40m', J);
   t.ok('aplicando: cortesia nos complementares, valor em Valores, texto na descrição, ignorado fica de fora', !r.erro && r.depois.comp.join() === 'Uma escada metálica com corrimão|cortesia'
     && r.depois.val.join() === 'Proposta com contenção de 1,40m|19600|false' && /Texto solto de exemplo/.test(r.depois.desc) && !/não deve entrar/.test(r.depois.desc) && r.depois.total === 19600 && r.depois.fechou && !erros.length, J);
+  await ctx.close();
+});
+
+teste('propostas-contrato-chave', async (b, t) => {
+  // contrato de chave na mão com as cláusulas dele (multa por mês, mora,
+  // garantia de 5 anos, obrigações), editáveis à parte; qualificação do
+  // cliente pessoa física; dados bancários da RM no contrato.
+  if (!fs.existsSync(path.join(RAIZ, 'propostas_rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'propostas_rm' });
+  await semLogin(pg);
+  const r = await pg.evaluate(async (FICT) => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    if (!MODELO_PADRAO.contratoChave) return { semRecurso: true };
+    await iniciarApp();
+    const folha = () => document.getElementById('folha').textContent.replace(/\s+/g, ' ');
+    const o = {};
+    /* dados bancários pelas Configurações */
+    document.getElementById('btnModelo').click(); await esp(50);
+    o.grupos = [...document.querySelectorAll('#modeloCorpo .cfg-grupo')].map(x => x.textContent);
+    const v = (id, x) => { document.getElementById(id).value = x; };
+    v('cfgBanco', 'Banco Exemplo'); v('cfgAgencia', '0001'); v('cfgConta', '12345-6'); v('cfgPix', '00.000.000/0001-00');
+    document.getElementById('modeloSalvar').click(); await esp(50);
+    o.banco = config.banco;
+    /* chave na mão */
+    const d = eval(FICT); d.tipo = 'chave'; Object.assign(d.cliente, { nacionalidade: 'brasileiro', profissao: 'empresário', estadoCivil: 'casado', rg: '1234567', doc: '000.000.000-00' });
+    docs[d.id] = d; abrir(d.id); await esp(50);
+    document.getElementById('abaContrato').click(); await esp(150);
+    const fc = folha();
+    o.chave = { garantia: /4\.12\. A CONTRATADA dá garantia/.test(fc) && /5 \(cinco\) anos/.test(fc), multa: /R\$ 20\.000,00 \(vinte mil reais\) ao mês/.test(fc), mora: /juros moratórios de 2% ao mês/.test(fc),
+      legal: /1\.3\.6\./.test(fc) && /Legalização perante os órgãos competentes/.test(fc), pf: /brasileiro, empresário, casado/.test(fc) && /RG 1234567 · CPF 000\.000\.000-00/.test(fc),
+      banco: /Dados bancários para pagamento: Banco Exemplo · Agência 0001 · Conta 12345-6 · PIX 00\.000\.000\/0001-00\./.test(fc) };
+    /* padrão */
+    const p = eval(FICT); docs[p.id] = p; abrir(p.id); await esp(50);
+    document.getElementById('abaContrato').click(); await esp(150);
+    const fp = folha();
+    o.padrao = { semGarantia: !/4\.12\./.test(fp), multa: /multa de 1% \(um por cento\)/.test(fp), semPf: !/brasileiro/.test(fp), banco: /Dados bancários para pagamento/.test(fp) };
+    return o;
+  }, PROP_FICT).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  if (r.semRecurso) { t.ok('contrato chave na mão com cláusulas próprias', false, 'sem contratoChave'); await ctx.close(); return; }
+  t.ok('Configurações: textos da proposta, do contrato padrão e do contrato chave na mão, separados', !r.erro && r.grupos.join('|') === 'Proposta|Contrato padrão|Contrato chave na mão', J);
+  t.ok('contrato chave na mão: garantia de 5 anos, multa por mês, mora de 2% e a legalização com a contratada', !r.erro && r.chave.garantia && r.chave.multa && r.chave.mora && r.chave.legal, J);
+  t.ok('contrato padrão continua como era', !r.erro && r.padrao.semGarantia && r.padrao.multa && r.padrao.semPf, J);
+  t.ok('cliente pessoa física: nacionalidade, profissão, estado civil e RG no contrato', !r.erro && r.chave.pf, J);
+  t.ok('dados bancários das Configurações saem no contrato, nos dois tipos', !r.erro && r.banco && r.banco.banco === 'Banco Exemplo' && r.chave.banco && r.padrao.banco && !erros.length, J);
+  await ctx.close();
+});
+
+teste('propostas-revisoes-lixeira', async (b, t) => {
+  // revisões (a versão enviada fica guardada), lixeira de 30 dias, Salvos
+  // com validade vencida, filtro por situação e soma em negociação, barra
+  // da proposta sem a caixa repetida e índice da ficha.
+  if (!fs.existsSync(path.join(RAIZ, 'propostas_rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'propostas_rm' }, 'index.html', { relogio: '2026-10-20T12:00:00-03:00', fuso: 'America/Sao_Paulo' });
+  await semLogin(pg);
+  const r = await pg.evaluate(async (FICT) => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    if (!document.getElementById('btnRev')) return { semRecurso: true };
+    await iniciarApp();
+    const folha = () => document.getElementById('folha').textContent.replace(/\s+/g, ' ');
+    const sim = async () => { document.getElementById('modalSim').click(); await esp(80); };
+    const o = { semCaixa: !document.getElementById('docSel') && !document.getElementById('docBusca') };
+    /* revisões */
+    const d = eval(FICT); d.numero = '2026-021'; docs[d.id] = d; abrir(d.id); await esp(50);
+    document.getElementById('btnRev').click(); await esp(30); await sim();
+    o.rev = { rev: d.rev, n: d.revisoes.length, folha: /Nº 2026-021 · Rev\. 1/.test(folha()), titulo: document.getElementById('docTitulo').textContent };
+    d.valores[0].valor = 1000; alterou(d, true); await esp(150);
+    document.querySelector('#ficha [data-revver="0"]').click(); await esp(100);
+    o.ver = /Vendo a Rev\. 0/.test(folha()) && /59\.120,00/.test(folha());
+    document.querySelector('#folha [data-revfecha]').click(); await esp(80);
+    o.voltouAtual = !/Vendo a Rev/.test(folha()) && /1\.000,00/.test(folha());
+    document.querySelector('#ficha [data-revvolta="0"]').click(); await esp(30); await sim();
+    o.restaurou = { valor: d.valores[0].valor, n: d.revisoes.length, rev: d.rev, numero: d.numero };
+    /* índice da ficha */
+    o.indice = [...document.querySelectorAll('#ficha .fi-chips button')].map(x => x.textContent);
+    document.querySelector('#ficha [data-fifecha]').click();
+    const fechadas = [...document.querySelectorAll('#ficha details.sec')].every(x => !x.open);
+    const iv = [...document.querySelectorAll('#ficha .fi-chips button')].findIndex(x => x.textContent === 'Valores');
+    document.querySelector('#ficha [data-fivai="' + iv + '"]').click();
+    o.indiceOk = fechadas && [...document.querySelectorAll('#ficha details.sec')][iv].open;
+    d.status = 'aprovada'; alterou(d, false);
+    document.getElementById('btnFechar').click(); await esp(50);
+    /* Salvos: vencidas, filtro, resumo */
+    const mk = (id, st, data, val, ct) => { const x = novoDoc('padrao'); Object.assign(x, { id, numero: '2026-0' + id, status: st, data, validade: 15, alterado: Date.now() }); x.cliente.nome = 'Cliente ' + id; x.valores = [{ etapa: 'Obra', valor: val, opcional: false, contrato: true, mostrar: true, cortesia: false }]; if (ct) x.contrato = novoContrato(x); docs[id] = x; return x; };
+    mk('31', 'negociacao', '2026-09-01', 100000); mk('32', 'negociacao', '2026-10-15', 50000); const c = mk('33', 'assinado', '2026-08-01', 70000, true);
+    const velha = mk('34', 'perdida', '2026-01-01', 1); velha.lixeira = Date.now() - 40 * 86400000;
+    renderSalvos();
+    const nomes = id => [...document.querySelectorAll('#' + id + ' .salvo .s-nome')].map(x => x.textContent);
+    o.resumo = document.getElementById('iniResumo').textContent.replace(/\s+/g, ' ');
+    o.velhaSumiu = !docs['34'];
+    o.badge = [...document.querySelectorAll('#listaProp .salvo')].filter(x => /validade vencida em 16\/09\/2026/.test(x.textContent)).length;
+    document.querySelector('.ini-filtro [data-fsit="vencida"]').click(); o.fVenc = nomes('listaProp');
+    document.querySelector('.ini-filtro [data-fsit="assinado"]').click(); o.fAss = nomes('listaProp').concat(nomes('listaCont'));
+    document.querySelector('.ini-filtro [data-fsit=""]').click();
+    /* lixeira */
+    abrir('32'); await esp(30); document.getElementById('btnDel').click(); await esp(30); await sim();
+    o.lixo1 = { marcada: !!docs['32'] && !!docs['32'].lixeira, fora: !nomes('listaProp').includes('Cliente 32'), conta: document.getElementById('btnLixeira').textContent };
+    abrir('33', 'contrato'); await esp(30); document.getElementById('btnDel').click(); await esp(30); await sim();
+    o.lixo2 = { semContrato: c.contrato === null, guardado: !!c.contratoLixeira };
+    document.getElementById('btnLixeira').click(); await esp(30);
+    o.lixoLista = nomes('listaLixo');
+    document.querySelector('#listaLixo [data-restaura="32"]').click(); await esp(50);
+    document.querySelector('#listaLixo [data-restaura="33"]').click(); await esp(50);
+    o.restaurados = { prop: !docs['32'].lixeira && nomes('listaProp').includes('Cliente 32'), contrato: !!c.contrato && !c.contratoLixeira && nomes('listaCont').includes('Cliente 33') };
+    abrir('31'); await esp(30); document.getElementById('btnDel').click(); await esp(30); await sim();
+    document.querySelector('#listaLixo [data-apaga="31"]').click(); await esp(30); await sim();
+    o.apagado = !docs['31'];
+    return o;
+  }, PROP_FICT).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r).slice(0, 2500) + ' ' + erros.join(' | ');
+  if (r.semRecurso) { t.ok('revisões, lixeira e acompanhamento no Propostas', false, 'sem btnRev'); await ctx.close(); return; }
+  t.ok('barra da proposta sem a caixa "Proposta aberta" e sem a busca repetida; título com o número', !r.erro && r.semCaixa && /2026-021 rev\. 1/.test(r.rev.titulo), J);
+  t.ok('nova revisão: a versão enviada fica guardada e o papel diz Rev. 1', !r.erro && r.rev.rev === 1 && r.rev.n === 1 && r.rev.folha, J);
+  t.ok('ver uma revisão no papel e voltar à atual', !r.erro && r.ver && r.voltouAtual, J);
+  t.ok('voltar a uma revisão: o conteúdo volta e o atual fica guardado', !r.erro && r.restaurou.valor === 59120 && r.restaurou.n === 2 && r.restaurou.rev === 1 && r.restaurou.numero === '2026-021', J);
+  t.ok('índice da ficha: um atalho por seção, recolher tudo e ir até a seção', !r.erro && r.indice.includes('Cliente') && r.indice.includes('Valores') && r.indiceOk, J);
+  t.ok('Salvos: validade vencida marcada, soma em negociação, filtro por situação', !r.erro && r.badge === 1 && /2 em negociação · R\$\s150\.000,00/.test(r.resumo) && /1 com a validade vencida/.test(r.resumo)
+    && r.fVenc.join() === 'Cliente 31' && r.fAss.join() === 'Cliente 33,Cliente 33', J);
+  t.ok('excluir vai para a lixeira (proposta e contrato), e o que passou de 30 dias some', !r.erro && r.lixo1.marcada && r.lixo1.fora && /Lixeira \(1\)/.test(r.lixo1.conta) && r.lixo2.semContrato && r.lixo2.guardado
+    && r.lixoLista.length === 2 && r.velhaSumiu, J);
+  t.ok('restaurar da lixeira (proposta e contrato) e excluir de vez', !r.erro && r.restaurados.prop && r.restaurados.contrato && r.apagado && !erros.length, J);
   await ctx.close();
 });
 
