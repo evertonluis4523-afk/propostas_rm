@@ -10844,11 +10844,11 @@ teste('propostas-salvos', async (b, t) => {
     o.abriuContrato = { id: atualId, aba, salvos: vis('inicio'), ficha: vis('ficha') };
     document.getElementById('btnFechar').click(); await esp(50);
     o.fechou = { id: atualId, salvos: vis('inicio') };
-    document.getElementById('iniNova').click(); await esp(50);
+    document.getElementById('iniNova').click(); await esp(50); document.querySelector('#tipoTela [data-tipo="padrao"]').click(); await esp(50);
     const nova = atualId;
     document.getElementById('btnFechar').click(); await esp(50);
     o.branco = { descartada: !docs[nova], n: Object.keys(docs).length };
-    document.getElementById('iniNova').click(); await esp(50);
+    document.getElementById('iniNova').click(); await esp(50); document.querySelector('#tipoTela [data-tipo="padrao"]').click(); await esp(50);
     const nome = document.querySelector('#ficha [data-p="cliente.nome"]'); nome.value = 'Cliente Quatro Teste'; nome.dispatchEvent(new Event('input', { bubbles: true })); await esp(50);
     document.getElementById('btnFechar').click(); await esp(50);
     o.preenchida = { n: Object.keys(docs).length, primeiro: itens('listaProp')[0] };
@@ -10896,9 +10896,10 @@ teste('propostas-pagamento-e-chave-na-mao', async (b, t) => {
     marca('[data-p="valores.0.mostrar"]', false); await esp(200);
     o.oculto = { semValor: !/59\.120,00/.test(folha()), etapa: /Fundações/.test(folha()), total: totalProposta(d) };
     /* chave na mão: 10.000 + 5.000 com 10% */
-    d.cnm.itens = [{ nome: 'Banheiro', valor: 10000, mostrar: true }, { nome: 'Hidráulica', valor: 5000, mostrar: true }]; alterou(d, true); await esp(50);
+    d.tipo = 'chave';
+    d.cnm.itens = [{ nome: 'Banheiros', valor: 10000, mostrar: true, texto: '', itens: [] }, { nome: 'Hidráulica', valor: 5000, mostrar: true, texto: '', itens: [] }]; alterou(d, true); await esp(50);
     campo('[data-p="cnm.pct"]', '10'); await esp(200);
-    o.cnm = { total: totalCnm(d), proposta: totalProposta(d), folha: /Chave na mão/.test(folha()) && /11\.000,00/.test(folha()) && /16\.500,00/.test(folha()),
+    o.cnm = { total: totalCnm(d), proposta: totalProposta(d), folha: /Serviços inclusos/.test(folha()) && /11\.000,00/.test(folha()) && /16\.500,00/.test(folha()),
       sugestoes: [...document.querySelectorAll('#dlCnm option')].map(x => x.value).includes('Elétrica') };
     marca('[data-p="cnm.somar"]', false); await esp(200);
     o.cnmFora = { proposta: totalProposta(d), aviso: /fora do total da obra/.test(folha()) };
@@ -10985,6 +10986,69 @@ teste('propostas-listas', async (b, t) => {
   t.ok('item novo entra e o tirado sai da seleção rápida', !r.erro && r.depois.includes('Pilar especial cadastrado') && !r.depois.includes('Viga de concreto armado 15x40 cm') && r.cnm.includes('Churrasqueira'), J);
   t.ok('o cadastro vai para a nuvem (propostas_rm/listas) e fica neste aparelho', !r.erro && r.nuvem && r.nuvem[1].pre.includes('Pilar especial cadastrado') && r.nuvem[1].cnm.includes('Churrasqueira') && r.local && r.local.pre.includes('Pilar especial cadastrado'), J);
   t.ok('itens complementares e etapas dos valores também têm seleção rápida', !r.erro && r.campos.comp === 'dlComp' && r.campos.etapa === 'dlEtapa' && r.etapas.includes('Fundações') && !erros.length, J);
+  await ctx.close();
+});
+
+teste('propostas-tipo-chave-na-mao', async (b, t) => {
+  // proposta nova: padrão ou chave na mão. A de chave na mão já vem com os
+  // serviços (esquadrias, banheiros...) e o texto de cada um; o termo "chave
+  // na mão" sai no papel só no título, editável. E: cortesia fora do total;
+  // itens complementares que se movem.
+  if (!fs.existsSync(path.join(RAIZ, 'propostas_rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'propostas_rm' });
+  await semLogin(pg);
+  const r = await pg.evaluate(async (FICT) => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    if (!document.getElementById('tipoTela')) return { semRecurso: true };
+    await iniciarApp();
+    const folha = () => document.getElementById('folha').textContent.replace(/\s+/g, ' ');
+    const secoes = () => [...document.querySelectorAll('#ficha details.sec summary')].map(x => x.firstChild.textContent);
+    const o = {};
+    document.getElementById('btnNova').click(); await esp(30);
+    o.escolha = { aberta: document.getElementById('tipoTela').classList.contains('on'), opcoes: [...document.querySelectorAll('#tipoTela [data-tipo] b')].map(x => x.textContent) };
+    document.querySelector('#tipoTela [data-tipo="chave"]').click(); await esp(100);
+    const d = atual();
+    o.chave = { tipo: d.tipo, servicos: d.cnm.itens.map(x => x.nome), texto: /esquadrias/i.test(d.cnm.itens[0].texto), secao: secoes().includes('Chave na mão') };
+    d.cliente.nome = 'Cliente Fictício'; d.cnm.itens[0].valor = 30000; d.cnm.itens[0].itens = [{ desc: 'Porta de alumínio 1,00x2,10 m', qtd: '3', un: 'un' }]; alterou(d, true); await esp(150);
+    const f = folha();
+    o.papel = { titulo: /Proposta de orçamento chave na mão/i.test(f), vezes: (f.match(/chave na m[aã]o/gi) || []).length, servico: /Esquadrias/.test(f) && /Porta de alumínio 1,00x2,10 m/.test(f) && /30\.000,00/.test(f) };
+    const tit = document.querySelector('#ficha [data-p="titulo"]'); tit.value = 'Proposta especial de obra pronta'; tit.dispatchEvent(new Event('input', { bubbles: true })); await esp(150);
+    o.tituloEditado = /Proposta especial de obra pronta/.test(folha()) && !/chave na m[aã]o/i.test(folha());
+    /* serviço novo da lista: o texto padrão entra sozinho */
+    document.querySelector('#ficha [data-acao="cnmAdd"]').click(); await esp(50);
+    const k = d.cnm.itens.length - 1, nm = document.querySelector('#ficha [data-p="cnm.itens.' + k + '.nome"]');
+    nm.value = 'gesso'; nm.dispatchEvent(new Event('input', { bubbles: true })); nm.dispatchEvent(new Event('change', { bubbles: true })); await esp(100);
+    o.gesso = /gesso no forro/.test(d.cnm.itens[k].texto);
+    /* contrato: os serviços com os títulos deles, sem "chave na mão" */
+    document.getElementById('abaContrato').click(); await esp(150);
+    o.contrato = { servico: /Esquadrias/.test(folha()) && /Porta de alumínio/.test(folha()), semTermo: !/chave na m[aã]o/i.test(folha()) };
+    /* proposta padrão: sem o bloco de serviços */
+    document.getElementById('btnFechar').click(); await esp(50);
+    document.getElementById('btnNova').click(); await esp(30); document.querySelector('#tipoTela [data-tipo="padrao"]').click(); await esp(100);
+    o.padrao = { tipo: atual().tipo, semSecao: !secoes().includes('Chave na mão'), titulo: /Proposta de orçamento/.test(folha()) && !/chave na m[aã]o/i.test(folha()) };
+    /* cortesia e ordem dos complementares, numa proposta pronta */
+    const p = eval(FICT); docs[p.id] = p; abrir(p.id); await esp(50);
+    const c0 = document.querySelector('#ficha [data-p="valores.0.cortesia"]'); c0.checked = true; c0.dispatchEvent(new Event('input', { bubbles: true })); await esp(150);
+    o.cortesia = { total: totalProposta(p), folha: /Cortesia/.test(folha()) && /cortesia, sem custo/.test(folha()), contrato: totalContratoBase(p) };
+    const antes = p.comp.map(x => x.item);
+    document.querySelector('#ficha [data-acao="compDown"][data-i="0"]').click(); await esp(50);
+    const desceu = p.comp.map(x => x.item);
+    document.querySelector('#ficha [data-acao="compUp"][data-i="2"]').click(); await esp(50);
+    o.ordem = { antes, desceu, subiu: p.comp.map(x => x.item) };
+    return o;
+  }, PROP_FICT).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r).slice(0, 2500) + ' ' + erros.join(' | ');
+  if (r.semRecurso) { t.ok('tipo de proposta (padrão ou chave na mão)', false, 'sem #tipoTela'); await ctx.close(); return; }
+  t.ok('nova proposta pergunta o tipo: padrão ou chave na mão', !r.erro && r.escolha.aberta && r.escolha.opcoes.join('|') === 'Proposta padrão|Proposta chave na mão', J);
+  t.ok('chave na mão já vem com os serviços e o texto de cada um', !r.erro && r.chave.tipo === 'chave' && r.chave.servicos.join() === 'Esquadrias,Banheiros,Elétrica,Hidráulica,Pintura,Gesso' && r.chave.texto && r.chave.secao, J);
+  t.ok('no papel: "chave na mão" só no título; o serviço com texto, itens e valor', !r.erro && r.papel.titulo && r.papel.vezes === 1 && r.papel.servico, J);
+  t.ok('título editável', !r.erro && r.tituloEditado, J);
+  t.ok('serviço escolhido da lista recebe o texto padrão', !r.erro && r.gesso, J);
+  t.ok('contrato: os serviços com os títulos deles, sem o termo', !r.erro && r.contrato.servico && r.contrato.semTermo, J);
+  t.ok('proposta padrão: sem o bloco de serviços', !r.erro && r.padrao.tipo === 'padrao' && r.padrao.semSecao && r.padrao.titulo, J);
+  t.ok('cortesia: a etapa sai como brinde e o valor fica fora do total (e do contrato)', !r.erro && r.cortesia.total === 693010 && r.cortesia.folha && r.cortesia.contrato === 816510, J);
+  const o2 = r.ordem || {};
+  t.ok('itens complementares sobem e descem', !r.erro && o2.desceu[0] === o2.antes[1] && o2.desceu[1] === o2.antes[0] && o2.subiu[1] === o2.antes[2] && o2.subiu[2] === o2.antes[0] && !erros.length, J);
   await ctx.close();
 });
 
@@ -11346,7 +11410,7 @@ teste('lista-suspensa-padrao', async (b, t) => {
   if (!fs.existsSync(path.join(RAIZ, 'propostas_rm'))) return;
   const { ctx, pg, erros } = await abre(b, { 'sis.local': 'propostas_rm' });
   await semLogin(pg);
-  await pg.evaluate(async () => { await iniciarApp(); document.getElementById('btnNova').click(); });
+  await pg.evaluate(async () => { await iniciarApp(); document.getElementById('btnNova').click(); const t = document.querySelector('#tipoTela [data-tipo="padrao"]'); if (t) t.click(); });
   await pg.waitForTimeout(200);
   const sel = '#ficha [data-p="pre.0.itens.0.desc"]';
   const antes = await pg.evaluate(s => { const i = document.querySelector(s); return { list: i.hasAttribute('list'), adotado: i.getAttribute('data-rm-lista') }; }, sel);
