@@ -10873,6 +10873,121 @@ teste('propostas-salvos', async (b, t) => {
   await ctx.close();
 });
 
+teste('propostas-pagamento-e-chave-na-mao', async (b, t) => {
+  // pedidos da arquiteta (20/10/2026): bem como parte do pagamento e forma
+  // (dinheiro/depósito); parcelas do contrato com valores livres, avisando
+  // quando não fecham; valor do contrato com desconto sem mexer na proposta;
+  // ocultar o valor de uma etapa; chave na mão com acréscimo; foro com a
+  // cidade do cliente; excluir só o contrato.
+  if (!fs.existsSync(path.join(RAIZ, 'propostas_rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'propostas_rm' });
+  await semLogin(pg);
+  const r = await pg.evaluate(async (FICT) => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    if (typeof totalCnm !== 'function') return { semRecurso: true };
+    await iniciarApp();
+    const d = eval(FICT); docs[d.id] = d; abrir(d.id); await esp(50);
+    const folha = () => document.getElementById('folha').textContent.replace(/\s+/g, ' ');
+    const campo = (sel, v) => { const e = document.querySelector('#ficha ' + sel); e.value = v; e.dispatchEvent(new Event('input', { bubbles: true })); e.dispatchEvent(new Event('change', { bubbles: true })); };
+    const marca = (sel, v) => { const e = document.querySelector('#ficha ' + sel); e.checked = v; e.dispatchEvent(new Event('input', { bubbles: true })); };
+    const o = {};
+    d.cliente.cidade = 'Lajeado/RS'; d.obra.cidade = 'Cidade Exemplo/RS';
+    /* ocultar o valor de uma etapa */
+    marca('[data-p="valores.0.mostrar"]', false); await esp(200);
+    o.oculto = { semValor: !/59\.120,00/.test(folha()), etapa: /Fundações/.test(folha()), total: totalProposta(d) };
+    /* chave na mão: 10.000 + 5.000 com 10% */
+    d.cnm.itens = [{ nome: 'Banheiro', valor: 10000, mostrar: true }, { nome: 'Hidráulica', valor: 5000, mostrar: true }]; alterou(d, true); await esp(50);
+    campo('[data-p="cnm.pct"]', '10'); await esp(200);
+    o.cnm = { total: totalCnm(d), proposta: totalProposta(d), folha: /Chave na mão/.test(folha()) && /11\.000,00/.test(folha()) && /16\.500,00/.test(folha()),
+      sugestoes: [...document.querySelectorAll('#dlCnm option')].map(x => x.value).includes('Elétrica') };
+    marca('[data-p="cnm.somar"]', false); await esp(200);
+    o.cnmFora = { proposta: totalProposta(d), aviso: /fora do total da obra/.test(folha()) };
+    marca('[data-p="cnm.somar"]', true); await esp(200);
+    /* bem como parte do pagamento da proposta */
+    campo('[data-p="pagProp.0.forma"]', 'Carro'); await esp(200);
+    campo('[data-p="pagProp.0.bem"]', 'VW Gol 2015'); await esp(200);
+    o.bem = { campo: !!document.querySelector('#ficha [data-p="pagProp.0.bem"]'), folha: /Carro — VW Gol 2015/.test(folha()), formas: [...document.querySelectorAll('#ficha [data-p="pagProp.1.forma"] option')].map(x => x.textContent) };
+    /* contrato: desconto e parcelas livres */
+    document.getElementById('abaContrato').click(); await esp(200);
+    const propostaAntes = totalProposta(d), valoresAntes = JSON.stringify(d.valores);
+    o.base = totalContratoBase(d);
+    campo('[data-p="contrato.valorAjustado"]', '850.000,00'); await esp(200);
+    o.desconto = { contrato: totalContrato(d), proposta: totalProposta(d), mesmaProposta: totalProposta(d) === propostaAntes && JSON.stringify(d.valores) === valoresAntes, nota: (document.querySelector('#ficha [data-desc]') || {}).textContent, folha: /850\.000,00/.test(folha()) };
+    campo('[data-p="contrato.pag.modo"]', 'manual'); await esp(200);
+    o.manual = { n: d.contrato.pag.itens.length, soma: Math.round(d.contrato.pag.itens.reduce((s, x) => s + x.valor, 0) * 100) / 100 };
+    campo('[data-p="contrato.pag.itens.0.valor"]', '300.000,00'); await esp(200);
+    campo('[data-p="contrato.pag.itens.0.forma"]', 'Terreno'); await esp(200);
+    campo('[data-p="contrato.pag.itens.0.bem"]', 'Lote 12'); await esp(200);
+    o.naoFecha = { aviso: avisos(d).some(a => /parcelas do contrato somam/.test(a) && /passam/.test(a)), resumo: !!document.querySelector('#ficha .resumo .soma.erro'), folha: /Terreno — Lote 12/.test(folha()) };
+    /* foro */
+    o.foro = /Estrela\/RS e Lajeado\/RS/.test(folha());
+    d.cliente.cidade = 'Estrela/RS'; alterou(d, true); await esp(150);
+    o.foroEstrela = /comarcas de Estrela\/RS como/.test(folha());
+    /* excluir só o contrato */
+    o.rotulo = document.getElementById('btnDel').textContent;
+    document.getElementById('btnDel').click(); await esp(50); document.getElementById('modalSim').click(); await esp(100);
+    o.excluiu = { contrato: d.contrato, existe: !!docs[d.id], aba, aberta: atualId === d.id, rotulo: document.getElementById('btnDel').textContent };
+    /* bem novo nas Configurações */
+    config.bens = bensLista().concat(['Trator']); renderFicha();
+    o.trator = [...document.querySelectorAll('#ficha [data-p="pagProp.1.forma"] option')].some(x => x.textContent === 'Trator');
+    return o;
+  }, PROP_FICT).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  if (r.semRecurso) { t.ok('pagamento e chave na mão no Propostas', false, 'sem totalCnm'); await ctx.close(); return; }
+  t.ok('ocultar o valor de uma etapa: aparece sem o valor, e o total continua', !r.erro && r.oculto.semValor && r.oculto.etapa && r.oculto.total === 752130, J);
+  t.ok('chave na mão: acréscimo nos serviços, somado ao total da obra, com os serviços do Orçamento como sugestão', !r.erro && r.cnm.total === 16500 && r.cnm.proposta === 768630 && r.cnm.folha && r.cnm.sugestoes, J);
+  t.ok('chave na mão fora do total, quando desmarcado', !r.erro && r.cnmFora.proposta === 752130 && r.cnmFora.aviso, J);
+  t.ok('bem como parte do pagamento: forma, descrição do bem e no papel; dinheiro e depósito na lista', !r.erro && r.bem.campo && r.bem.folha && ['Dinheiro', 'Depósito', 'Terreno', 'Imóvel', 'Carro', 'Moto', 'Caminhão'].every(f => r.bem.formas.includes(f)), J);
+  t.ok('valor do contrato com desconto: só no contrato, a proposta não muda', !r.erro && r.base === 892130 && r.desconto.contrato === 850000 && r.desconto.mesmaProposta && r.desconto.proposta === 768630 && /Desconto de R\$\s42\.130,00/.test(r.desconto.nota) && r.desconto.folha, J);
+  t.ok('parcelas livres: já vêm com o calculado e fechando', !r.erro && r.manual.n === 6 && r.manual.soma === 850000, J);
+  t.ok('parcela editada que não fecha: aviso e resumo em vermelho; bem na parcela sai no contrato', !r.erro && r.naoFecha.aviso && r.naoFecha.resumo && r.naoFecha.folha, J);
+  t.ok('cláusula 6.6: Estrela/RS e a cidade do cliente; cliente de Estrela, só Estrela', !r.erro && r.foro && r.foroEstrela, J);
+  t.ok('na aba Contrato, excluir tira só o contrato; a proposta fica', !r.erro && r.rotulo === '✕ Excluir contrato' && r.excluiu.contrato === null && r.excluiu.existe && r.excluiu.aba === 'proposta' && r.excluiu.aberta && r.excluiu.rotulo === '✕ Excluir', J);
+  t.ok('bem novo das Configurações entra na forma de pagamento', !r.erro && r.trator && !erros.length, J);
+  await ctx.close();
+});
+
+teste('propostas-listas', async (b, t) => {
+  // as listas de seleção rápida só tinham o que veio do documento de
+  // exemplo. Agora há um cadastro na nuvem (Configurações), e o que já foi
+  // usado em alguma proposta entra sozinho.
+  if (!fs.existsSync(path.join(RAIZ, 'propostas_rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'propostas_rm' });
+  await semLogin(pg);
+  const r = await pg.evaluate(async (FICT) => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    if (typeof listaCompleta !== 'function') return { semRecurso: true };
+    await iniciarApp();
+    const gravou = []; fbDB = { ref: p => ({ set: async v => { gravou.push([p, JSON.parse(JSON.stringify(v))]); }, remove: async () => {} }) }; fbAuthReady = true;
+    const d = eval(FICT); d.pre[0].itens.push({ desc: 'Peça usada numa proposta', qtd: '1', un: 'un' }); docs[d.id] = d; abrir(d.id); await esp(50);
+    const opcoes = id => [...document.querySelectorAll('#' + id + ' option')].map(x => x.value);
+    const o = { antes: opcoes('dlPre') };
+    document.getElementById('btnModelo').click(); await esp(50);
+    const sel = document.getElementById('cfgLista'); o.listas = [...sel.options].map(x => x.textContent);
+    sel.value = 'pre'; sel.dispatchEvent(new Event('change'));
+    document.getElementById('cfgListaNovo').value = 'Pilar especial cadastrado'; document.getElementById('cfgListaAdd').click();
+    const tira = [...document.querySelectorAll('#cfgListaItens .cfg-tag')].find(x => /15x40/.test(x.textContent)); tira.querySelector('button').click();
+    sel.value = 'cnm'; sel.dispatchEvent(new Event('change'));
+    document.getElementById('cfgListaNovo').value = 'Churrasqueira'; document.getElementById('cfgListaAdd').click();
+    document.getElementById('modeloSalvar').click(); await esp(100);
+    o.depois = opcoes('dlPre'); o.cnm = opcoes('dlCnm');
+    o.nuvem = gravou.filter(g => g[0] === 'propostas_rm/listas').pop();
+    o.local = JSON.parse(localStorage.getItem('rm_propostas_v1_listas') || 'null');
+    const at = el => el && (el.getAttribute('list') || el.getAttribute('data-rm-lista'));
+    o.campos = { comp: at(document.querySelector('#ficha [data-p="comp.0.item"]')), etapa: at(document.querySelector('#ficha [data-p="valores.0.etapa"]')) };
+    o.etapas = opcoes('dlEtapa');
+    return o;
+  }, PROP_FICT).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r).slice(0, 2500) + ' ' + erros.join(' | ');
+  if (r.semRecurso) { t.ok('cadastro das listas de seleção rápida', false, 'sem listaCompleta'); await ctx.close(); return; }
+  t.ok('a lista já traz o que foi usado numa proposta salva', !r.erro && r.antes.includes('Peça usada numa proposta') && r.antes.includes('Viga de concreto armado 15x40 cm'), J);
+  t.ok('Configurações tem as cinco listas', !r.erro && ['Peças do pré-moldado', 'Itens da estrutura metálica', 'Serviços de chave na mão', 'Itens complementares', 'Etapas dos valores'].every(x => r.listas.includes(x)), J);
+  t.ok('item novo entra e o tirado sai da seleção rápida', !r.erro && r.depois.includes('Pilar especial cadastrado') && !r.depois.includes('Viga de concreto armado 15x40 cm') && r.cnm.includes('Churrasqueira'), J);
+  t.ok('o cadastro vai para a nuvem (propostas_rm/listas) e fica neste aparelho', !r.erro && r.nuvem && r.nuvem[1].pre.includes('Pilar especial cadastrado') && r.nuvem[1].cnm.includes('Churrasqueira') && r.local && r.local.pre.includes('Pilar especial cadastrado'), J);
+  t.ok('itens complementares e etapas dos valores também têm seleção rápida', !r.erro && r.campos.comp === 'dlComp' && r.campos.etapa === 'dlEtapa' && r.etapas.includes('Fundações') && !erros.length, J);
+  await ctx.close();
+});
+
 teste('propostas-extenso-e-contas', async (b, t) => {
   if (!fs.existsSync(path.join(RAIZ, 'propostas_rm'))) return;
   const { ctx, pg, erros } = await abre(b, { 'sis.local': 'propostas_rm' });
