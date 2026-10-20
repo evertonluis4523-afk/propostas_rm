@@ -11052,6 +11052,44 @@ teste('propostas-tipo-chave-na-mao', async (b, t) => {
   await ctx.close();
 });
 
+teste('propostas-complementares-com-valor', async (b, t) => {
+  // itens complementares com valor: somam à parte (subtotal), com opção de
+  // mostrar ou não os valores no papel e de somar ou não ao total da obra.
+  // "Não incluso" e "Cortesia" ficam fora da soma.
+  if (!fs.existsSync(path.join(RAIZ, 'propostas_rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'propostas_rm' });
+  await semLogin(pg);
+  const r = await pg.evaluate(async (FICT) => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    if (typeof totalComp !== 'function') return { semRecurso: true };
+    await iniciarApp();
+    const d = eval(FICT); docs[d.id] = d; abrir(d.id); await esp(50);
+    const folha = () => document.getElementById('folha').textContent.replace(/\s+/g, ' ');
+    const campo = (p, v) => { const e = document.querySelector('#ficha [data-p="' + p + '"]'); e.value = v; e.dispatchEvent(new Event('input', { bubbles: true })); e.dispatchEvent(new Event('change', { bubbles: true })); };
+    const marca = (p, v) => { const e = document.querySelector('#ficha [data-p="' + p + '"]'); e.checked = v; e.dispatchEvent(new Event('input', { bubbles: true })); };
+    const ix = nome => d.comp.findIndex(c => c.item.indexOf(nome) === 0);
+    campo('comp.' + ix('Serralheria') + '.valor', '12.000,00'); campo('comp.' + ix('Escada') + '.valor', '8000'); campo('comp.' + ix('Portão') + '.valor', '5000'); await esp(200);
+    const o = { sub: totalComp(d), total: totalProposta(d), papel: /Subtotal dos itens complementares/.test(folha()) && /12\.000,00/.test(folha()) && /20\.000,00/.test(folha()),
+      linhaValores: [...document.querySelectorAll('#folha table.tot tr')].some(tr => /^Itens complementares/.test(tr.textContent.trim()) && /20\.000,00/.test(tr.textContent)),
+      resumo: (document.querySelector('#ficha .tot-linha[data-tot="comp"] b') || {}).textContent };
+    marca('compCfg.mostrar', false); await esp(200);
+    o.oculto = { total: totalProposta(d), semValores: !/12\.000,00/.test(folha()) && !/Subtotal dos itens complementares/.test(folha()) };
+    marca('compCfg.mostrar', true); await esp(100); marca('compCfg.somar', false); await esp(200);
+    o.fora = { total: totalProposta(d), aviso: /fora do total da obra/.test(folha()) };
+    marca('compCfg.somar', true); await esp(100);
+    document.getElementById('abaContrato').click(); await esp(100);
+    o.contrato = totalContratoBase(d);
+    return o;
+  }, PROP_FICT).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  if (r.semRecurso) { t.ok('valores nos itens complementares', false, 'sem totalComp'); await ctx.close(); return; }
+  t.ok('subtotal com os itens incluídos ("Não incluso" fora), somado ao total da obra', !r.erro && r.sub === 20000 && r.total === 772130 && r.papel && r.linhaValores && /20\.000,00/.test(r.resumo), J);
+  t.ok('valores ocultos no papel: o total continua', !r.erro && r.oculto.total === 772130 && r.oculto.semValores, J);
+  t.ok('fora do total da obra, quando desmarcado', !r.erro && r.fora.total === 752130 && r.fora.aviso, J);
+  t.ok('o contrato também soma o subtotal', !r.erro && r.contrato === 895630 && !erros.length, J);
+  await ctx.close();
+});
+
 teste('propostas-extenso-e-contas', async (b, t) => {
   if (!fs.existsSync(path.join(RAIZ, 'propostas_rm'))) return;
   const { ctx, pg, erros } = await abre(b, { 'sis.local': 'propostas_rm' });
