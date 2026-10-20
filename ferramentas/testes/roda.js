@@ -6095,6 +6095,33 @@ teste('recibos-ficha-acompanha-a-linha', async (b, t) => {
   await ctx.close();
 });
 
+teste('recibos-busca-sem-acento', async (b, t) => {
+  // os campos de busca comparavam letra por letra: "joao" não achava "João",
+  // "ANTONIO" não achava "Antônio". Funcionários, Salários e a lista de
+  // nomes (carta, advertência, admissão) agora ignoram acento e maiúscula.
+  if (!fs.existsSync(path.join(RAIZ, 'recibos_rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'recibos_rm' }, 'index.html', { relogio: '2026-10-17T12:00:00-03:00', fuso: 'America/Sao_Paulo' });
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    const l = document.getElementById('loginScreen'); if (l) l.style.setProperty('display', 'none', 'important');
+    const p = (id, nome) => ({ id, nome, funcao: 'Auxiliar', docTipo: 'CPF', doc: '', status: 'ativo', salario: 2500, metodo: 'banco', emprestimos: [], historicoSalario: [], historicoFuncao: [], fichasEpi: [], folhaExtra: [] });
+    state.employees = [p('a', 'JOÃO TESTE DA SILVA'), p('b', 'ANTÔNIO TESTE'), p('c', 'MARIA TESTE')];
+    const v = (id, x) => { const e = document.getElementById(id); e.value = x; e.dispatchEvent(new Event('input', { bubbles: true })); };
+    const nomes = sel => [...document.querySelectorAll(sel)].map(x => x.textContent).join(' | ');
+    document.querySelector('.vtab[data-v="func"]').click(); await esp(200);
+    v('fSearch', 'joao'); await esp(100); const func = nomes('#empBody tr');
+    document.querySelector('.vtab[data-v="sal"]').click(); await esp(300);
+    v('salSearch', 'ANTONIO'); await esp(150); const sal = nomes('#salBody tr[data-sficha]');
+    const lista = empBuscaItens('joão').map(e => e.nome).concat(empBuscaItens('Joao').map(e => e.nome));
+    return { func, sal, lista };
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  t.ok('Funcionários: "joao" acha João, e só ele', !r.erro && /Jo[aã]o/i.test(r.func) && !/Maria|Ant/i.test(r.func), J);
+  t.ok('Salários: "ANTONIO" acha Antônio, e só ele', !r.erro && /Ant[oô]nio/i.test(r.sal) && !/Maria|Jo/i.test(r.sal), J);
+  t.ok('lista de nomes: com ou sem acento, o mesmo resultado', !r.erro && r.lista.length === 2 && r.lista.every(n => n === 'JOÃO TESTE DA SILVA') && !erros.length, J);
+  await ctx.close();
+});
+
 teste('recibos-contabilidade-mes-anterior', async (b, t) => {
   // O relatório para a contabilidade abria o "adiantamento pago no mês" no mês
   // corrente: no dia 2 de outubro, outubro -- que ainda não teve adiantamento.
@@ -10799,8 +10826,8 @@ teste('propostas-salvos', async (b, t) => {
     const v = (etapa, valor) => ({ etapa, valor, opcional: false, contrato: true });
     const docs = {
       p1: { id: 'p1', numero: '2026-001', status: 'negociacao', alterado: 3, data: '2026-10-01', cliente: { nome: 'Cliente Um Teste' }, obra: { cidade: 'Cidade A/RS' }, valores: [v('Pré-fabricado', 1000)] },
-      p2: { id: 'p2', numero: '2026-002', status: 'assinado', alterado: 2, data: '2026-09-01', cliente: { nome: 'Cliente Dois Teste' }, obra: { cidade: 'Cidade B/RS' }, valores: [v('Metálica', 2500)], contrato: { data: '2026-09-20' } },
-      p3: { id: 'p3', numero: '2026-003', status: 'perdida', alterado: 1, data: '2026-08-01', cliente: { nome: 'Cliente Tres Teste' }, obra: { cidade: 'Cidade C/RS' }, valores: [v('Fundações', 300)] } };
+      p2: { id: 'p2', numero: '2026-002', status: 'assinado', alterado: 2, data: '2026-09-01', cliente: { nome: 'Cliente Dois Teste' }, obra: { cidade: 'Teutônia/RS' }, valores: [v('Metálica', 2500)], contrato: { data: '2026-09-20' } },
+      p3: { id: 'p3', numero: '2026-003', status: 'perdida', alterado: 1, data: '2026-08-01', cliente: { nome: 'Cliente Três Teste' }, obra: { cidade: 'Cidade C/RS' }, valores: [v('Fundações', 300)] } };
     localStorage.setItem('rm_propostas_v1', JSON.stringify({ docs, pendentes: {}, config: {} }));
     localStorage.setItem('rm_propostas_v1_aberto', 'p1');
   } catch (e) {} } });
@@ -10825,19 +10852,24 @@ teste('propostas-salvos', async (b, t) => {
     const nome = document.querySelector('#ficha [data-p="cliente.nome"]'); nome.value = 'Cliente Quatro Teste'; nome.dispatchEvent(new Event('input', { bubbles: true })); await esp(50);
     document.getElementById('btnFechar').click(); await esp(50);
     o.preenchida = { n: Object.keys(docs).length, primeiro: itens('listaProp')[0] };
-    const bus = document.getElementById('salvoBusca'); bus.value = 'cidade b'; bus.dispatchEvent(new Event('input', { bubbles: true }));
+    /* sem acento e em maiúsculas: acha "Teutônia" */
+    const bus = document.getElementById('salvoBusca'); bus.value = 'TEUTONIA'; bus.dispatchEvent(new Event('input', { bubbles: true }));
     o.busca = { props: itens('listaProp'), conts: itens('listaCont') };
+    /* a busca de dentro da proposta também: "tres" acha "Três" */
+    abrir('p1'); const db = document.getElementById('docBusca'); db.value = 'tres'; db.dispatchEvent(new Event('input', { bubbles: true }));
+    o.buscaDentro = [...document.querySelectorAll('#docSel option')].map(x => x.textContent);
     return o;
   }).catch(e => ({ erro: e.message }));
   const J = JSON.stringify(r) + ' ' + erros.join(' | ');
   if (r.semRecurso) { t.ok('tela de salvos no Propostas', false, 'sem #inicio'); await ctx.close(); return; }
   t.ok('abre limpa, sem a última proposta aberta, nos salvos', !r.erro && r.inicio.aberta === null && r.inicio.salvos && !r.inicio.ficha, J);
   t.ok('bloco Propostas com todas (a mais recente primeiro) e bloco Contratos só com as que têm contrato', !r.erro
-    && r.inicio.props.join('|') === 'Cliente Um Teste|Cliente Dois Teste|Cliente Tres Teste' && r.inicio.conts.join('|') === 'Cliente Dois Teste' && r.inicio.n.join() === '3,1', J);
+    && r.inicio.props.join('|') === 'Cliente Um Teste|Cliente Dois Teste|Cliente Três Teste' && r.inicio.conts.join('|') === 'Cliente Dois Teste' && r.inicio.n.join() === '3,1', J);
   t.ok('clicar no contrato abre ele, na aba Contrato, para editar', !r.erro && r.abriuContrato.id === 'p2' && r.abriuContrato.aba === 'contrato' && !r.abriuContrato.salvos && r.abriuContrato.ficha, J);
   t.ok('Salvar e fechar volta para os salvos', !r.erro && r.fechou.id === null && r.fechou.salvos, J);
   t.ok('proposta nova deixada em branco não vira item salvo; preenchida, aparece no alto', !r.erro && r.branco.descartada && r.branco.n === 3 && r.preenchida.n === 4 && r.preenchida.primeiro === 'Cliente Quatro Teste', J);
-  t.ok('procurar filtra os dois blocos', !r.erro && r.busca.props.join() === 'Cliente Dois Teste' && r.busca.conts.join() === 'Cliente Dois Teste' && !erros.length, J);
+  t.ok('procurar filtra os dois blocos, sem precisar de acento nem maiúscula', !r.erro && r.busca.props.join() === 'Cliente Dois Teste' && r.busca.conts.join() === 'Cliente Dois Teste', J);
+  t.ok('a busca de dentro da proposta também acha sem acento', !r.erro && r.buscaDentro.length === 1 && /Cliente Três Teste/.test(r.buscaDentro[0]) && !erros.length, J);
   await ctx.close();
 });
 
