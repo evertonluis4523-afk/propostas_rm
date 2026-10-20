@@ -11287,6 +11287,46 @@ teste('site-unico-montagem', async (b, t) => {
   fs.rmSync(dest, { recursive: true, force: true });
 });
 
+teste('instalar-pagina', async (b, t) => {
+  // o link que se manda para instalar o programa: rm-estruturas.pages.dev/instalar/
+  // (sem o nome da conta do GitHub). O botão vai direto ao instalador mais
+  // novo; sem a lista de versões, vai à página das versões.
+  const pagina = path.join(RAIZ, 'central_rm', 'instalar.html'), ferr = path.join(RAIZ, 'central_rm', 'ferramentas', 'monta_site.py');
+  if (!fs.existsSync(ferr)) return;
+  if (!fs.existsSync(pagina)) { t.ok('página de instalação', false, 'sem central_rm/instalar.html'); return; }
+  const dest = fs.mkdtempSync(path.join(require('os').tmpdir(), 'rm-site-'));
+  try { cp.execFileSync('python3', [ferr, RAIZ, dest], { encoding: 'utf8' }); } catch (e) {}
+  const noSite = fs.existsSync(path.join(dest, 'instalar', 'index.html'));
+  fs.rmSync(dest, { recursive: true, force: true });
+  t.ok('o site monta a página em /instalar/', noSite);
+  const html = fs.readFileSync(pagina, 'utf8');
+  const API = 'https://api.github.com/repos/evertonluis4523-afk/rm-central-instalador/releases/latest';
+  const ver = async (resposta, opt) => {
+    const ctx = await b.newContext(opt || {}); const pg = await ctx.newPage(); const erros = [];
+    pg.on('pageerror', e => erros.push(e.message));
+    await pg.route('**/*', rq => { const u = rq.request().url();
+      if (u.startsWith('https://rm-estruturas.pages.dev/instalar')) return rq.fulfill({ status: 200, contentType: 'text/html', body: html });
+      if (u.startsWith(API)) return resposta ? rq.fulfill({ status: 200, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: JSON.stringify(resposta) }) : rq.abort();
+      return rq.abort(); });
+    await pg.goto('https://rm-estruturas.pages.dev/instalar/').catch(() => {});
+    await pg.waitForTimeout(500);
+    const r = await pg.evaluate(() => ({ href: document.getElementById('baixar').href, txt: document.getElementById('baixarTxt').textContent, info: document.getElementById('info').textContent,
+      alt: [...document.querySelectorAll('a')].some(a => a.href.startsWith('https://rm-estruturas.pages.dev')), larg: document.documentElement.scrollWidth, vw: innerWidth, titulo: document.title }));
+    await ctx.close(); return Object.assign(r, { erros });
+  };
+  const rel = { tag_name: 'v1.7.9', published_at: '2026-10-19T17:20:00Z', assets: [
+    { name: 'latest.yml', browser_download_url: 'https://github.com/x/latest.yml', size: 400 },
+    { name: 'RM-Central-Setup-1.7.9.exe.blockmap', browser_download_url: 'https://github.com/x/b', size: 100 },
+    { name: 'RM-Central-Setup-1.7.9.exe', browser_download_url: 'https://github.com/x/RM-Central-Setup-1.7.9.exe', size: 94371840 }] };
+  const ok = await ver(rel);
+  t.ok('o botão baixa direto o instalador mais novo e diz a versão', /RM-Central-Setup-1\.7\.9\.exe$/.test(ok.href) && /1\.7\.9/.test(ok.txt) && /90 MB/.test(ok.info) && ok.titulo === 'Instalar a RM Central', JSON.stringify(ok));
+  const sem = await ver(null);
+  t.ok('sem a lista de versões, o botão leva à página das versões', /rm-central-instalador\/releases\/latest$/.test(sem.href) && /Assets/.test(sem.info), JSON.stringify(sem));
+  t.ok('lembra que dá para usar no navegador, no endereço do Cloudflare', ok.alt);
+  const cel = await ver(rel, { viewport: { width: 360, height: 740 } });
+  t.ok('no celular nada passa da tela; sem erro na página', cel.larg <= cel.vw + 1 && !ok.erros.length && !sem.erros.length && !cel.erros.length, JSON.stringify(cel) + ok.erros.join('|'));
+});
+
 teste('programa-duas-fontes', async (b, t) => {
   // o programa baixa do Cloudflare e cai no GitHub se o Cloudflare falhar ou
   // estiver atrás da versão que o computador já tem

@@ -324,6 +324,10 @@ Tudo que imprime segue a mesma papelaria:
     de sistema; a volta só vai para o site da RM.
   - Endereço gravado de um dos dois sites (o lápis da Central grava o
     endereço inteiro) vale pelo caminho: abre do mesmo site da Central.
+  - **Instalar o programa:** o link que se manda é
+    `https://rm-estruturas.pages.dev/instalar/` (fonte: `central_rm/instalar.html`,
+    copiada pelo `monta_site.py`). O botão vai direto ao instalador mais novo,
+    lido da lista de versões; sem ela, à página das versões. Teste `instalar-pagina`.
   - **Link que vai para outra pessoa** (Copiar, WhatsApp, link de instalação)
     sai **sempre** pelo principal, nunca montado de `location`: o endereço do
     GitHub leva o nome da conta (parecido com o e-mail) e aparece na prévia
