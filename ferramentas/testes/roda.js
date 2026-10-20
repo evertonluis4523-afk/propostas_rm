@@ -11207,7 +11207,7 @@ teste('central-enxuta-arquiteta', async (b, t) => {
     document.dispatchEvent(new CustomEvent('rm:dados')); await esp(50);
     const antes = { graf: (document.getElementById('dash-graf') || {}).innerHTML || '', stats: (document.getElementById('dash-stats') || {}).textContent || '' };
     aplicarCentralEnxuta();
-    const dono = { acomp: vis('btn-acomp'), notif: vis('btn-notif'), tel: vis('dash-tel-block'), stats: vis('dash-stats') };
+    const dono = { acomp: vis('btn-acomp'), notif: vis('btn-notif'), tel: vis('btn-links'), stats: vis('dash-stats') };
     /* saiu o dono: o resumo sai junto */
     if (typeof window.rmPainelLimpa !== 'function') return { antes, dono, erro: 'sem rmPainelLimpa' };
     window.rmPainelLimpa();
@@ -11219,7 +11219,7 @@ teste('central-enxuta-arquiteta', async (b, t) => {
     abriu = !!document.querySelector('.assist-overlay.open, #assist-overlay.open, .assistant.open');
     const ela = { dados: window.RM_DADOS === undefined && window.RM_GRAFICOS === undefined && window.RM_ORIENTACOES === undefined,
       graf: (document.getElementById('dash-graf') || {}).innerHTML || '', stats63: /63/.test((document.getElementById('dash-stats') || {}).textContent || ''),
-      acomp: vis('btn-acomp'), notif: vis('btn-notif'), tel: vis('dash-tel-block'), stats: vis('dash-stats'), graf_v: vis('dash-graf-block'), abriu,
+      acomp: vis('btn-acomp'), notif: vis('btn-notif'), tel: vis('btn-links'), stats: vis('dash-stats'), graf_v: vis('dash-graf-block'), abriu,
       menu: allSystems().map(s => s.id), enxuta: rmCentralEnxuta(), donoEnxuto: rmCentralEnxuta('evertonluis4523@gmail.com') };
     return { antes, dono, ela };
   }).catch(e => ({ erro: e.message }));
@@ -11229,6 +11229,33 @@ teste('central-enxuta-arquiteta', async (b, t) => {
   t.ok('Central da arquiteta: sem painel da empresa, Acompanhamento e notificações', r.ela && !r.ela.acomp && !r.ela.notif && !r.ela.tel && !r.ela.stats && !r.ela.graf_v && !r.ela.abriu, J);
   t.ok('só o sistema dela no menu; o dono não fica enxuto', r.ela && r.ela.menu.join() === 'propostas' && r.ela.enxuta && !r.ela.donoEnxuto, J);
   t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
+teste('central-links-uteis', async (b, t) => {
+  // os links que se mandam para outra pessoa (Ficha de EPI, instalar o
+  // programa) ficam numa gaveta do menu, "Links úteis", e não mais num bloco
+  // do Painel Geral; abre de qualquer tela e sai pelo Cloudflare.
+  if (!fs.existsSync(path.join(RAIZ, 'central_rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'central_rm' });
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    document.querySelectorAll('#lock-screen').forEach(e => e.classList.add('hidden'));
+    CURRENT_EMAIL = 'evertonluis4523@gmail.com'; aplicarCentralEnxuta();
+    const item = document.getElementById('btn-links');
+    if (!item) return { semItem: true };
+    item.click(); await esp(100);
+    const ov = document.getElementById('links-overlay');
+    const links = [...ov.querySelectorAll('.tel-link')].map(x => ({ nome: x.querySelector('.tl-nome').textContent, url: x.querySelector('.tl-url').textContent, botoes: x.querySelectorAll('.tl-acoes button').length }));
+    const aberto = ov.classList.contains('open');
+    ov.querySelector('.assist-close').click(); await esp(50);
+    return { aberto, fechou: !ov.classList.contains('open'), links, noPainel: !!document.querySelector('#dash-tel-block, .dashboard .tel-link') };
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  t.ok('item "Links úteis" no menu abre a gaveta', !r.erro && !r.semItem && r.aberto && r.fechou, J);
+  t.ok('na gaveta: Ficha de EPI e Instalar a RM Central, com copiar, WhatsApp e abrir, pelo Cloudflare', !r.erro && r.links && r.links.length === 2
+    && r.links[0].url === 'https://rm-estruturas.pages.dev/recibos_rm/epi.html' && r.links[1].url === 'https://rm-estruturas.pages.dev/instalar/' && r.links.every(l => l.botoes === 3), J);
+  t.ok('o bloco saiu do Painel Geral', !r.erro && r.noPainel === false && !erros.length, J);
   await ctx.close();
 });
 
@@ -11359,7 +11386,8 @@ teste('central-site-de-origem', async (b, t) => {
   // uma vez as preferências do antigo (tema, fundo, organização da tela)
   if (!fs.existsSync(path.join(RAIZ, 'central_rm', 'migra.html'))) return;
   const { ctx, pg, erros } = await abre(b, { 'sis.local': 'central_rm' });
-  const r = await pg.evaluate(() => ({ contas: (BASE_SYSTEMS.find(s => s.id === 'contas') || {}).url, epi: (document.getElementById('tl-epi-url') || {}).textContent }));
+  const r = await pg.evaluate(() => { let zap = ''; const wo = window.open; window.open = u => { zap = decodeURIComponent(u); return null; }; telLink('instalar', 'whats'); window.open = wo;
+    return { contas: (BASE_SYSTEMS.find(s => s.id === 'contas') || {}).url, epi: (document.getElementById('tl-epi-url') || {}).textContent, instalar: (document.getElementById('tl-instalar-url') || {}).textContent, zap }; });
   /* sistema renomeado no lápis quando tudo morava no github.io: o endereço
      gravado junto não pode prender o sistema no GitHub */
   const lapis = await pg.evaluate(() => {
@@ -11396,6 +11424,7 @@ teste('central-site-de-origem', async (b, t) => {
     && lapis.cheques === 'http://sis.local/controle_cheques/' && lapis.compras === 'https://outro.exemplo.com/compras/', J);
   t.ok('sistemas abrem no endereço em que a Central abriu', r.contas === 'http://sis.local/rm_contas/', J);
   t.ok('link da Ficha de EPI enviado sempre pelo Cloudflare, sem o nome da conta do GitHub', r.epi === 'https://rm-estruturas.pages.dev/recibos_rm/epi.html', J);
+  t.ok('link de instalar o programa na Central, para enviar: Cloudflare /instalar/', r.instalar === 'https://rm-estruturas.pages.dev/instalar/' && /Instalar a RM Central/.test(r.zap) && r.zap.includes('https://rm-estruturas.pages.dev/instalar/') && !/github/.test(r.zap), J);
   t.ok('chegada: grava tema, fundo e preferência da conta; dado de sistema e senha não', chegou.tema === 'escuro' && chegou.fundo === 'trelica' && chegou.dens === 'compacta' && !chegou.dado && !chegou.senha, J);
   t.ok('chegada: marca como feita e limpa o endereço', chegou.feito === '1' && !chegou.hash, J);
   t.ok('a página do endereço antigo não manda nada para fora do site da RM', /inválido/.test(recusou.txt) && /sis\.local/.test(recusou.url), J);
