@@ -331,8 +331,9 @@ Tudo que imprime segue a mesma papelaria:
   - **Link que vai para outra pessoa** (Copiar, WhatsApp, link de instalação)
     sai **sempre** pelo principal, nunca montado de `location`: o endereço do
     GitHub leva o nome da conta (parecido com o e-mail) e aparece na prévia
-    do WhatsApp. Hoje: Ficha de EPI (Central) e Contas em aberto (Contas a
-    Pagar).
+    do WhatsApp. Hoje: Ficha de EPI e Instalar a RM Central (gaveta "Links
+    úteis" do menu da Central) e Contas em aberto (Contas a Pagar). Link novo
+    para enviar entra nessa gaveta (`TEL_LINKS`). Teste `central-links-uteis`.
   - Testes `site-unico-montagem`, `programa-duas-fontes`, `central-site-de-origem`,
     `contas-link-curto`.
 - Os blocos comuns ficam **copiados dentro de cada index.html** (não num
