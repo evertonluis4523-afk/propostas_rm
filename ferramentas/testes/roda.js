@@ -11350,11 +11350,24 @@ teste('propostas-imagens', async (b, t) => {
     const manda = async (fs) => { const dt = new DataTransfer(); fs.forEach(f => dt.items.add(f)); const inp = document.getElementById('imArq'); inp.files = dt.files; inp.dispatchEvent(new Event('change', { bubbles: true })); for (let k = 0; k < 60 && d.imgs.itens.length < fs.length + o.antes; k++) await esp(100); await esp(150); };
     o.antes = 0; await manda([await png()]);
     const x = d.imgs.itens[0] || {};
-    o.um = { n: d.imgs.itens.length, w: x.w, h: x.h, tit: x.tit, jpeg: /^data:image\/jpeg;base64,/.test(IMG[x.id] || ''), idb: (await IDBI.pega(x.id)) === IMG[x.id], salvo: !JSON.stringify(d).includes('base64'), local: /só neste aparelho/.test(document.getElementById('ficha').textContent) };
+    o.um = { n: d.imgs.itens.length, w: x.w, h: x.h, tit: x.tit, jpeg: /^data:image\/jpeg;base64,/.test(IMG[x.id] || ''), idb: (await IDBI.pega(x.id)) === BRUTO[x.id] && BRUTO[x.id] !== IMG[x.id], salvo: !JSON.stringify(d).includes('base64'), local: /só neste aparelho/.test(document.getElementById('ficha').textContent) };
     /* a marca d'água está na imagem: o centro escurece de leve, os cantos ficam brancos */
-    const im = await carregaImg(IMG[x.id]), c = document.createElement('canvas'); c.width = im.naturalWidth; c.height = im.naturalHeight; const g = c.getContext('2d'); g.drawImage(im, 0, 0);
+    const c = document.createElement('canvas'), g = c.getContext('2d');
+    const abre = async src => { const im = await carregaImg(src); c.width = im.naturalWidth; c.height = im.naturalHeight; g.drawImage(im, 0, 0); };
     const px = (x0, y0, w, h) => { const a = g.getImageData(x0, y0, w, h).data; let mn = 255; for (let k = 0; k < a.length; k += 4) mn = Math.min(mn, a[k], a[k + 1], a[k + 2]); return mn; };
-    o.marca = { centro: px(c.width * .36, c.height * .3, c.width * .28, c.height * .4), canto: px(0, 0, 120, 120), cantoBaixo: px(c.width - 120, c.height - 120, 120, 120) };
+    const centro = () => px(c.width * .36, c.height * .3, c.width * .28, c.height * .4);
+    await abre(IMG[x.id]);
+    o.marca = { centro: centro(), canto: px(0, 0, 120, 120), cantoBaixo: px(c.width - 120, c.height - 120, 120, 120) };
+    await abre(BRUTO[x.id]); o.marca.guardadaSem = centro();
+    /* intensidade nas Configurações: o controle, a amostra, e vale para a imagem que já estava */
+    document.getElementById('btnModelo').click(); await esp(80);
+    o.cfg = { valor: document.getElementById('cfgMarca').value, rot: document.getElementById('cfgMarcaV').textContent };
+    for (let k = 0; k < 9; k++) document.getElementById('cfgMarcaMais').click();
+    o.cfg.rot2 = document.getElementById('cfgMarcaV').textContent;
+    document.getElementById('modeloSalvar').click(); await esp(100);
+    o.cfg.salvo = config.marcaAlfa;
+    await carregaImagensDoc(d); await abre(IMG[x.id]); o.marca.forte = centro();
+    config.marcaAlfa = 3.5; await carregaImagensDoc(d);
     /* mais três; a terceira em página inteira */
     o.antes = 1; await manda([await png(), await png(), await png()]);
     d.imgs.itens[2].tam = 'inteira'; alterou(d, true); await esp(150);
@@ -11377,6 +11390,10 @@ teste('propostas-imagens', async (b, t) => {
     const ax = document.querySelector('#ficha [data-p="imgs.anexar"]'); ax.checked = true; ax.dispatchEvent(new Event('input', { bubbles: true })); await esp(150);
     document.getElementById('abaProposta').click(); await esp(150);
     o.anexo = { figs: document.querySelectorAll('#folha .f-fig img').length, proposta: /Proposta comercial/i.test(folha()) };
+    /* o quadro do papel: cliente mais estreito que o local da obra (tela e Word) */
+    const cel = [...document.querySelector('#folha .f-meta').children].map(e => Math.round(e.getBoundingClientRect().width));
+    const wp = partes(await docxBytes(blocosProposta(d))), dx = new TextDecoder().decode(wp['word/document.xml']);
+    o.quadro = { tela: cel, word: dx.includes('<w:gridCol w:w="2438"/><w:gridCol w:w="3608"/><w:gridCol w:w="1853"/><w:gridCol w:w="1853"/>') };
     /* tirar: some do aparelho quando nada mais cita; a cópia segura a imagem */
     document.getElementById('abaImagens').click(); await esp(80);
     const idTira = d.imgs.itens[3].id;
@@ -11395,12 +11412,15 @@ teste('propostas-imagens', async (b, t) => {
   const u = r.um || {}, m = r.marca || {}, pg2 = r.pag || {}, w = r.word || {};
   t.ok('aba Imagens: cabeçalho do papel com a proposta, a revisão e o cliente; botão de adicionar', !r.erro && r.vazio.cab && r.vazio.cliente && r.vazio.arq, J);
   t.ok('imagem reduzida para o A4 (1800 px), em JPEG, com o título do nome do arquivo', u.n === 1 && u.w === 1800 && u.h === 1013 && u.jpeg && u.tit === 'Fachada frontal', J);
-  t.ok("marca d'água gravada: o centro escurece de leve (3,5%), os cantos ficam brancos (o transparente vira branco)", m.centro <= 249 && m.centro >= 225 && m.canto >= 252 && m.cantoBaixo >= 252, J);
+  t.ok("marca d'água na imagem que sai: o centro escurece de leve (3,5%), os cantos ficam brancos (o transparente vira branco)", m.centro <= 249 && m.centro >= 225 && m.canto >= 252 && m.cantoBaixo >= 252, J);
+  t.ok("intensidade da marca em Configurações (3,5% → 8%): vale também para a imagem já adicionada; a guardada fica sem marca", r.cfg && r.cfg.valor === '3.5' && r.cfg.rot === '3,5%' && r.cfg.rot2 === '8%' && r.cfg.salvo === 8 && m.forte < m.centro - 4 && m.guardadaSem >= 252, J);
   t.ok('guardada no aparelho e fora da proposta (o salvar não leva a imagem); avisa que está só neste aparelho', u.idb && u.salvo && u.local, J);
   t.ok('duas por página; a de página inteira vai sozinha (4 imagens · 3 páginas)', pg2.quebras === 2 && pg2.tela === 2 && pg2.figs === 4 && /4 imagens · 3 páginas/.test(pg2.extra) && /Imagens\s*4/.test(pg2.aba), J);
   t.ok('título editável e ordem com as setas', r.ordem && r.ordem.titulo && r.ordem.desceu && /^Imagens /.test(r.nome), J);
   t.ok('Word: as quatro imagens dentro do arquivo, com título e quebra de página', w.midias === 4 && w.desenhos === 4 && w.rels === 4 && w.tipo && w.quebras === 2 && w.titulo, J);
   t.ok('anexar no fim da proposta: a proposta e as imagens num documento só', r.anexo && r.anexo.figs === 4 && r.anexo.proposta, J);
+  const q = r.quadro || {};
+  t.ok('quadro do papel: Cliente mais estreito, Local da obra mais largo (tela e Word)', q.tela && q.tela.length === 4 && q.tela[0] < q.tela[1] && q.tela[1] > q.tela[2] * 1.6 && q.word, J);
   t.ok('tirar a imagem apaga do aparelho; a que a cópia da proposta ainda usa fica', r.tirou && r.tirou.n === 3 && r.tirou.idb === null && r.copia.mesmaImagem && r.copia.aindaGuardada && !erros.length, J);
   await ctx.close();
 });
