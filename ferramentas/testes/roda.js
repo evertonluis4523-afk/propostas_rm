@@ -9892,7 +9892,7 @@ teste('recibos-epi-peca-a-mais-e-corrigir', async (b, t) => {
     document.querySelector('.epi-stab[data-p="historico"]').click(); await esp(200);
     const hs = document.getElementById('epiHistFunc'); hs.value = ''; hs.dispatchEvent(new Event('change')); await esp(150);
     out.corrigirNoAssinado = !!document.querySelector('[data-mcorr="c1"]');
-    out.corrigirNoPendente = !!document.querySelector('[data-mcorr="p1"]');
+    out.corrigirNoPendente = (document.querySelector('[data-mcorr="p1"]') || {}).textContent || '';
     if (out.corrigirNoAssinado) {
       document.querySelector('[data-mcorr="c1"]').click(); await esp(100);
       const dlg = document.querySelector('.pg.epi-corr');
@@ -9905,6 +9905,22 @@ teste('recibos-epi-peca-a-mais-e-corrigir', async (b, t) => {
         dlg.querySelector('[data-ok]').click(); await esp(300);
       }
     }
+    // "quando a assinatura está pendente não tenho opção de corrigir": Editar, direto, sem registro de correção
+    const bp = document.querySelector('[data-mcorr="p1"]');
+    if (bp) {
+      bp.click(); await esp(100);
+      const dp = document.querySelector('.pg.epi-corr');
+      out.dialogoPend = dp ? dp.textContent.replace(/\s+/g, ' ') : '';
+      if (dp) {
+        dp.querySelector('[data-ctira="0"]').click(); dp.querySelector('[data-ok]').click(); await esp(50);
+        out.recusaTirarTudo = (dp.querySelector('.pg-erro') || {}).textContent || '';
+        dp.querySelector('[data-ctira="0"]').click();
+        dp.querySelector('[data-cq="0"]').value = '3'; dp.querySelector('[data-ct="0"]').value = 'GG';
+        dp.querySelector('[data-ok]').click(); await esp(300);
+      }
+    }
+    const p1 = state.epiMovimentos.p1;
+    out.p1 = { qtd: p1.itens[0].qtd, tam: p1.itens[0].tamanho, status: p1.status, correcoes: (p1.correcoes || []).length, assinar: !!document.querySelector('[data-mconf="p1"]') };
     const c1 = state.epiMovimentos.c1;
     out.c1 = { qtd: c1.itens[0].qtd, tam: c1.itens[0].tamanho, status: c1.status, conf: c1.confirmadoEm, correcoes: (c1.correcoes || []).map(c => c.campo + ':' + c.de + '>' + c.para + ':' + c.motivo) };
     let html = ''; const o = window.preVisualizarPDF; window.preVisualizarPDF = (c, h) => { html = h; };
@@ -9925,7 +9941,9 @@ teste('recibos-epi-peca-a-mais-e-corrigir', async (b, t) => {
   t.ok('troca rápida: quantidade por item (+ + − = 2), no cartão, no resumo e gravada', !r.erro && r.temQtd && /2 pç/.test(r.cardVDepois) && /2 pç de/.test(r.resumoV) && r.trocaPapel && r.trocaPapel.qtd === 2, J);
   t.ok('movimentação: uniforme nunca entregue também tem a escolha (começa em novo)', !r.erro && r.movOpcoesV === 'novo=troca,novo', J);
   t.ok('movimentação: o uniforme oferece troca ou "novo · peça a mais"', !r.erro && /novo:novo · peça a mais/.test(r.movOpcoes) && /^troca:/.test(r.movOpcoes), J);
-  t.ok('Corrigir aparece só na movimentação assinada', !r.erro && r.corrigirNoAssinado && !r.corrigirNoPendente, J);
+  t.ok('Corrigir na movimentação assinada; na pendente, Editar', !r.erro && r.corrigirNoAssinado && r.corrigirNoPendente === 'Editar', J);
+  t.ok('pendente: Editar muda quantidade e tamanho direto, continua aguardando assinatura, sem registro de correção; não deixa tirar todos os itens', !r.erro && /Editar movimentação/.test(r.dialogoPend) && /Ainda não assinada/.test(r.dialogoPend)
+    && /pelo menos um item/.test(r.recusaTirarTudo) && r.p1.qtd === 3 && r.p1.tam === 'GG' && r.p1.status === 'pendente' && r.p1.correcoes === 0 && r.p1.assinar, J);
   t.ok('a janela diz que não pede nova assinatura e recusa quantidade 0', !r.erro && /Sem nova assinatura/.test(r.dialogo) && /Quantidade inválida/.test(r.recusaZero), J);
   t.ok('corrigido: quantidade 2 e tamanho G, continua assinada, cada mudança registrada com o motivo', !r.erro && r.c1.qtd === 2 && r.c1.tam === 'G' && r.c1.status === 'confirmado' && !!r.c1.conf
     && r.c1.correcoes.join() === 'quantidade:1>2:entregou 2 G, lançado 1 M,tamanho:M>G:entregou 2 G, lançado 1 M', J);
