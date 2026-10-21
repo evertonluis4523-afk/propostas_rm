@@ -12634,6 +12634,59 @@ teste('propostas-imagens-pdf-limpo', async (b, t) => {
   await ctx.close();
 });
 
+teste('propostas-imagens-anexadas-sem-marca-da-pagina', async (b, t) => {
+  // proposta com as imagens anexadas (um PDF só): as folhas do texto levam a
+  // marca d'água da página; as folhas das imagens, não -- cada imagem já tem
+  // a dela gravada. Medido no PDF de verdade, página por página.
+  if (!fs.existsSync(path.join(RAIZ, 'propostas_rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'propostas_rm' });
+  await semLogin(pg);
+  const r0 = await pg.evaluate(async (FICT) => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    await iniciarApp();
+    const d = eval(FICT); docs[d.id] = d; abrir(d.id); await esp(50);
+    document.getElementById('abaImagens').click(); await esp(80);
+    const dt = new DataTransfer();
+    for (const nome of ['Fachada', 'Lateral', 'Interno']) {
+      const c = document.createElement('canvas'); c.width = 1600; c.height = 900; const g = c.getContext('2d'); g.fillStyle = '#8a9097'; g.fillRect(0, 0, 1600, 900);
+      dt.items.add(new File([await new Promise(ok => c.toBlob(ok, 'image/png'))], nome + '.png', { type: 'image/png' }));
+    }
+    const inp = document.getElementById('imArq'); inp.files = dt.files; inp.dispatchEvent(new Event('change', { bubbles: true }));
+    for (let k = 0; k < 80 && d.imgs.itens.length < 3; k++) await esp(100);
+    d.imgs.anexar = true; document.getElementById('abaProposta').click(); await esp(100);
+    await carregaImagensDoc(d); renderFolha(); await esp(200);
+    return { semClasse: !document.documentElement.classList.contains('rm-sem-dagua'), imgs: document.querySelectorAll('#folha .f-fig img').length };
+  }, PROP_FICT).catch(e => ({ erro: e.message }));
+  await pg.emulateMedia({ media: 'print' });
+  const marcaTexto = await pg.evaluate(() => { const e = document.getElementById('rm-dagua-imp'); return e ? getComputedStyle(e).display : 'sem'; });
+  const pdf = r0.erro ? null : await pg.pdf({ format: 'A4' });
+  await pg.emulateMedia({ media: 'screen' });
+  const r = pdf ? await pg.evaluate(async (b64) => {
+    await carregaPdfJs();
+    const bin = atob(b64), u = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i);
+    const doc = await pdfjsLib.getDocument({ data: u }).promise, out = [];
+    for (let n = 1; n <= doc.numPages; n++) {
+      const p = await doc.getPage(n), vp = p.getViewport({ scale: 1.5 }), c = document.createElement('canvas'); c.width = vp.width; c.height = vp.height;
+      const g = c.getContext('2d'); g.fillStyle = '#fff'; g.fillRect(0, 0, c.width, c.height);
+      await p.render({ canvasContext: g, viewport: vp }).promise;
+      const tx = (await p.getTextContent()).items.map(i => i.str).join(' ');
+      /* o tom da marca d'água no branco (3,5% do símbolo escuro), no meio da folha */
+      const a = g.getImageData(c.width * 0.36, c.height * 0.36, c.width * 0.28, c.height * 0.3).data; let tom = 0;
+      for (let k = 0; k < a.length; k += 4) if (a[k] >= 236 && a[k] <= 251 && Math.abs(a[k] - a[k + 2]) < 4) tom++;
+      out.push({ n, anexo: /imagensdoprojeto|perspectivasdaobra/i.test(tx.replace(/\s+/g, '')), tom });
+    }
+    return out;
+  }, pdf.toString('base64')).catch(e => ({ erro: e.message })) : { erro: r0.erro };
+  const J = JSON.stringify({ r0, marcaTexto, r }) + ' ' + erros.join(' | ');
+  const pags = Array.isArray(r) ? r : [];
+  const ini = pags.findIndex(p => p.anexo), anexas = ini >= 0 ? pags.slice(ini) : [];
+  t.ok('a proposta tem as folhas das imagens anexadas', !r0.erro && r0.imgs === 3 && anexas.length >= 2, J);
+  t.ok('as folhas do texto continuam com a marca d\'água da página', !r0.erro && r0.semClasse && marcaTexto === 'flex' && ini > 0 && pags.slice(0, ini).every(p => p.tom > 2000), J);
+  t.ok('as folhas das imagens: sem a marca d\'água da página', anexas.length >= 2 && anexas.every(p => p.tom < 40), J);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
 teste('propostas-nuvem', async (b, t) => {
   // cada proposta no seu nó (quem grava o banco inteiro apaga o do outro);
   // gravação recusada avisa e a alteração fica guardada para subir depois;
