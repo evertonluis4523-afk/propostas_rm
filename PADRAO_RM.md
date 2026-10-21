@@ -125,6 +125,10 @@ embutido e no de arquivo (`rm-logo.svg`), teste `logo-em-arquivo-no-escuro`.
   **Arquivo anexado (nota, PDF) não fica só no aparelho:** vai para a nuvem
   num nó à parte (`obras_rm_anexos`, `contas_pagar_anexos`), listado em
   `NOS_ANEXOS`; o IndexedDB é só a cópia local. Teste `contas-anexos-na-nuvem`.
+  As imagens das obras do Propostas moram em `propostas_rm/imagens` (dentro
+  da regra que já existia) e vão com os anexos; o resto do `propostas_rm` vai
+  por partes na `NOS_DADOS`. Imagem é reduzida ao A4 e leva a marca d'água
+  (o símbolo, 3,5%) gravada nela. Teste `propostas-imagens`.
 - **Gravação na nuvem (Firebase):**
   - **nada grava antes da primeira leitura** do nó; a gravação junta com o
     que está na nuvem (por id) ou manda só o que mudou -- nunca a cópia
