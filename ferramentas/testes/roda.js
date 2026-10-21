@@ -8583,13 +8583,16 @@ teste('recibos-rescisao-documentos-novos', async (b, t) => {
       const d = /TERMO DE RESCISAO/.test(f) ? 'trct' : /Guia do FGTS/.test(f) ? 'guia' : /Saldo de salario/.test(f) ? 'fora' : /AVISO PREVIO TRABALHADO/.test(f) ? 'aviso' : /Seguro-Desemprego/.test(f) ? 'seguro' : 'x';
       return via + ':' + d;
     }).join(' ');
-    return { tipos, linhas, resumo, rostoEmp: folhas.find(f => /Pasta da empresa/i.test(f)) || '', rostoFunc: folhas.find(f => /Pasta do funcion/i.test(f)) || '' };
+    return { tipos, linhas, resumo, rostoImg: KIT.rostoImg, rostoEmp: folhas.find(f => /Pasta da empresa/i.test(f)) || '', rostoFunc: folhas.find(f => /Pasta do funcion/i.test(f)) || '' };
   }).catch(e => ({ erro: e.message }));
   const J = JSON.stringify(r) + ' ' + erros.join(' | ');
   t.ok('reconhece guia do FGTS, valor por fora, aviso prévio, modelo do aviso e seguro (o recibo que cita aviso prévio continua recibo)', !r.erro && r.tipos === 'trct,guiafgts,porfora,aviso,modeloaviso,seguro', J);
   t.ok('vias: guia e por fora 1/0, aviso 1/1, modelo do aviso 0/1, seguro 0/1', !r.erro && ['Guia do FGTS=1/0', 'Valor por fora=1/0', 'Aviso prévio=1/1', 'Seguro-desemprego sai sem a marca de via no alto=0/1'].every(x => r.linhas.includes(x)) && r.linhas.some(x => /^Modelo do aviso prévio .*=0\/1$/.test(x)), J);
   t.ok('empresa: recibo, aviso, guia e por fora; funcionário: recibo, modelo do aviso, aviso e seguro', !r.erro && r.resumo === 'ROSTO-EMP E:trct E:aviso E:guia E:fora ROSTO-FUNC F:trct F:trct F:trct M:x F:aviso -:seguro -:seguro', J);
   t.ok('o seguro sai sem nenhuma marca de via', !r.erro && !/\?:seguro|[EFM]:seguro/.test(r.resumo), J);
+  // "a primeira folha (pasta da empresa / do funcionário) não respeita layout algum": a folha de
+  // rosto sai no papel da RM -- o mesmo HTML dos relatórios, em imagem -- com o texto por baixo
+  t.ok('as duas folhas de rosto saem no papel padrão (imagem do timbrado) e continuam pesquisáveis', !r.erro && r.rostoImg === 2 && /Pasta da empresa/.test(r.rostoEmp) && /Pasta do funcion/.test(r.rostoFunc), J);
   t.ok('folhas de rosto: o que vai em cada pasta e o aviso "conforme o modelo"', !r.erro && /Valor por fora/.test(r.rostoEmp) && /Guia do FGTS/.test(r.rostoEmp) && !/Seguro/.test(r.rostoEmp)
     && /Modelo do aviso prévio \(como preencher\)/.test(r.rostoFunc) && /Aviso prévio \(preencher conforme o modelo\)/.test(r.rostoFunc) && /Seguro-desemprego \(sem marca de via\)/.test(r.rostoFunc) && !/Valor por fora|Guia do FGTS/.test(r.rostoFunc) && !erros.length, J);
   await ctx.close();
