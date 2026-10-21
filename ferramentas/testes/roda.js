@@ -7151,6 +7151,51 @@ teste('almocos-afastado-recibos', async (b, t) => {
   await ctx.close();
 });
 
+teste('almocos-demissao-nas-marcacoes', async (b, t) => {
+  // demissão lançada no Recibos com a data X: o Almoços já descia a pessoa
+  // para os afastados, mas as marcações DEPOIS de X ficavam e contavam. Agora
+  // viram "Demissão" (e os dias vazios do mês da saída também); o que estava
+  // antes fica guardado e volta se a data for corrigida ou se ela voltar.
+  if (!fs.existsSync(path.join(RAIZ, 'almo-os'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'almo-os' });
+  const r = await pg.evaluate(() => {
+    const l = document.getElementById('loginScreen'); if (l) l.style.setProperty('display', 'none', 'important');
+    if (typeof ajustaDemissao !== 'function') return { semRecurso: true };
+    ['2026-09', '2026-10', '2026-11', '2026-12'].forEach(ensureMonth); DB.mesAtual = '2026-10';
+    DB.funcionarios = [{ id: 'a', nome: 'ANA TESTE SAIU' }, { id: 'b', nome: 'BETO TESTE FICA' }, { id: 'c', nome: 'CAIO TESTE SAIU' }];
+    const M = mk => DB.meses[mk], mar = (mk, id) => (M(mk).marc[id] = M(mk).marc[id] || {});
+    Object.assign(mar('2026-09', 'a'), { '2026-09-28': 'PEGOU' });
+    Object.assign(mar('2026-10', 'a'), { '2026-10-05': 'PEGOU', '2026-10-15': 'PEGOU', '2026-10-20': 'PAGAR', '2026-10-21': 'FALTA' });
+    Object.assign(mar('2026-11', 'a'), { '2026-11-03': 'PEGOU' });
+    Object.assign(mar('2026-12', 'c'), { '2026-12-01': 'PEGOU' }); M('2026-12').fechado = { em: '2027-01-02T10:00:00Z' };
+    const vazio = Object.keys(M('2026-10').dias).sort().find(d => d > '2026-10-15' && M('2026-10').dias[d].on && !M('2026-10').dias[d].fer && !M('2026-10').marc.a[d]);
+    const novVazio = Object.keys(M('2026-11').dias).sort().find(d => M('2026-11').dias[d].on && d !== '2026-11-03');
+    const dir = { r1: { nome: 'Ana Teste Saiu', status: 'demissao', dtDesligamento: '2026-10-15' }, r2: { nome: 'Beto Teste Fica', status: 'ativo' }, r3: { nome: 'Caio Teste Saiu', status: 'desligado', dtDesligamento: '2026-10-15' } };
+    const res = aplicarDiretorioRecibos(dir);
+    const A = (mk, d) => (M(mk).marc.a || {})[d] || '';
+    const o = { vazio, res: res.demissao,
+      saiu: { set: A('2026-09', '2026-09-28'), antes: A('2026-10', '2026-10-05'), diaX: A('2026-10', '2026-10-15'), pagar: A('2026-10', '2026-10-20'), falta: A('2026-10', '2026-10-21'), vazioOut: A('2026-10', vazio), nov: A('2026-11', '2026-11-03'), novVazio: A('2026-11', novVazio) },
+      conta: calc(DB.funcionarios[0]).presente, fechado: (M('2026-12').marc.c || {})['2026-12-01'], beto: !M('2026-10').marc.b };
+    /* a data foi corrigida para depois: o que a regra pôs antes dela volta */
+    dir.r1.dtDesligamento = '2026-10-20'; aplicarDiretorioRecibos(dir);
+    o.corrigiu = { pagar: A('2026-10', '2026-10-20'), vazioOut: A('2026-10', vazio), falta: A('2026-10', '2026-10-21') };
+    /* voltou a ativo no Recibos: tudo como era */
+    dir.r1.status = 'ativo'; delete dir.r1.dtDesligamento; aplicarDiretorioRecibos(dir);
+    o.voltou = { falta: A('2026-10', '2026-10-21'), nov: A('2026-11', '2026-11-03'), vazioOut: A('2026-10', vazio), guarda: !Object.values(DB.meses).some(m => m.demAuto && m.demAuto.a) };
+    return o;
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r);
+  if (r.semRecurso) { t.ok('demissão vira marcação depois da data', false, 'sem ajustaDemissao'); await ctx.close(); return; }
+  const s2 = r.saiu || {};
+  t.ok('depois da data de saída, o que estava marcado vira Demissão (inclusive no mês seguinte)', !r.erro && s2.pagar === 'DEMISSAO' && s2.falta === 'DEMISSAO' && s2.nov === 'DEMISSAO' && r.res > 0, J);
+  t.ok('o dia da saída e os dias de antes ficam como estavam', !r.erro && s2.diaX === 'PEGOU' && s2.antes === 'PEGOU' && s2.set === 'PEGOU' && r.beto, J);
+  t.ok('no mês da saída os dias vazios também; nos meses seguintes, vazio continua vazio', !r.erro && r.vazio && s2.vazioOut === 'DEMISSAO' && s2.novVazio === '', J);
+  t.ok('a conta do mês só leva os dias até a saída; mês fechado não muda', !r.erro && r.conta === 2 && r.fechado === 'PEGOU', J);
+  t.ok('data corrigida para depois: os dias que voltaram a ser dela voltam como eram', !r.erro && r.corrigiu.pagar === 'PAGAR' && r.corrigiu.vazioOut === '' && r.corrigiu.falta === 'DEMISSAO', J);
+  t.ok('voltou a ativo no Recibos: as marcações voltam como eram', !r.erro && r.voltou.falta === 'FALTA' && r.voltou.nov === 'PEGOU' && r.voltou.vazioOut === '' && r.voltou.guarda && !erros.length, J + ' ' + erros.join(' | '));
+  await ctx.close();
+});
+
 teste('almocos-fora-folha', async (b, t) => {
   // sócio almoça mas não tem ficha no Recibos: a sincronização o marcava
   // "sem ficha no Recibos" e ele caía nos afastados (ou sumia do mês).
