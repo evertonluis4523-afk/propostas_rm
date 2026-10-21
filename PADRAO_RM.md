@@ -267,6 +267,10 @@ Tudo que imprime segue a mesma papelaria:
   `body{padding-bottom:16mm;box-decoration-break:clone}` para não cobrir texto.
 - **Marca d'água:** símbolo escuro, **28% da largura, no máximo 190 px,
   opacidade 3,5%**, `mix-blend-mode:multiply`.
+  Documento cujas imagens já trazem a marca gravada nelas (as imagens da
+  obra, no Propostas) não leva a da página: o sistema põe
+  `<html class="rm-sem-dagua">` enquanto mostra esse documento. Teste
+  `propostas-imagens-pdf-limpo`.
 - **Página:** `@page{size:A4;margin:12mm}`; tela, menus e botões fora do papel.
 - **Tabelas:** faixa clara só no cabeçalho, fio fino entre linhas; sem moldura
   externa, sem zebra; totais não se repetem por página
