@@ -910,6 +910,39 @@ teste('orcamento-banco-fornecedores', async (b, t) => {
   await ctx.close();
 });
 
+teste('orcamento-banco-colunas-vazias', async (b, t) => {
+  // Vergalhões e telas mostrava PERFITEC e BRASTELHA só com "—": estavam na
+  // lista antiga de colunas da categoria sem nenhum preço ali, e ocupavam a
+  // tela. Sai uma vez quem não tem preço; quem a pessoa marca depois fica.
+  if (!fs.existsSync(path.join(RAIZ, 'orcamento-rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'orcamento-rm' });
+  const r = await pg.evaluate(async () => {
+    const l = document.getElementById('loginScreen'); if (l) l.style.setProperty('display', 'none', 'important');
+    window.confirm = () => true; window.alert = () => {};
+    if (typeof catFornCols !== 'function') return { semRecurso: true };
+    S.fornecedores.push({ id: 'fv1', nome: 'SEM PRECO A', precos: {} }, { id: 'fv2', nome: 'SEM PRECO B', precos: {}, catPrecos: { 'cat_x~outra': 9 } },
+      { id: 'fv3', nome: 'COM PRECO', precos: {}, catPrecos: { 'cat_cv~i1': 30 } }, { id: 'fv4', nome: 'BASE VELHA', precos: {} }, { id: 'fv5', nome: 'NOVA BASE', precos: {}, catPrecos: { 'cat_cv2~i1': 20 } });
+    S.categorias.push({ id: 'cat_cv', nome: 'VERGALHÕES TESTE', fornBase: 'BASE CV', fornCols: ['SEM PRECO A', 'SEM PRECO B', 'COM PRECO'], items: [{ id: 'i1', grupo: 'G', tipo: 'T', valor: 25 }] },
+      { id: 'cat_cv2', nome: 'OUTRA TESTE', fornBase: 'BASE VELHA', items: [{ id: 'i1', grupo: 'G', tipo: 'T', valor: 0 }] });
+    delete S._migCatColsVazias;
+    const antes = catFornCols(catById('cat_cv')).slice();
+    const fez = typeof migraCatColsVazias === 'function' && migraCatColsVazias();
+    const depois = catFornCols(catById('cat_cv')).slice();
+    /* marcado de propósito (sem preço ainda) continua, e a migração não roda de novo */
+    fornPoeNaArea('cat:cat_cv', 'SEM PRECO A'); if (typeof migraCatColsVazias === 'function') migraCatColsVazias();
+    const marcado = catFornCols(catById('cat_cv')).includes('SEM PRECO A');
+    /* trocar a referência: a velha sem preço nenhum não vira coluna vazia */
+    catUsarRef('cat_cv2', 'NOVA BASE');
+    const troca = catFornCols(catById('cat_cv2')).slice();
+    return { antes, fez, depois, marcado, troca };
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  t.ok('fornecedor sem preço na categoria não ocupa coluna; quem tem preço fica', !r.erro && !r.semRecurso && r.antes.length === 4 && r.fez && r.depois.join('|') === 'BASE CV|COM PRECO', J);
+  t.ok('fornecedor marcado depois (ainda sem preço) continua na categoria', !r.erro && r.marcado, J);
+  t.ok('trocar a referência não deixa a antiga, sem preço, como coluna vazia', !r.erro && r.troca && r.troca.join('|') === 'NOVA BASE' && !erros.length, J);
+  await ctx.close();
+});
+
 teste('orcamento-servicos-sem-fornecedor', async (b, t) => {
   // Serviços são terceiros, sem vínculo com as empresas do banco: a linha e
   // a seção não mostram "fornecedor", e o valor é o do cadastro do serviço
@@ -1069,6 +1102,61 @@ teste('orcamento-numero-e-revisao', async (b, t) => {
   t.ok('o relatório conta só a última revisão', !r.erro && r.rel === '0007,0008 R2', J);
   t.ok('imprimir sem número já numera', !r.erro && r.impresso === '0009', J);
   t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
+teste('orcamento-salvar-novo', async (b, t) => {
+  // "Fiz um orçamento novo e ao salvar ele pergunta Atualizar este ou nova
+  // revisão de outro." O orçamento aberto ficava gravado no cadastro (e ia
+  // para a nuvem): depois de fechar e abrir, a tela vinha vazia, mas o
+  // último salvo continuava "aberto". Agora abre sem nenhum, a escolha não
+  // viaja entre aparelhos, e a pergunta tem "Salvar como novo orçamento".
+  if (!fs.existsSync(path.join(RAIZ, 'orcamento-rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'orcamento-rm' });
+  const esp = ms => new Promise(x => setTimeout(x, ms));
+  const r = {};
+  try {
+    r.a = await pg.evaluate(async () => {
+      const esp = ms => new Promise(x => setTimeout(x, ms));
+      window.confirm = () => true;
+      S.orcamentosSalvos = []; clearQuote(); await esp(30);
+      S.cliente = 'Cliente Fictício A'; initRender(); addPerfilLine(S.perfis[0].id); await esp(30);
+      salvarOrcamento(); await esp(80);
+      return { id: S.orcamentoAtualId, n: S.orcamentosSalvos.length };
+    });
+    await esp(900); await pg.reload(); await pg.waitForFunction(() => typeof salvarOrcamento === 'function'); await esp(400);
+    r.b = await pg.evaluate(async () => {
+      const esp = ms => new Promise(x => setTimeout(x, ms));
+      window.confirm = () => true;
+      const dlg = () => document.getElementById('escolhaOverlay').classList.contains('open');
+      const o = { aberto: S.orcamentoAtualId, n0: S.orcamentosSalvos.length };
+      S.cliente = 'Cliente Fictício B'; initRender(); addPerfilLine(S.perfis[0].id); await esp(30);
+      salvarOrcamento(); await esp(80);
+      o.perguntou = dlg(); if (o.perguntou) escolhaFecha('');
+      o.n1 = S.orcamentosSalvos.length; const B = S.orcamentosSalvos.find(e => e.id === S.orcamentoAtualId) || {};
+      o.numB = B.numero;
+      /* em cima do B, outro cliente: "Salvar como novo orçamento" */
+      S.cliente = 'Cliente Fictício C'; initRender();
+      salvarOrcamento(); await esp(80);
+      o.botoes = [...document.querySelectorAll('#escolhaFoot [data-esc]')].map(x => x.textContent.trim());
+      const bt = document.querySelector('#escolhaFoot [data-esc="novo"]'); if (bt) bt.click(); else escolhaFecha('');
+      await esp(60);
+      const C = S.orcamentosSalvos.find(e => e.id === S.orcamentoAtualId) || {};
+      o.n2 = S.orcamentosSalvos.length; o.C = { id: C.id, numero: C.numero, cliente: C.cliente };
+      const B2 = S.orcamentosSalvos.find(e => e.id === B.id) || {};
+      o.Bintacto = B2.cliente === 'Cliente Fictício B' && B2.numero === B.numero && !B2.substituidoPor;
+      /* não viaja pela nuvem */
+      o.sync = fbChavesSync({ orcamentoAtualId: 'orcOutro', fornecedores: [] });
+      o.sobe = 'orcamentoAtualId' in cloudData();
+      return o;
+    });
+  } catch (e) { r.erro = e.message; }
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  const b_ = r.b || {};
+  t.ok('fechar e abrir: nenhum orçamento fica "aberto" com a tela vazia', !r.erro && r.a.n === 1 && !!r.a.id && b_.aberto === null, J);
+  t.ok('orçamento novo depois disso salva como novo, sem perguntar "Atualizar este"', !r.erro && !b_.perguntou && b_.n1 === 2 && !!b_.numB, J);
+  t.ok('a pergunta tem "Salvar como novo orçamento": cria outro, com número próprio, e o aberto fica como estava', !r.erro && b_.botoes.some(x => /novo orçamento/i.test(x)) && b_.n2 === 3 && b_.C.cliente === 'Cliente Fictício C' && b_.C.numero && b_.C.numero !== b_.numB && b_.Bintacto, J);
+  t.ok('o orçamento aberto não vai nem vem da nuvem', !r.erro && !b_.sync.includes('orcamentoAtualId') && b_.sync.includes('fornecedores') && !b_.sobe && !erros.length, J);
   await ctx.close();
 });
 
