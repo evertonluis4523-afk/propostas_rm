@@ -9290,6 +9290,7 @@ teste('cores-depois-de-usar', async (b, t) => {
   }
   if (fs.existsSync(path.join(RAIZ, 'controle_obras'))) for (const tom of [null, 'nitido']) {
     const o = await mede('controle_obras', tom, async () => { const bt = [...document.querySelectorAll('button')].find(e => /Nova obra/.test(e.textContent)); if (bt) bt.click();
+      await new Promise(r => setTimeout(r, 200)); const nm = document.getElementById('nobNome'); if (nm) { nm.value = 'Obra teste cor'; document.getElementById('nobCria').click(); }
       await new Promise(r => setTimeout(r, 300)); return { status: [...document.querySelectorAll('.stobra,.pg-rot')].map(e => e.textContent.trim()) }; });
     t.ok('Obras: a situação "Em andamento" na paleta da casa e legível (' + (tom || 'claro') + ')', o.x.status && o.x.status.some(s => /andamento/i.test(s)) && !o.res.length, txt(o));
   }
@@ -9301,6 +9302,110 @@ teste('cores-depois-de-usar', async (b, t) => {
     const ruim = o.res.filter(y => /rm-nuvem/.test(y.el));
     t.ok(r + ': selo de nuvem legível no escuro depois de trocar de estado', o.x.estado === 'local' && !ruim.length && !/color/.test(o.x.inline), txt(o));
   }
+});
+
+/* docx mínimo (zip sem compressão) com parágrafos e tabelas -- contratos FICTÍCIOS */
+function docxContratoFicticio(blocos) {
+  const W = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main', x = t => String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;');
+  const par = t => '<w:p><w:r><w:t xml:space="preserve">' + x(t) + '</w:t></w:r></w:p>';
+  const corpo = blocos.map(bl => Array.isArray(bl) ? '<w:tbl>' + bl.map(r => '<w:tr>' + r.map(c => '<w:tc>' + par(c) + '</w:tc>').join('') + '</w:tr>').join('') + '</w:tbl>' : par(bl)).join('');
+  const arqs = { '[Content_Types].xml': '<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/></Types>',
+    'word/document.xml': '<?xml version="1.0" encoding="UTF-8"?><w:document xmlns:w="' + W + '"><w:body>' + corpo + '</w:body></w:document>' };
+  const crcT = []; for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; crcT[n] = c >>> 0; }
+  const crc = b => { let c = 0xFFFFFFFF; for (const v of b) c = crcT[(c ^ v) & 255] ^ (c >>> 8); return (c ^ 0xFFFFFFFF) >>> 0; };
+  const loc = [], cen = []; let off = 0;
+  for (const [nome, txt] of Object.entries(arqs)) {
+    const d = Buffer.from(txt, 'utf8'), nm = Buffer.from(nome), c = crc(d);
+    const h = Buffer.alloc(30); h.writeUInt32LE(0x04034b50, 0); h.writeUInt16LE(20, 4); h.writeUInt32LE(c, 14); h.writeUInt32LE(d.length, 18); h.writeUInt32LE(d.length, 22); h.writeUInt16LE(nm.length, 26);
+    const ch = Buffer.alloc(46); ch.writeUInt32LE(0x02014b50, 0); ch.writeUInt16LE(20, 4); ch.writeUInt16LE(20, 6); ch.writeUInt32LE(c, 16); ch.writeUInt32LE(d.length, 20); ch.writeUInt32LE(d.length, 24); ch.writeUInt16LE(nm.length, 28); ch.writeUInt32LE(off, 42);
+    loc.push(h, nm, d); cen.push(ch, nm); off += 30 + nm.length + d.length;
+  }
+  const cd = Buffer.concat(cen), e = Buffer.alloc(22); e.writeUInt32LE(0x06054b50, 0); e.writeUInt16LE(cen.length / 2, 8); e.writeUInt16LE(cen.length / 2, 10); e.writeUInt32LE(cd.length, 12); e.writeUInt32LE(off, 16);
+  return Buffer.concat([...loc, cd, e]);
+}
+
+teste('obras-nova-obra-contrato', async (b, t) => {
+  // "Ao clicar em nova obra abre uma obra sem nome pronta, não uma caixa pra
+  // digitar os dados" -- agora abre a janela de cadastro, e a obra só entra
+  // ao confirmar. "Opção de ler por Word ou PDF e preencher os dados sozinho":
+  // cliente, nome, valor, referência e as parcelas do contrato com as datas;
+  // a nota acordada fica para lançar à mão. Contratos FICTÍCIOS, gerados aqui.
+  if (!fs.existsSync(path.join(RAIZ, 'controle_obras'))) return;
+  const dir = path.join(require('os').tmpdir(), 'rm-testes-obras'); fs.mkdirSync(dir, { recursive: true });
+  const preambulo = ['CONTRATO DE FORNECIMENTO E INSTALAÇÃO DE PAVILHÃO INDUSTRIAL',
+    'CONTRATADA: EMPRESA CONTRATADA EXEMPLO LTDA, inscrita no CNPJ sob n° 00.000.000/0001-00.',
+    'CONTRATANTE: COMERCIO FICTICIO EXEMPLO LTDA, inscrita no CNPJ 11.111.111/0001-11 sediada na Rua Exemplo, n° 1.',
+    'Pelo presente instrumento, as partes têm entre si o presente contrato de fornecimento e instalação de um pavilhão a ser realizado na Rua Exemplo, n° 1 – Bairro Centro – Cidade Modelo/RS sob o regime de empreitada.'];
+  const antigo = preambulo.concat(['3 - DO PREÇO E DO PAGAMENTO',
+    '3.1. Pelo efetivo fornecimento, o CONTRATANTE pagará à CONTRATADA o preço certo e ajustado de R$1.000.000,00 (um milhão de reais).',
+    '3.2. CONDIÇÕES DE PAGAMENTO:', ' O montante do preço ajustado deverá ser adimplido da seguinte forma:',
+    ' Entrada de 30% no valor de R$300.000,00 (trezentos mil reais) na assinatura do contrato.',
+    'R$200.000,00 (duzentos mil reais) após trinta dias da assinatura do contrato.',
+    'R$200.000,00 (duzentos mil reais) após sessenta dias da assinatura do contrato (09/04/2026).',
+    'R$200.000,00 (duzentos mil reais) na entrega da obra mediante termo de recebimento.',
+    'R$100.000,00 (cem mil reais) Reserva técnica, paga 30 dias após o recebimento.',
+    '3.2.1. O valor acima será fixo, sem correção, até R$5,00 de tarifa.', '4 - DOS ENCARGOS', 'Estrela, 8 de fevereiro de 2026.']);
+  fs.writeFileSync(path.join(dir, 'contrato_antigo.docx'), docxContratoFicticio(antigo));
+  // o do Propostas: as parcelas numa tabela
+  fs.writeFileSync(path.join(dir, 'contrato_propostas.docx'), docxContratoFicticio(preambulo.concat(['3.1. O CONTRATANTE pagará à CONTRATADA o preço certo e ajustado de R$ 500.000,00 (quinhentos mil reais).',
+    '3.2. Condições de pagamento: o montante deverá ser adimplido da seguinte forma:',
+    [['Parcela', 'Vencimento', 'Valor'], ['Entrada', '10/03/2026', 'R$ 250.000,00'], ['Parcela 2', '10/04/2026', 'R$ 250.000,00'], ['Total', '', 'R$ 500.000,00']],
+    '3.2.1. Os valores são fixos.', 'Estrela, 10 de março de 2026.'])));
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'controle_obras' });
+  await semLogin(pg);
+  const r = {};
+  try {
+    r.janela = await pg.evaluate(async () => {
+      const esp = ms => new Promise(x => setTimeout(x, ms)); const n0 = S.obras.length;
+      [...document.querySelectorAll('button')].find(e => /Nova obra/.test(e.textContent)).click(); await esp(150);
+      const ov = document.getElementById('novaObraOv'), aberta = !!ov && ov.classList.contains('open'), criouAoAbrir = S.obras.length - n0;
+      const campos = ['nobNome', 'nobCliente', 'nobValor', 'nobRef'].every(id => document.getElementById(id)), foco = document.activeElement && document.activeElement.id;
+      [...ov.querySelectorAll('button')].find(e => /Cancelar/.test(e.textContent)).click(); await esp(50);
+      const cancelou = S.obras.length - n0;
+      addObra(); await esp(50); document.getElementById('nobCria').click(); await esp(50);
+      const semNome = S.obras.length - n0;
+      document.getElementById('nobNome').value = 'Galpão Exemplo'; document.getElementById('nobCria').click(); await esp(80);
+      const o = S.obras[0];
+      return { aberta, criouAoAbrir, campos, foco, cancelou, semNome, criou: S.obras.length - n0, nome: o.nome, fechou: !ov.classList.contains('open') };
+    });
+    const le = async arq => { await pg.evaluate(() => addObra()); await pg.setInputFiles('#nobLer input[type=file]', arq); await pg.waitForTimeout(2500);
+      return pg.evaluate(() => ({ msg: nobMsg.textContent, nome: nobNome.value, cliente: nobCliente.value, valor: nobValor.value, ref: nobRef.value, parc: NOB.parcelas.map(p => p.desc + '|' + p.data + '|' + p.valor), aviso: !!document.querySelector('.nob-aviso') })); };
+    r.antigo = await le(path.join(dir, 'contrato_antigo.docx'));
+    r.criada = await pg.evaluate(async () => { document.getElementById('nobCria').click(); await new Promise(x => setTimeout(x, 80)); const o = S.obras[0];
+      return { nome: o.nome, cliente: o.cliente, valor: o.valor, nota: o.notaAcordada, ref: o.data, n: o.parcelas.length, recebidas: o.parcelas.filter(p => p.recebida).length, aberta: !!o._open }; });
+    r.tabela = await le(path.join(dir, 'contrato_propostas.docx'));
+    // o mesmo contrato em PDF, com as frases quebradas entre linhas como no Word salvo em PDF
+    const pdfB64 = await pg.evaluate(async linhas => {
+      if (typeof PDFLib === 'undefined') await new Promise(ok => { const s = document.createElement('script'); s.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js'; s.onload = ok; document.head.appendChild(s); });
+      const d = await PDFLib.PDFDocument.create(), f = await d.embedFont(PDFLib.StandardFonts.Helvetica), pgx = d.addPage([595, 842]); let y = 800;
+      const limpa = s => s.replace(/[–]/g, '-').replace(/[^\x20-\xff]/g, '');
+      linhas.forEach(l => { const ws = limpa(l).split(' '); let at = ''; ws.forEach(w => { if ((at + ' ' + w).length > 70) { pgx.drawText(at, { x: 40, y, size: 9, font: f }); y -= 12; at = w; } else at = at ? at + ' ' + w : w; }); if (at) { pgx.drawText(at, { x: 40, y, size: 9, font: f }); y -= 12; } });
+      const by = await d.save(); let x = ''; by.forEach(c => { x += String.fromCharCode(c); }); return btoa(x);
+    }, antigo);
+    fs.writeFileSync(path.join(dir, 'contrato_antigo.pdf'), Buffer.from(pdfB64, 'base64'));
+    r.pdf = await le(path.join(dir, 'contrato_antigo.pdf'));
+    // "a diferença provavelmente é o desconto que ele recebeu": preço maior que a soma
+    fs.writeFileSync(path.join(dir, 'contrato_desconto.docx'), docxContratoFicticio(antigo.map(l => l.replace('R$1.000.000,00 (um milhão de reais)', 'R$1.100.000,00 (um milhão e cem mil reais)'))));
+    r.desconto = await le(path.join(dir, 'contrato_desconto.docx'));
+    r.desconto.texto = await pg.evaluate(() => (document.querySelector('.nob-aviso') || {}).textContent || '');
+    r.desconto.usou = await pg.evaluate(async () => { document.getElementById('nobUsaSoma').click(); await new Promise(x => setTimeout(x, 50)); return { valor: nobValor.value, aviso: !!document.querySelector('.nob-aviso') }; });
+    // "foi erro ao elaborar o contrato, faltou uma parcela": a diferença vira parcela, sem data, antes da entrega
+    r.faltou = await le(path.join(dir, 'contrato_desconto.docx'));
+    r.faltou.depois = await pg.evaluate(async () => { document.getElementById('nobPoeDif').click(); await new Promise(x => setTimeout(x, 50));
+      return { parc: NOB.parcelas.map(p => p.desc + '|' + p.data + '|' + p.valor), valor: nobValor.value, aviso: !!document.querySelector('.nob-aviso') }; });
+  } catch (e) { r.erro = e.message; }
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  const parcAntigo = ['Entrada|08/02/2026|300000', 'Parcela 2 · 30 dias|10/03/2026|200000', 'Parcela 3 · 60 dias|09/04/2026|200000', 'Entrega da obra||200000', 'Reserva técnica||100000'].join(',');
+  t.ok('"Nova obra" abre a janela de cadastro com os campos, e não uma obra em branco', !r.erro && r.janela.aberta && r.janela.criouAoAbrir === 0 && r.janela.campos && r.janela.foco === 'nobNome', J);
+  t.ok('Cancelar não cria; sem nome não cria; com nome cria e fecha', !r.erro && r.janela.cancelou === 0 && r.janela.semNome === 0 && r.janela.criou === 1 && r.janela.nome === 'Galpão Exemplo' && r.janela.fechou, J);
+  t.ok('Word: cliente, nome (cliente · cidade), valor e referência', !r.erro && r.antigo.cliente === 'COMERCIO FICTICIO EXEMPLO LTDA' && r.antigo.nome === 'Comercio Ficticio Exemplo · Cidade Modelo' && r.antigo.valor === '1.000.000,00' && r.antigo.ref === '02/2026', J);
+  t.ok('Word: parcelas como no contrato, com as datas (entrada na assinatura, N dias depois, data escrita); entrega e reserva sem data', !r.erro && r.antigo.parc.join(',') === parcAntigo && !r.antigo.aviso, J);
+  t.ok('a obra criada leva as parcelas a receber; a nota acordada fica em branco', !r.erro && r.criada.n === 5 && r.criada.recebidas === 0 && r.criada.valor === 1000000 && r.criada.nota === 0 && r.criada.ref === '02/2026' && r.criada.aberta, J);
+  t.ok('contrato do Propostas: parcelas da tabela, sem a linha de total', !r.erro && r.tabela.parc.join(',') === 'Entrada|10/03/2026|250000,Parcela 2|10/04/2026|250000' && r.tabela.valor === '500.000,00' && r.tabela.ref === '03/2026', J);
+  t.ok('preço maior que as parcelas (desconto): avisa a diferença e "Usar a soma das parcelas" põe o valor combinado', !r.erro && r.desconto.valor === '1.100.000,00' && /R\$\s100\.000,00 a menos/.test(r.desconto.texto) && /faltar uma parcela/.test(r.desconto.texto) && /desconto/.test(r.desconto.texto) && r.desconto.usou.valor === '1.000.000,00' && !r.desconto.usou.aviso, J);
+  t.ok('parcela que faltou no contrato: "Lançar a diferença como parcela" põe os R$ 100.000,00 sem data, antes da entrega, e o preço fica', !r.erro && r.faltou.depois.parc[3] === 'Parcela que faltou no contrato||100000' && r.faltou.depois.parc.length === 6 && r.faltou.depois.valor === '1.100.000,00' && !r.faltou.depois.aviso, J);
+  t.ok('PDF: o mesmo resultado do Word, mesmo com as frases quebradas entre linhas', !r.erro && r.pdf.parc.join(',') === parcAntigo && r.pdf.valor === '1.000.000,00' && r.pdf.cliente === 'COMERCIO FICTICIO EXEMPLO LTDA' && !erros.length, J);
+  await ctx.close();
 });
 
 teste('celular-nada-pela-metade', async (b, t) => {
