@@ -2039,6 +2039,75 @@ function fechamentoGalpao(nome, semNomes) {
   const f = path.join(dir, nome + '.rmfecha'); fs.writeFileSync(f, JSON.stringify({ format: 'RM_FECHAMENTO_SKETCHUP', model: 'Galpão teste', faces })); return f;
 }
 
+/* galpão fictício com oitão: frente com porta, lateral com duas janelas, fundos */
+function fechamentoOitao(nome, longa) {
+  const ret = (x0, y0, x1, y1, h) => [[x0, y0, 0], [x1, y1, 0], [x1, y1, h], [x0, y0, h]];
+  const oitao = (x0, x1, y, h, hc) => [[x0, y, 0], [x1, y, 0], [x1, y, h], [(x0 + x1) / 2, y, hc], [x0, y, h]];
+  const faces = [
+    { name: 'GALPAO / FRENTE', outer: oitao(0, 12000, 0, 5000, 6500), holes: [[[4500, 0, 0], [7500, 0, 0], [7500, 0, 4200], [4500, 0, 4200]]], normal: [0, -1, 0] },
+    { name: 'GALPAO / LATERAL', outer: ret(12000, 0, 12000, 20000, 5000), holes: [[[12000, 3000, 1000], [12000, 6000, 1000], [12000, 6000, 2200], [12000, 3000, 2200]], [[12000, 12000, 1000], [12000, 15000, 1000], [12000, 15000, 2200], [12000, 12000, 2200]]], normal: [1, 0, 0] },
+    { name: 'GALPAO / FUNDOS', outer: oitao(12000, 0, 20000, 5000, 6500), normal: [0, 1, 0] }];
+  if (longa) faces.push({ name: 'GALPAO / LATERAL LONGA', outer: ret(0, 20000, 0, -30000, 5000), holes: [[[0, 10000, 1000], [0, 7000, 1000], [0, 7000, 2200], [0, 10000, 2200]]], normal: [-1, 0, 0] });
+  const dir = path.join(require('os').tmpdir(), 'rm-testes-leitor'); fs.mkdirSync(dir, { recursive: true });
+  const f = path.join(dir, nome + '.rmfecha'); fs.writeFileSync(f, JSON.stringify({ format: 'RM_FECHAMENTO_SKETCHUP', model: 'Galpão exemplo', faces })); return f;
+}
+
+teste('leitor-ficha-montador-telhas', async (b, t) => {
+  // "Montadores precisam saber onde cada telha é montada pelo comprimento":
+  // o pedido ao fabricante só dizia quanto comprar. A ficha do montador dá um
+  // código a cada telha (letra da parede + posição), a folha de separação por
+  // comprimento e uma folha por parede com o desenho e a lista.
+  if (!fs.existsSync(path.join(RAIZ, 'leitor_dwg'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'leitor_dwg' }); await semLogin(pg);
+  await pg.click('[data-aba="tel"]').catch(() => {}); await pg.waitForTimeout(600);
+  await pg.setInputFiles('#tlhSkpDiretoFile', fechamentoOitao('galpao_oitao')); await pg.waitForTimeout(1500);
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    const bt = document.getElementById('tlMont'); if (!bt) return { semBotao: true };
+    window.rmSalvarPDF = n => { window.__pdf = n; window.__html = document.getElementById('printArea').innerHTML; };
+    document.getElementById('tlDoc').click(); await esp(100);
+    const chapasPedido = +([...document.querySelectorAll('#printArea .rc-res div')].find(d => /Chapas/.test(d.textContent)) || { textContent: '' }).querySelector('b').textContent.replace(/\D/g, '');
+    document.getElementById('printArea').innerHTML = '';
+    bt.click(); await esp(100);
+    const d = document.createElement('div'); d.innerHTML = window.__html || '';
+    const arts = [...d.querySelectorAll('article.tmf')];
+    const sep = arts[0], paredes = arts.slice(1);
+    const somaSep = [...sep.querySelectorAll('.tmf-sep tbody tr')].reduce((s, tr) => s + (+tr.children[1].textContent || 0), 0);
+    const pd = paredes.map(a => {
+      const cods = [...a.querySelectorAll('polygon[data-cod]')].map(p => p.getAttribute('data-cod'));
+      return { letra: a.dataset.parede, n: cods.length, unicos: new Set(cods).size, linhas: a.querySelectorAll('tbody tr, .tmf-l').length,
+        cume: /CUMEEIRA/.test(a.textContent), longa: !!a.querySelector('.tmf-corpo.longa'), sobJanela: /sob janela/.test(a.textContent),
+        sobre: /sobre abertura/.test(a.textContent), primeira: cods[0], titulo: a.querySelector('.t').textContent };
+    });
+    return { pdf: window.__pdf, n: arts.length, sepTit: sep && sep.querySelector('.t').textContent, chapasPedido, somaSep,
+      juntas: (sep.querySelector('.tmf-sep').textContent.match(/[A-Z]-\d\d\+\d\d ✂/g) || []).length, pd,
+      limpou: await (async () => { await esp(2700); return document.getElementById('printArea').innerHTML === '' && !document.body.classList.contains('so-folha'); })() };
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  const pd = r.pd || [];
+  t.ok('botão "Ficha do montador" no fechamento gera o PDF "Montagem telhas"', !r.erro && !r.semBotao && /^Montagem telhas/.test(r.pdf || ''), J);
+  t.ok('folha de separação + uma folha por parede (A frente, B lateral, C fundos)', !r.erro && r.n === 4 && /SEPARAÇÃO/.test(r.sepTit) && pd.map(p => p.letra).join('') === 'ABC' && /FRENTE/.test(pd[0].titulo), J);
+  t.ok('separação soma as mesmas chapas do pedido ao fabricante', !r.erro && r.chapasPedido > 0 && r.somaSep === r.chapasPedido, J);
+  t.ok('cada telha da parede tem código único no desenho e uma linha na lista', !r.erro && pd.every(p => p.n > 0 && p.unicos === p.n && p.linhas === p.n) && pd[0].primeira === 'A-01', J);
+  t.ok('oitão marca a cumeeira (onde começa); a lateral reta não', !r.erro && pd[0].cume && pd[2].cume && !pd[1].cume, J);
+  t.ok('chapa que rende duas peças ao lado da porta aparece junta, para cortar na obra', !r.erro && r.juntas >= 2 && pd[0].sobre, J);
+  t.ok('lateral comprida: lista em colunas, com as telhas sob a janela', !r.erro && pd[1].longa && pd[1].sobJanela && pd[1].n > 18, J);
+  t.ok('depois de imprimir a tela volta ao normal', !r.erro && r.limpou && !erros.length, J);
+  /* parede de 50 m: não cabe numa folha -- sai em trechos, sem repetir nem perder telha */
+  await pg.setInputFiles('#tlhSkpDiretoFile', fechamentoOitao('galpao_longo', true)); await pg.waitForTimeout(1500);
+  const L = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    window.__html = ''; document.getElementById('tlMont').click(); await esp(100);
+    const d = document.createElement('div'); d.innerHTML = window.__html || '';
+    const pags = [...d.querySelectorAll('article.tmf[data-parede="D"]')];
+    const cods = pags.flatMap(a => [...a.querySelectorAll('polygon[data-cod]')].map(p => p.getAttribute('data-cod')));
+    return { n: pags.length, titulos: pags.map(a => a.querySelector('.t').textContent), porFolha: pags.map(a => a.querySelectorAll('polygon[data-cod]').length),
+      total: cods.length, unicos: new Set(cods).size, linhas: pags.reduce((s, a) => s + a.querySelectorAll('tbody tr, .tmf-l').length, 0) };
+  }).catch(e => ({ erro: e.message }));
+  t.ok('parede de 50 m sai em trechos (1/2, 2/2), até 36 telhas por folha, sem repetir nem perder telha', !L.erro && L.n >= 2 && /\(1\/\d\)/.test(L.titulos[0]) && L.porFolha.every(n => n <= 36) && L.total > 36 && L.unicos === L.total && L.linhas === L.total, JSON.stringify(L));
+  await ctx.close();
+});
+
 teste('leitor-fechamento-paredes', async (b, t) => {
   // "Leitor está criando vários grupos, a lateral inteira deveria ser um grupo
   // só, frente outro, fundos outro, interno outro. E cada um deve ter uma
