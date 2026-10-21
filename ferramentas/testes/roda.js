@@ -8544,6 +8544,57 @@ teste('recibos-rescisao-documentos', async (b, t) => {
   await ctx.close();
 });
 
+teste('recibos-rescisao-documentos-novos', async (b, t) => {
+  // "Precisa adicionar mais documentos para impressão": guia do FGTS e valor
+  // por fora (1 via da empresa), aviso prévio (1 de cada lado), modelo do
+  // aviso (1 para o funcionário, só de referência) e seguro-desemprego (1 para
+  // o funcionário SEM o informativo de via no alto: vai para o pedido do
+  // seguro). Documentos FICTÍCIOS, gerados aqui.
+  if (!fs.existsSync(path.join(RAIZ, 'recibos_rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'recibos_rm' });
+  await semLogin(pg);
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    state.employees.push({ id: 'ek1', nome: 'FUNCIONARIO EXEMPLO DA SILVA', status: 'demissao', dtDesligamento: '2026-03-01', funcao: 'Montador', salario: 2000 });
+    const aba = document.querySelector('.vtab[data-v="rescdoc"]'); if (aba) aba.click(); await esp(100);
+    if (typeof PDFLib === 'undefined') await kitLoadPdfLib();
+    const { PDFDocument, StandardFonts } = PDFLib;
+    const pdf = async (nome, titulo, paginas) => { const d = await PDFDocument.create(); const f = await d.embedFont(StandardFonts.Helvetica);
+      for (let i = 0; i < (paginas || 1); i++) { const p = d.addPage([595, 842]); if (titulo) p.drawText(titulo + ' - folha ' + (i + 1), { x: 40, y: 800, size: 12, font: f }); else p.drawRectangle({ x: 40, y: 40, width: 500, height: 700, borderWidth: 1 }); }
+      return new File([await d.save()], nome, { type: 'application/pdf' }); };
+    await kitAdiciona([
+      await pdf('Recibo.pdf', 'TERMO DE RESCISAO DO CONTRATO DE TRABALHO - aviso previo indenizado'),
+      await pdf('guia_exemplo.pdf', 'GFD - Guia do FGTS Digital - Pagar este documento ate'),
+      await pdf('VALOR_POR_FORA_EXEMPLO.pdf', 'RESCISAO EXEMPLO - Saldo de salario - aviso previo'),
+      await pdf('documento1.pdf', 'AVISO PREVIO TRABALHADO - Estrela'),
+      await pdf('MODELO_AVISO_PREVIO.pdf', ''),
+      await pdf('documento2.pdf', 'MINISTERIO DO TRABALHO E EMPREGO Requerimento de Seguro-Desemprego - SD', 2)]);
+    await esp(150);
+    const tipos = KIT.arqs.map(a => a.tipo).join(',');
+    const linhas = [...document.querySelectorAll('#kitBody tr')].map(tr => tr.children[0].innerText.replace(/\s+/g, ' ') + '=' + [...tr.querySelectorAll('input')].map(i => i.value).join('/'));
+    const bytes = await kitMontaPdf();
+    const doc = await pdfjsLib.getDocument({ data: bytes.slice() }).promise;
+    const folhas = [];
+    for (let i = 1; i <= doc.numPages; i++) { const pgx = await doc.getPage(i); const tc = await pgx.getTextContent(); folhas.push(tc.items.map(x => x.str).join(' ').replace(/\s+/g, ' ')); }
+    const resumo = folhas.map(f => {
+      if (/Pasta da empresa/i.test(f)) return 'ROSTO-EMP';
+      if (/Pasta do funcion/i.test(f)) return 'ROSTO-FUNC';
+      const via = /VIA DA EMPRESA/.test(f) ? 'E' : /MODELO · COMO PREENCHER/.test(f) ? 'M' : /VIA DO FUNCIONÁRIO/.test(f) ? 'F' : /\bVIA\b/.test(f) ? '?' : '-';
+      const d = /TERMO DE RESCISAO/.test(f) ? 'trct' : /Guia do FGTS/.test(f) ? 'guia' : /Saldo de salario/.test(f) ? 'fora' : /AVISO PREVIO TRABALHADO/.test(f) ? 'aviso' : /Seguro-Desemprego/.test(f) ? 'seguro' : 'x';
+      return via + ':' + d;
+    }).join(' ');
+    return { tipos, linhas, resumo, rostoEmp: folhas.find(f => /Pasta da empresa/i.test(f)) || '', rostoFunc: folhas.find(f => /Pasta do funcion/i.test(f)) || '' };
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  t.ok('reconhece guia do FGTS, valor por fora, aviso prévio, modelo do aviso e seguro (o recibo que cita aviso prévio continua recibo)', !r.erro && r.tipos === 'trct,guiafgts,porfora,aviso,modeloaviso,seguro', J);
+  t.ok('vias: guia e por fora 1/0, aviso 1/1, modelo do aviso 0/1, seguro 0/1', !r.erro && ['Guia do FGTS=1/0', 'Valor por fora=1/0', 'Aviso prévio=1/1', 'Seguro-desemprego sai sem a marca de via no alto=0/1'].every(x => r.linhas.includes(x)) && r.linhas.some(x => /^Modelo do aviso prévio .*=0\/1$/.test(x)), J);
+  t.ok('empresa: recibo, aviso, guia e por fora; funcionário: recibo, modelo do aviso, aviso e seguro', !r.erro && r.resumo === 'ROSTO-EMP E:trct E:aviso E:guia E:fora ROSTO-FUNC F:trct F:trct F:trct M:x F:aviso -:seguro -:seguro', J);
+  t.ok('o seguro sai sem nenhuma marca de via', !r.erro && !/\?:seguro|[EFM]:seguro/.test(r.resumo), J);
+  t.ok('folhas de rosto: o que vai em cada pasta e o aviso "conforme o modelo"', !r.erro && /Valor por fora/.test(r.rostoEmp) && /Guia do FGTS/.test(r.rostoEmp) && !/Seguro/.test(r.rostoEmp)
+    && /Modelo do aviso prévio \(como preencher\)/.test(r.rostoFunc) && /Aviso prévio \(preencher conforme o modelo\)/.test(r.rostoFunc) && /Seguro-desemprego \(sem marca de via\)/.test(r.rostoFunc) && !/Valor por fora|Guia do FGTS/.test(r.rostoFunc) && !erros.length, J);
+  await ctx.close();
+});
+
 teste('recibos-rescisao-documentos-clique', async (b, t) => {
   // "clicar no campo e selecionar os arquivos da pasta não funciona": a janela
   // abria, mas a lista de arquivos escolhidos era limpa (inp.value='') enquanto
