@@ -9174,9 +9174,22 @@ teste('backup-todos-os-nos', async (b, t) => {
   const noBackup = lista('NOS_DADOS').concat(lista('NOS_ANEXOS'));
   // as exceções moram na própria Central, cada uma com o motivo (NOS_FORA_DO_BACKUP)
   const mf = h.match(/const NOS_FORA_DO_BACKUP = \{([^}]*)\}/), excecoes = mf ? (mf[1].match(/\b([a-z_]+):/g) || []).map(x => x.slice(0, -1)) : [];
-  const fora = regras.filter(n => excecoes.indexOf(n) < 0 && noBackup.indexOf(n) < 0);
+  /* nó guardado por partes (ex.: propostas_rm/docs ... /imagens) conta como coberto */
+  const fora = regras.filter(n => excecoes.indexOf(n) < 0 && noBackup.indexOf(n) < 0 && !noBackup.some(x => x.indexOf(n + '/') === 0));
   t.ok('as exceções de propósito estão listadas com motivo na Central', ['caepi_consulta', 'orcamentos_versoes', 'users', 'rm_contas_usuarios'].every(n => excecoes.includes(n)), excecoes.join(', '));
   t.ok('todo nó das regras está no backup (fora as exceções do padrão)', !fora.length, 'fora do backup: ' + fora.join(', '));
+  /* nó guardado por partes: toda parte que o sistema grava está numa lista.
+     O Propostas grava em propostas_rm/<parte>; parte nova sem entrar aqui
+     ficaria fora da cópia sem ninguém ver. */
+  const pr = path.join(RAIZ, 'propostas_rm', 'index.html');
+  if (fs.existsSync(pr)) {
+    const partes = [...new Set((fs.readFileSync(pr, 'utf8').match(/FB_NO \+ '\/([a-z_]+)/g) || []).map(x => 'propostas_rm/' + x.split("'/")[1]))];
+    const semCopia = partes.filter(x => noBackup.indexOf(x) < 0);
+    /* a cópia antiga (o nó inteiro numa chave) continua restaurando pelo nome do sistema */
+    const ms = h.match(/\{ nome: 'Propostas e Contratos', nos: \[([^\]]*)\] \}/), nosP = ms ? (ms[1].match(/'([^']+)'/g) || []).map(x => x.slice(1, -1)) : [];
+    t.ok('restaurar o Propostas: as partes novas e a cópia antiga (nó inteiro) aparecem pelo nome do sistema', partes.every(x => nosP.includes(x)) && nosP.includes('propostas_rm'), nosP.join(', '));
+    t.ok('toda parte do Propostas na nuvem está na cópia (as imagens com os anexos)', partes.length >= 5 && !semCopia.length && lista('NOS_ANEXOS').includes('propostas_rm/imagens'), 'partes: ' + partes.join(', ') + ' · sem cópia: ' + semCopia.join(', '));
+  }
   // Estoque: o levantamento do galpão (com valores) não fica escrito na página
   const e = path.join(RAIZ, 'Controle-estoque-maquinas', 'index.html');
   if (fs.existsSync(e)) {
@@ -11268,6 +11281,85 @@ teste('propostas-mudar-tipo', async (b, t) => {
   await ctx.close();
 });
 
+teste('propostas-imagens', async (b, t) => {
+  // aba Imagens: os renders de cada obra num documento próprio no papel da
+  // empresa (PDF e Word), ou anexados no fim da proposta. A imagem é
+  // reduzida para o A4 e recebe a marca d'água GRAVADA nela (o símbolo no
+  // centro, 3,5%); fica guardada à parte da proposta; só é apagada quando
+  // nada mais a cita (uma cópia da proposta, uma revisão).
+  if (!fs.existsSync(path.join(RAIZ, 'propostas_rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'propostas_rm' });
+  await semLogin(pg);
+  const r = await pg.evaluate(async (FICT) => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    if (!document.getElementById('abaImagens')) return { semRecurso: true };
+    await iniciarApp();
+    const o = {};
+    const d = eval(FICT); d.numero = '2026-024'; d.rev = 2; docs[d.id] = d; abrir(d.id); await esp(50);
+    document.getElementById('abaImagens').click(); await esp(80);
+    const folha = () => document.getElementById('folha').textContent.replace(/\s+/g, ' ');
+    o.vazio = { cab: /Imagens do projeto/i.test(folha()) && /Perspectivas da obra/i.test(folha()) && /2026-024 · Rev\. 2/.test(folha()), cliente: /Cliente Fictício Ltda/.test(folha()), arq: !!document.getElementById('imArq') };
+    /* um PNG fictício: branco, com a metade de baixo transparente, 2400 x 1350 */
+    const png = async (cor) => { const c = document.createElement('canvas'); c.width = 2400; c.height = 1350; const g = c.getContext('2d'); g.fillStyle = cor || '#ffffff'; g.fillRect(0, 0, 2400, 675);
+      return new File([await new Promise(ok => c.toBlob(ok, 'image/png'))], 'Fachada_frontal.png', { type: 'image/png' }); };
+    const manda = async (fs) => { const dt = new DataTransfer(); fs.forEach(f => dt.items.add(f)); const inp = document.getElementById('imArq'); inp.files = dt.files; inp.dispatchEvent(new Event('change', { bubbles: true })); for (let k = 0; k < 60 && d.imgs.itens.length < fs.length + o.antes; k++) await esp(100); await esp(150); };
+    o.antes = 0; await manda([await png()]);
+    const x = d.imgs.itens[0] || {};
+    o.um = { n: d.imgs.itens.length, w: x.w, h: x.h, tit: x.tit, jpeg: /^data:image\/jpeg;base64,/.test(IMG[x.id] || ''), idb: (await IDBI.pega(x.id)) === IMG[x.id], salvo: !JSON.stringify(d).includes('base64'), local: /só neste aparelho/.test(document.getElementById('ficha').textContent) };
+    /* a marca d'água está na imagem: o centro escurece de leve, os cantos ficam brancos */
+    const im = await carregaImg(IMG[x.id]), c = document.createElement('canvas'); c.width = im.naturalWidth; c.height = im.naturalHeight; const g = c.getContext('2d'); g.drawImage(im, 0, 0);
+    const px = (x0, y0, w, h) => { const a = g.getImageData(x0, y0, w, h).data; let mn = 255; for (let k = 0; k < a.length; k += 4) mn = Math.min(mn, a[k], a[k + 1], a[k + 2]); return mn; };
+    o.marca = { centro: px(c.width * .36, c.height * .3, c.width * .28, c.height * .4), canto: px(0, 0, 120, 120), cantoBaixo: px(c.width - 120, c.height - 120, 120, 120) };
+    /* mais três; a terceira em página inteira */
+    o.antes = 1; await manda([await png(), await png(), await png()]);
+    d.imgs.itens[2].tam = 'inteira'; alterou(d, true); await esp(150);
+    o.pag = { quebras: blocosImagens(d).filter(b => b.t === 'quebra').length, tela: document.querySelectorAll('#folha .f-quebra').length, figs: document.querySelectorAll('#folha .f-fig img').length, extra: (document.querySelector('#ficha .sec-x') || {}).textContent, aba: document.getElementById('abaImagens').textContent };
+    /* título, ordem */
+    const t0 = document.querySelector('#ficha [data-p="imgs.itens.0.tit"]'); t0.value = 'Perspectiva geral'; t0.dispatchEvent(new Event('input', { bubbles: true })); await esp(200);
+    const id0 = d.imgs.itens[0].id;
+    document.querySelector('#ficha [data-acao="imgDown"][data-i="0"]').click(); await esp(100);
+    o.ordem = { titulo: /Perspectiva geral/i.test(folha()), desceu: d.imgs.itens[1].id === id0 && d.imgs.itens[1].tit === 'Perspectiva geral' };
+    o.nome = window.rmNomePDF();
+    /* Word: as quatro imagens, com a marca, dentro do arquivo */
+    const partes = u => { const out = {}; const dv = new DataView(u.buffer); let p = 0;
+      while (p + 30 < u.length && dv.getUint32(p, true) === 0x04034b50) { const n = dv.getUint16(p + 26, true), tam = dv.getUint32(p + 18, true);
+        out[new TextDecoder().decode(u.slice(p + 30, p + 30 + n))] = u.slice(p + 30 + n, p + 30 + n + tam); p += 30 + n + tam; } return out; };
+    const w = partes(await docxBytes(blocosImagens(d))), txt = k => new TextDecoder().decode(w[k] || new Uint8Array());
+    o.word = { midias: Object.keys(w).filter(k => /^word\/media\/imagem\d\.jpeg$/.test(k)).length, desenhos: (txt('word/document.xml').match(/r:embed="rIdIm\d"/g) || []).length,
+      rels: (txt('word/_rels/document.xml.rels').match(/Id="rIdIm\d"/g) || []).length, tipo: /Extension="jpeg"/.test(txt('[Content_Types].xml')), quebras: (txt('word/document.xml').match(/w:type="page"/g) || []).length,
+      titulo: /PERSPECTIVA GERAL|Perspectiva geral/.test(txt('word/document.xml')) };
+    /* anexar no fim da proposta */
+    const ax = document.querySelector('#ficha [data-p="imgs.anexar"]'); ax.checked = true; ax.dispatchEvent(new Event('input', { bubbles: true })); await esp(150);
+    document.getElementById('abaProposta').click(); await esp(150);
+    o.anexo = { figs: document.querySelectorAll('#folha .f-fig img').length, proposta: /Proposta comercial/i.test(folha()) };
+    /* tirar: some do aparelho quando nada mais cita; a cópia segura a imagem */
+    document.getElementById('abaImagens').click(); await esp(80);
+    const idTira = d.imgs.itens[3].id;
+    document.querySelector('#ficha [data-acao="imgDel"][data-i="3"]').click(); await esp(200);
+    o.tirou = { n: d.imgs.itens.length, idb: await IDBI.pega(idTira) };
+    document.getElementById('btnDup').click(); await esp(150);
+    const copia = atual(); const idCopia = copia.imgs.itens[0].id;
+    abrir(d.id, 'imagens'); await esp(80);
+    const k = d.imgs.itens.findIndex(y => y.id === idCopia);
+    document.querySelector('#ficha [data-acao="imgDel"][data-i="' + k + '"]').click(); await esp(200);
+    o.copia = { mesmaImagem: copia.imgs.itens.length === 3, aindaGuardada: !!(await IDBI.pega(idCopia)) };
+    return o;
+  }, PROP_FICT).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  if (r.semRecurso) { t.ok('aba Imagens na proposta', false, 'sem #abaImagens'); await ctx.close(); return; }
+  const u = r.um || {}, m = r.marca || {}, pg2 = r.pag || {}, w = r.word || {};
+  t.ok('aba Imagens: cabeçalho do papel com a proposta, a revisão e o cliente; botão de adicionar', !r.erro && r.vazio.cab && r.vazio.cliente && r.vazio.arq, J);
+  t.ok('imagem reduzida para o A4 (1800 px), em JPEG, com o título do nome do arquivo', u.n === 1 && u.w === 1800 && u.h === 1013 && u.jpeg && u.tit === 'Fachada frontal', J);
+  t.ok("marca d'água gravada: o centro escurece de leve (3,5%), os cantos ficam brancos (o transparente vira branco)", m.centro <= 249 && m.centro >= 225 && m.canto >= 252 && m.cantoBaixo >= 252, J);
+  t.ok('guardada no aparelho e fora da proposta (o salvar não leva a imagem); avisa que está só neste aparelho', u.idb && u.salvo && u.local, J);
+  t.ok('duas por página; a de página inteira vai sozinha (4 imagens · 3 páginas)', pg2.quebras === 2 && pg2.tela === 2 && pg2.figs === 4 && /4 imagens · 3 páginas/.test(pg2.extra) && /Imagens\s*4/.test(pg2.aba), J);
+  t.ok('título editável e ordem com as setas', r.ordem && r.ordem.titulo && r.ordem.desceu && /^Imagens /.test(r.nome), J);
+  t.ok('Word: as quatro imagens dentro do arquivo, com título e quebra de página', w.midias === 4 && w.desenhos === 4 && w.rels === 4 && w.tipo && w.quebras === 2 && w.titulo, J);
+  t.ok('anexar no fim da proposta: a proposta e as imagens num documento só', r.anexo && r.anexo.figs === 4 && r.anexo.proposta, J);
+  t.ok('tirar a imagem apaga do aparelho; a que a cópia da proposta ainda usa fica', r.tirou && r.tirou.n === 3 && r.tirou.idb === null && r.copia.mesmaImagem && r.copia.aindaGuardada && !erros.length, J);
+  await ctx.close();
+});
+
 teste('propostas-revisoes-lixeira', async (b, t) => {
   // revisões (a versão enviada fica guardada), lixeira de 30 dias, Salvos
   // com validade vencida, filtro por situação e soma em negociação, barra
@@ -12059,7 +12151,7 @@ teste('central-propostas-arquiteta', async (b, t) => {
   t.ok('o dono vê, a engenharia não', r.dono && !r.eng, J);
   t.ok('propostas_rm entra na cópia de segurança', r.backup === true, J);
   const central = fs.readFileSync(path.join(RAIZ, 'central_rm', 'index.html'), 'utf8');
-  t.ok('propostas_rm na lista de nós da cópia', /NOS_DADOS = \[[^\]]*'propostas_rm'/.test(central));
+  t.ok('propostas_rm na lista de nós da cópia', /NOS_DADOS = \[[^\]]*'propostas_rm(\/docs)?'/.test(central));
   const sync = fs.readFileSync(path.join(RAIZ, 'central_rm', 'scripts', 'sync-systems.js'), 'utf8');
   t.ok('o programa instalado baixa o sistema novo', /propostas_rm: 'propostas_rm'/.test(sync));
   t.ok('sem erro na página', !erros.length, erros.join(' | '));
