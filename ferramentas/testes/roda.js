@@ -12408,6 +12408,232 @@ teste('pdf-desenho-em-alta', async (b, t) => {
   await ctx.close();
 });
 
+teste('propostas-total-digitado-e-acrescimo', async (b, t) => {
+  // Valores: o total da proposta pode ser digitado à mão, mesmo sem as etapas
+  // com valor (no papel elas saem sem valor, só o total), e há um acréscimo
+  // em %: distribuído nas etapas (cada valor já com ele) ou sobre o total
+  // digitado. Vale para o papel, os avisos e a base do contrato.
+  if (!fs.existsSync(path.join(RAIZ, 'propostas_rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'propostas_rm' });
+  await semLogin(pg);
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    await iniciarApp();
+    const d = normalizar(novoDoc('padrao'));
+    d.cliente.nome = 'Cliente Fictício Ltda';
+    d.valores = [{ etapa: 'Estrutura', valor: 0, opcional: false, contrato: true, mostrar: true, cortesia: false },
+      { etapa: 'Fechamento', valor: 0, opcional: false, contrato: true, mostrar: true, cortesia: false },
+      { etapa: 'Piso', valor: 0, opcional: true, contrato: false, mostrar: true, cortesia: false }];
+    docs[d.id] = d; abrir(d.id); await esp(80);
+    const folha = () => document.getElementById('folha').textContent.replace(/\s+/g, ' ');
+    const el = p => document.querySelector('#ficha [data-p="' + p + '"]');
+    const campo = (p, v) => { const e = el(p); e.value = v; e.dispatchEvent(new Event('input', { bubbles: true })); e.dispatchEvent(new Event('change', { bubbles: true })); };
+    const resumo = () => { const e = document.querySelector('#ficha .tot-linha[data-tot="proposta"]'); return e ? e.textContent.replace(/\s+/g, ' ') : ''; };
+    const o = { temCampos: !!el('tot.manual') && !!el('tot.pct'), vazio: totalProposta(d), avisoVazio: avisos(d).some(a => /sem valor/.test(a)) };
+    campo('tot.manual', '250.000,00'); await esp(250);
+    o.dig = { total: totalProposta(d), aviso: avisos(d).some(a => /sem valor/.test(a)), resumo: resumo(), folha: folha(),
+      linhaTotal: [...document.querySelectorAll('#folha table.tot tr')].some(tr => /Total da obra/.test(tr.textContent) && /250\.000,00/.test(tr.textContent)) };
+    campo('tot.pct', '10'); await esp(250);
+    o.digPct = { total: totalProposta(d), resumo: resumo(), folha: folha() };
+    campo('tot.manual', ''); await esp(100);
+    campo('valores.0.valor', '100.000,00'); campo('valores.1.valor', '50.000,00'); campo('valores.2.valor', '20.000,00'); await esp(250);
+    o.etapas = { total: totalProposta(d), resumo: resumo(), folha: folha() };
+    d.valores[2].contrato = true;
+    o.contrato = totalContratoBase(d);
+    d.tot.manual = 300000;
+    o.contratoDig = totalContratoBase(d);
+    const volta = normalizar(JSON.parse(JSON.stringify(d)));
+    o.volta = [volta.tot.manual, volta.tot.pct, totalProposta(volta)];
+    const velho = normalizar({ valores: [{ etapa: 'A', valor: 1000 }] });
+    o.velho = [velho.tot.manual, velho.tot.pct, totalProposta(velho)];
+    return o;
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(Object.assign({}, r, { dig: r.dig && Object.assign({}, r.dig, { folha: (r.dig.folha || '').slice(-700) }), digPct: undefined, etapas: r.etapas && r.etapas.resumo })) + ' ' + erros.join(' | ');
+  t.ok('Valores tem "Total digitado" e "+ Acréscimo (%)"', !r.erro && r.temCampos, J);
+  t.ok('sem valor nenhum: total zero e o aviso', !r.erro && r.vazio === 0 && r.avisoVazio, J);
+  t.ok('total digitado sem as etapas com valor: vale, e o aviso some', !r.erro && r.dig.total === 250000 && !r.dig.aviso && /250\.000,00/.test(r.dig.resumo), J);
+  t.ok('papel: "Total da obra" com o digitado, e as etapas sem "R$ 0,00"', !r.erro && r.dig.linhaTotal && !/R\$\s0,00/.test(r.dig.folha), J);
+  t.ok('acréscimo sobre o total digitado: 250.000 + 10% = 275.000', !r.erro && r.digPct.total === 275000 && /275\.000,00/.test(r.digPct.resumo) && /\+ 10%/.test(r.digPct.resumo) && /275\.000,00/.test(r.digPct.folha), J);
+  t.ok('acréscimo nas etapas: cada valor sai já com ele, e o total é a soma', !r.erro && r.etapas.total === 165000 && /110\.000,00/.test(r.etapas.folha) && /55\.000,00/.test(r.etapas.folha) && /165\.000,00/.test(r.etapas.folha) && !/100\.000,00/.test(r.etapas.folha), J);
+  t.ok('opcional também com o acréscimo, fora do total', !r.erro && /22\.000,00/.test(r.etapas.folha), J);
+  t.ok('contrato: base com o acréscimo (e o opcional que foi para o contrato)', !r.erro && r.contrato === 187000 && r.contratoDig === 352000, J);
+  t.ok('grava e volta; proposta antiga sem os campos continua igual', !r.erro && r.volta.join() === '300000,10,330000' && r.velho.join() === '0,0,1000', J);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
+teste('obras-parte-com-data-propria', async (b, t) => {
+  // parcela dividida: uma parte pode ser paga noutro dia. Cada parte tem a
+  // sua data; vazia, vale a da parcela (e acompanha quando ela muda). Os
+  // relatórios mostram a data da parte quando é outra.
+  if (!fs.existsSync(path.join(RAIZ, 'controle_obras'))) return;
+  for (const tela of [null, { width: 390, height: 844 }]) {
+    const { ctx, pg, erros } = await abre(b, { 'sis.local': 'controle_obras' }, 'index.html', tela ? { tela } : {});
+    await semLogin(pg);
+    const r = await pg.evaluate(async () => {
+      const esp = ms => new Promise(x => setTimeout(x, ms));
+      S.obras = [{ id: 'o1', nome: 'Obra Teste', cliente: 'C', valor: 500000, notaAcordada: 0, status: 'andamento', _open: true, fornecedores: [],
+        parcelas: [{ id: 'p1', desc: 'ENTRADA', data: '05/02/2026', valor: 150000, recebida: true }] }];
+      VIEW = 'detalhe'; render(); const mais = document.querySelector('#card_o1 [data-mais="parcelas"]'); if (mais) mais.click(); await esp(50);
+      const forma = document.querySelector('#card_o1 .ob2-p[data-p="p1"] select[data-k="forma"]');
+      forma.value = 'dividir'; forma.dispatchEvent(new Event('change')); await esp(30);
+      const partes = () => [...document.querySelectorAll('#card_o1 .ob2-partes[data-p="p1"] .ob2-parte')];
+      const dt = i => partes()[i].querySelector('input[type="date"][data-k="data"]');
+      if (!dt(0)) return { semData: true };
+      const o = { herda: [dt(0).value, dt(1).value], clara: dt(1).classList.contains('herdada') };
+      const pdat = document.querySelector('#card_o1 .ob2-p[data-p="p1"] input[type="date"]');
+      pdat.value = '2026-02-10'; pdat.dispatchEvent(new Event('change')); await esp(30);
+      o.acompanha = [dt(0).value, dt(1).value];
+      dt(1).value = '2026-03-02'; dt(1).dispatchEvent(new Event('change')); await esp(30);
+      o.gravou = S.obras[0].parcelas[0].partes.map(x => x.data || '');
+      o.escura = !dt(1).classList.contains('herdada');
+      pdat.value = '2026-02-12'; pdat.dispatchEvent(new Event('change')); await esp(30);
+      o.naoMexe = [dt(0).value, dt(1).value];
+      render(); await esp(30);
+      o.depois = [dt(0).value, dt(1).value];
+      const rl = document.querySelector('#card_o1 .ob2-sec:nth-of-type(2)').getBoundingClientRect();
+      o.cabe = partes().every(p => [...p.querySelectorAll('*')].every(e => e.getBoundingClientRect().right <= rl.right + 1));
+      o.rel = obraReportSection(S.obras[0]);
+      o.pdf = typeof docRelatorioObrasPDF === 'function' ? docRelatorioObrasPDF(S.obras, 'Relatório') : '';
+      dt(1).value = ''; dt(1).dispatchEvent(new Event('change')); await esp(30);
+      o.limpa = { data: S.obras[0].parcelas[0].partes[1].data || '', campo: dt(1).value, clara: dt(1).classList.contains('herdada') };
+      return o;
+    }).catch(e => ({ erro: e.message }));
+    const onde = tela ? 'celular: ' : 'computador: ';
+    const J = JSON.stringify(Object.assign({}, r, { rel: undefined, pdf: undefined })) + ' ' + erros.join(' | ');
+    const so = s => (s || '').replace(/<[^>]+>/g, ' ').replace(/&[a-z#0-9]+;/g, ' ').replace(/\s+/g, ' ');
+    if (r.semData) { t.ok(onde + 'cada parte tem a sua data', false, 'sem o campo de data na parte'); await ctx.close(); continue; }
+    t.ok(onde + 'parte nova: a data é a da parcela, mais clara', !r.erro && r.herda.join() === '2026-02-05,2026-02-05' && r.clara, J);
+    t.ok(onde + 'mudou a data da parcela: as partes sem data própria acompanham', !r.erro && r.acompanha.join() === '2026-02-10,2026-02-10', J);
+    t.ok(onde + 'parte com outra data: grava só nela', !r.erro && r.gravou.join() === ',02/03/2026' && r.escura, J);
+    t.ok(onde + 'a data própria não muda com a da parcela, e volta igual', !r.erro && r.naoMexe.join() === '2026-02-12,2026-03-02' && r.depois.join() === '2026-02-12,2026-03-02', J);
+    t.ok(onde + 'as partes cabem na tela', !r.erro && r.cabe, J);
+    for (const [nome, h] of [['relatório', r.rel], ['PDF', r.pdf]]) {
+      const tx = so(h);
+      t.ok(onde + nome + ': a parte paga noutro dia sai com a data', !r.erro && /Parte 2 02\/03\/2026 R\$ 75\.000,00/.test(tx) && /Parte 1 R\$ 75\.000,00/.test(tx), tx.slice(0, 700));
+    }
+    t.ok(onde + 'apagar a data da parte volta para a da parcela', !r.erro && r.limpa.data === '' && r.limpa.campo === '2026-02-12' && r.limpa.clara, J);
+    t.ok(onde + 'sem erro na página', !erros.length, erros.join(' | '));
+    await ctx.close();
+  }
+});
+
+teste('propostas-imagem-seta-medida', async (b, t) => {
+  // aba Imagens: a seta de medida (a altura do pavilhão, como a arquiteta
+  // fazia no Word) desenhada sobre a imagem. Arrasta de uma ponta à outra;
+  // quase em pé, fica reta. A seta e o texto saem gravados na imagem -- tela,
+  // PDF e Word --, e a imagem guardada continua sem eles (dá para tirar).
+  if (!fs.existsSync(path.join(RAIZ, 'propostas_rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'propostas_rm' });
+  await semLogin(pg);
+  const r = await pg.evaluate(async (FICT) => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    await iniciarApp();
+    const d = eval(FICT); docs[d.id] = d; abrir(d.id); await esp(50);
+    document.getElementById('abaImagens').click(); await esp(80);
+    const c0 = document.createElement('canvas'); c0.width = 1800; c0.height = 1000; const g0 = c0.getContext('2d'); g0.fillStyle = '#ffffff'; g0.fillRect(0, 0, 1800, 1000);
+    const f = new File([await new Promise(ok => c0.toBlob(ok, 'image/png'))], 'Interno.png', { type: 'image/png' });
+    const dt = new DataTransfer(); dt.items.add(f); const inp = document.getElementById('imArq'); inp.files = dt.files; inp.dispatchEvent(new Event('change', { bubbles: true }));
+    for (let k = 0; k < 60 && !d.imgs.itens.length; k++) await esp(100); await esp(200);
+    const x = d.imgs.itens[0];
+    const o = { botao: !!document.querySelector('#ficha [data-acao="imgCota"]') };
+    if (!o.botao) return o;
+    document.querySelector('#ficha [data-acao="imgCota"]').click(); await esp(300);
+    const cv = document.getElementById('cotaCv');
+    o.janela = { on: document.getElementById('cotaTela').classList.contains('on'), w: cv.width, h: cv.height };
+    document.getElementById('cotaTxt').value = '7,10m';
+    const ev = (tipo, fx, fy) => { const rc = cv.getBoundingClientRect(); cv.dispatchEvent(new PointerEvent(tipo, { bubbles: true, pointerId: 1, clientX: rc.left + rc.width * fx, clientY: rc.top + rc.height * fy })); };
+    ev('pointerdown', 0.5, 0.2); ev('pointermove', 0.51, 0.5); ev('pointermove', 0.52, 0.8); ev('pointerup', 0.52, 0.8); await esp(30);
+    o.listaInp = (document.querySelector('#cotaLista [data-ck="0"]') || {}).value;
+    o.reta = COTA.cs[0] && COTA.cs[0].x1 === COTA.cs[0].x2;
+    // mais uma seta, noutro lugar, com outra medida
+    ev('pointerdown', 0.8, 0.3); ev('pointermove', 0.8, 0.7); ev('pointerup', 0.8, 0.7); await esp(30);
+    const i1 = document.querySelector('#cotaLista [data-ck="1"]'); if (i1) { i1.value = '3,00m'; i1.dispatchEvent(new Event('input', { bubbles: true })); }
+    // um toque sem arrastar não vira seta
+    ev('pointerdown', 0.15, 0.9); ev('pointerup', 0.15, 0.9); await esp(20);
+    o.duas = COTA.cs.map(c => c.txt).join('|');
+    // arrasta a 1ª pelo meio: muda de lugar, mesmo tamanho
+    ev('pointerdown', 0.5, 0.5); ev('pointermove', 0.4, 0.5); ev('pointermove', 0.3, 0.5); ev('pointerup', 0.3, 0.5); await esp(20);
+    o.moveu = [COTA.cs[0].x1, COTA.cs[0].x2, COTA.cs[0].y1, COTA.cs[0].y2].map(v => +v.toFixed(3)).join();
+    // arrasta a ponta de cima: só ela muda
+    ev('pointerdown', 0.3, 0.2); ev('pointermove', 0.3, 0.1); ev('pointerup', 0.3, 0.1); await esp(20);
+    o.ponta = [COTA.cs[0].y1, COTA.cs[0].y2].map(v => +v.toFixed(3)).join();
+    // ajuste fino pelo teclado (Shift: 10 px)
+    document.activeElement && document.activeElement.blur();
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', shiftKey: true, bubbles: true }));
+    o.fino = Math.round(COTA.cs[0].x1 * 1800);
+    o.lista = document.getElementById('cotaLista').textContent;
+    document.getElementById('cotaSim').click();
+    for (let k = 0; k < 40 && !/\(2\)/.test((document.querySelector('#ficha [data-acao="imgCota"]') || {}).textContent || ''); k++) await esp(100);
+    o.gravou = JSON.parse(JSON.stringify(x.cotas || []));
+    o.rotulo = (document.querySelector('#ficha [data-acao="imgCota"]') || {}).textContent;
+    const c = document.createElement('canvas'), g = c.getContext('2d');
+    const le = async src => { const im = await carregaImg(src); c.width = im.naturalWidth; c.height = im.naturalHeight; g.drawImage(im, 0, 0); };
+    const mn = (x0, y0, w, h) => { const a = g.getImageData(x0, y0, w, h).data; let m = 255; for (let k = 0; k < a.length; k += 4) m = Math.min(m, a[k], a[k + 1], a[k + 2]); return m; };
+    await le(IMG[x.id]);
+    o.img = { linha: mn(545, 380, 10, 240), texto: mn(445, 420, 85, 160), linha2: mn(1435, 380, 10, 240), longe: mn(1000, 420, 200, 160), fora: mn(540, 20, 10, 50), antigo: mn(895, 380, 10, 240) };
+    await le(BRUTO[x.id]); o.guardada = mn(545, 380, 10, 240);
+    o.papel = [...document.querySelectorAll('#folha img')].some(i => i.src === IMG[x.id]);
+    o.volta = normalizar(JSON.parse(JSON.stringify(d))).imgs.itens[0].cotas.length;
+    o.nuvem = cotasDe({ cotas: { 0: { x1: 0.1, y1: 0.1, x2: 0.1, y2: 0.9, txt: '5,00m' } } }).length;
+    // tirar a seta: a imagem volta sem ela
+    document.querySelector('#ficha [data-acao="imgCota"]').click(); await esp(300);
+    document.querySelector('#cotaLista [data-cdel="0"]').click(); document.getElementById('cotaSim').click();
+    for (let k = 0; k < 40 && (x.cotas || []).length > 1; k++) await esp(100); await esp(200);
+    await le(IMG[x.id]); o.tirou = { n: (x.cotas || []).length, linha: mn(545, 380, 10, 240), linha2: mn(1435, 380, 10, 240) };
+    return o;
+  }, PROP_FICT).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  t.ok('a imagem tem o botão "Seta de medida"', !r.erro && r.botao, J);
+  t.ok('abre a janela com a imagem no tamanho dela', !r.erro && r.janela && r.janela.on && r.janela.w === 1800 && r.janela.h === 1000, J);
+  t.ok('arrastando quase em pé: uma seta reta, com o texto', !r.erro && r.reta && r.listaInp === '7,10m', J);
+  t.ok('mais de uma seta na imagem, cada uma com a sua medida (toque sem arrastar não vira seta)', !r.erro && r.duas === '7,10m|3,00m' && r.gravou.length === 2 && /\(2\)/.test(r.rotulo), J);
+  t.ok('arrastar a seta muda de lugar, com o mesmo tamanho', !r.erro && r.moveu === '0.3,0.3,0.2,0.8', J);
+  t.ok('arrastar a ponta muda só ela', !r.erro && r.ponta === '0.1,0.8', J);
+  t.ok('ajuste fino pelo teclado', !r.erro && r.fino === 550, J);
+  t.ok('as setas saem gravadas na imagem (linha e texto), no lugar novo, e só ali', !r.erro && r.img.linha < 80 && r.img.texto < 80 && r.img.linha2 < 80 && r.img.longe > 200 && r.img.fora > 200 && r.img.antigo > 200, J);
+  t.ok('a imagem guardada continua sem a seta; o papel usa a com seta', !r.erro && r.guardada > 200 && r.papel, J);
+  t.ok('grava e volta (também como vem da nuvem)', !r.erro && r.volta === 2 && r.nuvem === 1, J);
+  t.ok('tirar uma seta: ela some da imagem, a outra fica', !r.erro && r.tirou && r.tirou.n === 1 && r.tirou.linha > 200 && r.tirou.linha2 < 80, J);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
+teste('propostas-imagens-pdf-limpo', async (b, t) => {
+  // PDF das imagens da obra: cada imagem já leva a marca d'água gravada; a
+  // da página (bloco comum) não sai junto, para não sobrepor as duas. Na
+  // proposta ela continua. E a imagem sai limpa, sem quadro em volta.
+  if (!fs.existsSync(path.join(RAIZ, 'propostas_rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'propostas_rm' });
+  await semLogin(pg);
+  await pg.emulateMedia({ media: 'print' });
+  const r = await pg.evaluate(async (FICT) => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    await iniciarApp();
+    const d = eval(FICT); docs[d.id] = d; abrir(d.id); await esp(80);
+    const marca = () => { const e = document.getElementById('rm-dagua-imp'); return e ? getComputedStyle(e).display : 'sem'; };
+    const o = { proposta: marca() };
+    document.getElementById('abaImagens').click(); await esp(80);
+    const c = document.createElement('canvas'); c.width = 900; c.height = 500; const g = c.getContext('2d'); g.fillStyle = '#ffffff'; g.fillRect(0, 0, 900, 500);
+    const f = new File([await new Promise(ok => c.toBlob(ok, 'image/png'))], 'Fachada.png', { type: 'image/png' });
+    const dt = new DataTransfer(); dt.items.add(f); const inp = document.getElementById('imArq'); inp.files = dt.files; inp.dispatchEvent(new Event('change', { bubbles: true }));
+    for (let k = 0; k < 60 && !document.querySelector('#folha .f-fig img'); k++) await esp(100);
+    o.imagens = marca();
+    const im = document.querySelector('#folha .f-fig img');
+    o.borda = im ? getComputedStyle(im).borderTopWidth + ' ' + getComputedStyle(im).borderTopStyle : 'sem imagem';
+    document.getElementById('abaProposta').click(); await esp(80);
+    o.volta = marca();
+    return o;
+  }, PROP_FICT).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  t.ok('na proposta, a marca d\'água da página sai', !r.erro && r.proposta === 'flex', J);
+  t.ok('no PDF das imagens, só a marca gravada em cada imagem', !r.erro && r.imagens === 'none', J);
+  t.ok('a imagem sai limpa, sem quadro em volta', !r.erro && /^0px|none$/.test(r.borda) && !/solid/.test(r.borda), J);
+  t.ok('voltando à proposta, a marca da página volta', !r.erro && r.volta === 'flex', J);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
 teste('propostas-nuvem', async (b, t) => {
   // cada proposta no seu nó (quem grava o banco inteiro apaga o do outro);
   // gravação recusada avisa e a alteração fica guardada para subir depois;
