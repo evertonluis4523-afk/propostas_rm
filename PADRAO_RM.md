@@ -32,6 +32,13 @@ service worker) para todos. O verificador acusa bloco diferente da fonte.
 - **Português do Brasil** em tudo que aparece: datas `dd/mm/aaaa`, números
   `1.234,56`, textos sem jargão técnico.
 - **Comentário explica o porquê**, com o caso real que motivou a regra.
+- **Sem código morto.** Função que nada chama, estilo de classe que o sistema
+  não usa (sobra de quando ele nasceu da cópia de outro) e o logo gravado mais
+  de uma vez no mesmo arquivo saem. Uma cópia do logo por arquivo; os outros
+  lugares apontam para ela (`RM_ASSINATURA`, ou o `src` da primeira imagem).
+  O `verifica_padrao.py` acusa os três. Os blocos comuns ficam de fora: valem
+  para todos, e cada sistema usa uma parte deles. Os comentários ficam: são o
+  registro do porquê.
 
 ## 2. Marca
 

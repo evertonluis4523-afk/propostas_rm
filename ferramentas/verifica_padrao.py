@@ -79,6 +79,91 @@ def corpo_sw(s):
 NO_HEAD = {'tema.html': 'a página pisca clara antes do escuro (o tema precisa rodar antes da primeira pintura)'}
 
 
+# ---- CÓDIGO MORTO --------------------------------------------------------
+# Limpeza de out/2026: funções que nada chamava, estilos de telas que já não
+# existem (vinham junto quando um sistema nascia da cópia de outro) e o logo
+# gravado duas ou três vezes no mesmo arquivo. Isto trava a volta. Os blocos
+# comuns ficam de fora: valem para todos, e cada sistema usa uma parte.
+SVG64 = r'data:image/svg\+xml;base64,[A-Za-z0-9+/=]{3000,}'
+
+def _sem(h, trechos):
+    for a, b in sorted(trechos, reverse=True):
+        h = h[:a] + ' ' * (b - a) + h[b:]
+    return h
+
+def _regras_css(css, base=0):
+    """(ini, fim, seletor) das regras comuns de uma folha; desce em @media."""
+    out, i, n = [], 0, len(css)
+    while i < n:
+        if css.startswith('/*', i):
+            i = css.find('*/', i) + 2 or n; continue
+        if css[i].isspace() or css[i] == '}':
+            i += 1; continue
+        j = i
+        while j < n and css[j] not in '{;':
+            if css.startswith('/*', j):
+                j = css.find('*/', j) + 2; continue
+            j += 1
+        if j >= n:
+            break
+        if css[j] == ';':
+            i = j + 1; continue
+        d, k = 0, j
+        while k < n:
+            if css.startswith('/*', k):
+                k = css.find('*/', k) + 2; continue
+            if css[k] == '{':
+                d += 1
+            elif css[k] == '}':
+                d -= 1
+                if d == 0:
+                    break
+            k += 1
+        cab = css[i:j].strip()
+        if cab.startswith(('@media', '@supports', '@container')):
+            out += _regras_css(css[j + 1:k], base + j + 1)
+        elif not cab.startswith('@'):
+            out.append((base + i, base + k + 1, cab))
+        i = k + 1
+    return out
+
+def codigo_morto(h, comuns):
+    """Erros de código sem uso em h, fora dos trechos `comuns` [(ini, fim)]."""
+    erros = []
+    rep = [x for x, n in Counter(re.findall(SVG64, h)).items() if n > 1]
+    if rep:
+        erros.append('logo gravado %d vezes no arquivo (deixe uma cópia e aponte as outras para ela)' % max(h.count(x) for x in rep))
+    scripts = [(m.start(), m.end()) for m in re.finditer(r'(?is)<script\b[^>]*>.*?</script>', h)]
+    masc = _sem(h, scripts)
+    estilos = [(m.start(), m.end(), m.start(2), m.group(2)) for m in re.finditer(r'(?is)(<style\b[^>]*>)(.*?)</style>', masc)]
+    estilos = [(a, b, c, h[c:c + len(g)]) for a, b, c, g in estilos]
+    proprio = _sem(h, comuns)
+    toks = Counter(re.findall(r'[A-Za-z_$][\w$]*', re.sub(SVG64, '', h)))
+    decl = (re.findall(r'(?<![(!]\s)(?<![(!])\bfunction\s+([A-Za-z_$][\w$]*)\s*\(', proprio)
+            + re.findall(r'\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?(?:function\b|\([^)]*\)\s*=>|[A-Za-z_$][\w$]*\s*=>)', proprio))
+    mortas = sorted(set(n for n in decl if toks[n] <= 1))
+    if mortas:
+        erros.append('função que nada chama: ' + ', '.join(mortas))
+    # classes: usadas no HTML e no script (fora das <style>); "x-" + algo
+    # montado no script conta como uso de todas as "x-..."
+    uso = _sem(h, [(a, b) for a, b, c, g in estilos])
+    utoks = set(re.findall(r'[A-Za-z_][\w-]*', uso))
+    def usada(c):
+        if c in utoks:
+            return True
+        return any(c[k - 1] in '-_' and re.search(r'(?<![\w-])' + re.escape(c[:k]) + r'(?:[\'"`+]|\$\{)', uso) for k in range(len(c) - 1, 0, -1))
+    sobra = []
+    for a, b, c, css in estilos:
+        if any(x <= a < y for x, y in comuns):
+            continue
+        for _, _, cab in _regras_css(css):
+            for sel in re.split(r',(?![^()]*\))', cab):
+                sl = re.sub(r'\[[^\]]*\]', '', re.sub(r':not\([^()]*\)', '', sel))
+                sobra += [k for k in re.findall(r'\.([A-Za-z_][\w-]*)', sl) if not usada(k)]
+    if sobra:
+        erros.append('estilo de classe que o sistema não usa: .' + ', .'.join(sorted(set(sobra))[:12]) + (' (+%d)' % (len(set(sobra)) - 12) if len(set(sobra)) > 12 else ''))
+    return erros
+
 def analisa(repo):
     nome = os.path.basename(os.path.normpath(repo))
     h = ler(os.path.join(repo, 'index.html')) or ''
@@ -183,6 +268,16 @@ def analisa(repo):
                 r['erros'].append('bloco "%s" difere de central_rm/comum/%s (rode ferramentas/aplica_comum.py)' % (bl['nome'], bl['arquivo']))
             if ach and bl['arquivo'] in NO_HEAD and not (0 <= ach[0] < h.find('</head>')):
                 r['erros'].append('bloco "%s" fora do <head>: %s' % (bl['nome'], NO_HEAD[bl['arquivo']]))
+    if comum:
+        spans = []
+        for bl in comum['blocos']:
+            try:
+                ach = acha_bloco(h, bl['marca'])
+            except ValueError:
+                ach = None
+            if ach:
+                spans.append(ach)
+        r['erros'] += codigo_morto(h, spans)
     # as outras páginas inteiras do sistema (ex.: medicao.html da PU) com os
     # mesmos blocos -- fonte e Tema RM obrigatórios
     if comum:
