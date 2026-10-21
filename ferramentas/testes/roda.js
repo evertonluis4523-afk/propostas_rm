@@ -8956,6 +8956,40 @@ teste('celular-nada-pela-metade', async (b, t) => {
   }
 });
 
+teste('logo-uma-copia-so', async (b, t) => {
+  // o logo da RM ficava gravado duas ou três vezes no mesmo arquivo (login,
+  // cabeçalho do impresso, constante do PDF), 12 kB cada. Ficou uma cópia;
+  // as outras apontam para ela. Aqui: cada lugar que apontou continua com o
+  // desenho de verdade. O verificador trava a cópia repetida de volta.
+  const SVG = /^data:image\/svg\+xml;base64,.{3000,}$/;
+  const falhas = [];
+  for (const r of repos()) {
+    const { ctx, pg, erros } = await abre(b, { 'sis.local': r });
+    const o = await pg.evaluate(() => {
+      const imgs = [...document.querySelectorAll('#loginLogo,img.lc-logo,img.rm-logo,#printHeadLogo,.cab .marca img')]
+        .filter(i => !/^(appbarLogo)$/.test(i.id))
+        .map(i => ({ q: i.id || i.className, src: i.getAttribute('src') || '', ok: i.complete && i.naturalWidth > 0 }));
+      const v = {};
+      ['RM_ASSINATURA', 'LOGO', 'LOGO_RM', 'DEFAULT_LOGO', 'LOGO_TEXTO', 'LOGO_COR'].forEach(n => { try { const x = eval(n); if (typeof x === 'string') v[n] = x.slice(0, 40) + '…' + x.length; } catch (e) {} });
+      return { imgs, v };
+    }).catch(e => ({ erro: e.message }));
+    if (o.erro) { falhas.push(r + ': ' + o.erro); await ctx.close(); continue; }
+    o.imgs.filter(i => /^data:/.test(i.src) || !i.src).forEach(i => { if (!/^data:image\/svg\+xml;base64,/.test(i.src) || !i.ok) falhas.push(r + ': imagem ' + i.q + ' sem o logo'); });
+    Object.keys(o.v).forEach(n => { if (!/^data:image\/svg\+xml;base64,/.test(o.v[n]) || +o.v[n].split('…')[1] < 3000) falhas.push(r + ': ' + n + ' sem o logo (' + o.v[n] + ')'); });
+    if (erros.length) falhas.push(r + ': ' + erros.join(' | '));
+    await ctx.close();
+  }
+  t.ok('o logo aparece em todo lugar que passou a usar a cópia única', !falhas.length, falhas.join(' ; '));
+  /* a apresentação da Central: as duas folhas com o logo colorido, de uma constante só */
+  const { ctx, pg } = await abre(b, { 'sis.local': 'central_rm' });
+  const c = await pg.evaluate(async () => {
+    window.rmApresentacao(); await new Promise(x => setTimeout(x, 400));
+    return [...document.querySelectorAll('#ap-doc .cab .marca img')].map(i => ({ svg: /^data:image\/svg\+xml;base64,/.test(i.getAttribute('src') || '') && (i.getAttribute('src') || '').length > 3000, ok: i.complete && i.naturalWidth > 0 }));
+  }).catch(e => ({ erro: e.message }));
+  await ctx.close();
+  t.ok('Central: as duas folhas da apresentação com o logo', Array.isArray(c) && c.length === 2 && c.every(x => x.svg && x.ok), JSON.stringify(c));
+});
+
 teste('zz-auditoria', async (b, t) => {
   // ferramenta de auditoria (não é teste): AUD_DIR=pasta AUD_MODO=cores|cliques|efeitos|nomes [AUD_SO=a,b]
   const SAIDA = process.env.AUD_DIR, MODO = process.env.AUD_MODO; if (!SAIDA || !MODO) return;
