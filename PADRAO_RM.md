@@ -397,10 +397,14 @@ Tudo que imprime segue a mesma papelaria:
   canto próprio do sistema. Dentro da Central, no tema claro, a margem do
   sistema é branca e a folha é marcada só pelo fio.
 - Movimento (bloco comum `comum/fundo-movimento.html`, igual em todos): nas
-  Preferências da Central, "Cotas passando no fundo" (a obra se montando em
-  3D atrás da tela) e "Toque ao clicar" (snap de CAD). Vêm desligados; a
-  escolha vale para o conjunto pelas chaves `rm_mov`/`rm_toque` e pela
-  mensagem `{rm:'movimento'}`. Para com a janela escondida ou com um sistema
+  Preferências da Central, "Fundo em movimento" (a obra se montando em 3D
+  atrás da tela: estrutura metálica, pavilhão pré-moldado com as placas
+  encaixando entre os pilares, ou os dois), "Cotas passando no fundo" (opção
+  à parte, não vem mais junto com a montagem) e "Toque ao clicar" (snap de
+  CAD). Vêm desligados; a escolha vale para o conjunto pelas chaves
+  `rm_mov` (`metalica`/`premoldado`/`alterna`; a antiga `cotas` vale como
+  metálica com as cotas), `rm_cotas`, `rm_toque` e pela mensagem
+  `{rm:'movimento'}`. Teste `fundo-movimento`. Para com a janela escondida ou com um sistema
   aberto por cima da Central, some com "reduzir movimento", fica fora do
   celular e da impressão -- inclusive do PDF do programa: o bloco de
   impressão tira do clone todo canvas de enfeite (`aria-hidden`) e leva o

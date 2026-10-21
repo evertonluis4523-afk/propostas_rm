@@ -7545,9 +7545,33 @@ teste('fundo-movimento', async (b, t) => {
     const fr = document.createElement('iframe'); fr.srcdoc = '<script>window.__rec=[];addEventListener("message",e=>__rec.push(e.data));parent.postMessage({rm:"movimento?"},"*");<\/script>';
     cam.appendChild(fr); await esp(300);
     setMovimento('mov', true); setMovimento('toque', true); await esp(1500);
-    o.ligado = Object.assign({}, window.rmMovimento.estado(), { comum: localStorage.getItem('rm_mov') + '|' + localStorage.getItem('rm_toque'), pintou: pinta(),
-      botoes: [...document.querySelectorAll('#seg-mov .active, #seg-toque .active')].map(x => x.textContent.trim()).join(',') });
-    o.quadro = fr.contentWindow.__rec.filter(m => m && m.rm === 'movimento').map(m => m.mov + '|' + m.toque);
+    o.ligado = Object.assign({}, window.rmMovimento.estado(), { comum: localStorage.getItem('rm_mov') + '|' + localStorage.getItem('rm_cotas') + '|' + localStorage.getItem('rm_toque'), pintou: pinta(),
+      botoes: [...document.querySelectorAll('#seg-mov .active, #seg-cotas .active, #seg-toque .active')].map(x => x.textContent.trim()).join(',') });
+    o.quadro = fr.contentWindow.__rec.filter(m => m && m.rm === 'movimento').map(m => m.mov + '|' + m.cotas + '|' + m.toque);
+    // "deixar as cotas passando como opção, não fixo" e "mais opção de fundo: pavilhão pré-moldado sendo montado com as placas"
+    const opcoes = [...document.querySelectorAll('#seg-mov [data-mov]')].map(x => x.dataset.mov + ':' + x.textContent.trim());
+    setMovimento('mov', 'premoldado'); await esp(800);
+    const pre = Object.assign({}, window.rmMovimento.estado(), { pintou: pinta() });
+    setMovimento('cotas', true); await esp(300);
+    const comCotas = window.rmMovimento.estado();
+    setMovimento('mov', ''); await esp(300);
+    const soCotas = window.rmMovimento.estado();
+    setMovimento('cotas', false); await esp(200);
+    const nada = window.rmMovimento.estado();
+    setMovimento('mov', 'alterna'); await esp(200);
+    const dois = window.rmMovimento.estado();
+    // a escolha antiga ("cotas") continua: metálica com as cotas
+    localStorage.setItem(prefKey('rm_mov'), 'cotas'); localStorage.removeItem(prefKey('rm_cotas'));
+    const antiga = movAtual();
+    setMovimento('mov', 'metalica'); setMovimento('toque', true); await esp(300);
+    const E = window.rmMovimento.estrutura('premoldado'), placas = E.pecas.filter(p => p.k === 'placa');
+    const grupos = {}; placas.forEach(p => { (grupos[p.g] = grupos[p.g] || []).push(p); });
+    const G = Object.values(grupos);
+    const umVao = G.filter(g => g[0].a[0] === -10 && Math.min(g[0].a[2], g[0].b[2]) > -15 && Math.max(g[0].a[2], g[0].b[2]) < -10).sort((a, b2) => a[0].t - b2[0].t);
+    o.opcoes = { opcoes, pre: { estruturas: pre.estruturas, soltas: pre.soltas, pintou: pre.pintou, desenhando: pre.desenhando }, comCotas: comCotas.soltas, soCotas: [soCotas.desenhando, soCotas.estruturas.length, soCotas.soltas > 0],
+      nada: nada.desenhando, dois: dois.estruturas, antiga: antiga.mov + '|' + antiga.cotas,
+      placas: G.length, juntas: G.every(g => g.length === 4 && g.every(p => p.t === g[0].t)), etapas: [...new Set(E.pecas.filter(p => p.k === 'pilar').map(p => p.e))].join() + '/' + [...new Set(placas.map(p => p.e))].join(),
+      vao: umVao.map(g => Math.min(...g.map(p => p.a[1]))), entreOsPilares: placas.every(p => Math.abs(Math.abs(p.a[0]) - 10) < 0.01 || Math.abs(p.a[2] + 15) < 0.01) };
     // com um sistema aberto por cima, a Central para de desenhar
     cam.classList.add('active'); await esp(100);
     const c = document.getElementById('rmMovimento'); c.getContext('2d').clearRect(0, 0, c.width, c.height); await esp(400);
@@ -7563,7 +7587,7 @@ teste('fundo-movimento', async (b, t) => {
   await pg.emulateMedia({ media: 'screen', reducedMotion: 'reduce' }); await espera(200);
   r.reduz = await pg.evaluate(() => window.rmMovimento.estado().desenhando).catch(e => e.message);
   await pg.emulateMedia({ media: 'screen', reducedMotion: 'no-preference' }); await espera(200);
-  r.desliga = await pg.evaluate(() => { setMovimento('mov', false); return [window.rmMovimento.estado().desenhando, !!document.getElementById('rmMovimento')]; }).catch(e => e.message);
+  r.desliga = await pg.evaluate(() => { setMovimento('mov', false); setMovimento('cotas', false); return [window.rmMovimento.estado().desenhando, !!document.getElementById('rmMovimento')]; }).catch(e => e.message);
   // a câmera fica no alto: o que está longe sobe na tela e o que está no alto
   // fica mais perto (estava de baixo para cima e a cobertura parecia invertida)
   r.camera = await pg.evaluate(() => {
@@ -7581,7 +7605,14 @@ teste('fundo-movimento', async (b, t) => {
   const J = JSON.stringify(r);
   t.ok('vem desligado', !r.erro && r.inicio.mov === '' && r.inicio.toque === '' && !r.inicio.camada, J);
   t.ok('ligado nas Preferências: desenha, grava para o conjunto e avisa o sistema no quadro', !r.erro && r.ligado.desenhando && r.ligado.pintou > 50
-    && r.ligado.comum === 'cotas|1' && r.ligado.botoes === 'Ligado,Ligado' && r.quadro.includes('cotas|1'), J);
+    && r.ligado.comum === 'metalica||1' && r.ligado.botoes === 'Estrutura metálica,Desligado,Ligado' && r.quadro.includes('metalica||1'), J);
+  const O = r.opcoes || {};
+  t.ok('fundo em movimento com opções: Desligado, Estrutura metálica, Pré-moldado e Os dois', !r.erro && O.opcoes && O.opcoes.join() === 'off:Desligado,metalica:Estrutura metálica,premoldado:Pré-moldado,alterna:Os dois' && O.dois.join() === 'galpao,premoldado,mezanino', J);
+  t.ok('pré-moldado desenha a montagem; as cotas passando são opção à parte (só elas, ou nenhuma)', !r.erro && O.pre.estruturas.join() === 'premoldado' && O.pre.soltas === 0 && O.pre.pintou > 50
+    && O.comCotas > 0 && JSON.stringify(O.soCotas) === '[true,0,true]' && O.nada === false, J);
+  t.ok('pavilhão: pilares primeiro, depois as placas -- cada placa entra inteira, entre os pilares, de baixo para cima', !r.erro && O.placas > 30 && O.juntas && O.etapas === '0/2' && O.entreOsPilares
+    && O.vao.length >= 3 && O.vao.every((y, i) => !i || y > O.vao[i - 1]), J);
+  t.ok('a escolha antiga ("cotas ligadas") continua: estrutura metálica com as cotas', !r.erro && O.antiga === 'metalica|1', J);
   t.ok('com um sistema aberto por cima, a Central para de desenhar', !r.erro && r.parado === 0 && r.volta > 50, J);
   t.ok('clique: snap com a coordenada, que some sozinho', !r.erro && /X 3000 · Y 2000/.test(r.toque) && r.toqueSome, J);
   t.ok('não sai na impressão; "reduzir movimento" para tudo; desligar tira a camada', r.impressao === 'none' && r.reduz === false && JSON.stringify(r.desliga) === '[false,false]', J);
