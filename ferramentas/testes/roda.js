@@ -12183,7 +12183,7 @@ teste('propostas-importa-contrato-como-esta', async (b, t) => {
   // Agora o texto fica como está, as parcelas vêm com as palavras do
   // contrato e a falta de uma parcela aparece. Contrato FICTÍCIO.
   if (!fs.existsSync(path.join(RAIZ, 'propostas_rm'))) return;
-  const con = docxContratoFicticio(['CONTRATO DE FORNECIMENTO E INSTALAÇÃO DE PAVILHÃO INDUSTRIAL',
+  const LINHAS = ['CONTRATO DE FORNECIMENTO E INSTALAÇÃO DE PAVILHÃO INDUSTRIAL',
     'CONTRATADA: NUNES E KUHN ESTRUTURAS METALICAS LTDA (RM ESTRUTURAS), inscrita no CNPJ sob n° 28.654.965/0001-17.',
     'CONTRATANTE: COMERCIO FICTICIO EXEMPLO LTDA, inscrita no CNPJ 00.000.000/0001-00 sediada na Rua Exemplo, n° 1 – Bairro: Centro – Cidade Modelo/ CEP 00.000-000neste ato representado pelo senhor Pessoa Exemplo, portador do CPG n°000.000.000-00.',
     'Pelo presente instrumento, as partes têm entre si o presente contrato de um pavilhão a ser realizado na Rua Exemplo, n° 1 – Bairro: Centro – Cidade Modelo/RS sob o regime de empreitada, texto próprio do preâmbulo.',
@@ -12204,7 +12204,8 @@ teste('propostas-importa-contrato-como-esta', async (b, t) => {
     '3.2.1. Cláusula própria de pagamento deste contrato.', '3.3. FATURAMENTO', 'Faturamento próprio deste contrato.',
     '4 - DOS ENCARGOS', '4.1. Encargo próprio deste contrato.', '5 - DA SEGURANÇA', '5.1. Segurança própria deste contrato.',
     '6 - DAS CLÁUSULAS GERAIS', '6.1. Cláusula geral própria deste contrato.', 'Estrela, 8 de fevereiro de 2026.',
-    '__________________________', 'CONTRATANTE: COMERCIO FICTICIO EXEMPLO LTDA CNPJ 00.000.000/0001-00']);
+    '__________________________', 'CONTRATANTE: COMERCIO FICTICIO EXEMPLO LTDA CNPJ 00.000.000/0001-00'];
+  const con = docxContratoFicticio(LINHAS);
   const { ctx, pg, erros } = await abre(b, { 'sis.local': 'propostas_rm' });
   await semLogin(pg);
   await pg.evaluate(async () => { await iniciarApp(); });
@@ -12215,7 +12216,30 @@ teste('propostas-importa-contrato-como-esta', async (b, t) => {
       T: { pre: T.preambulo, obs: T.observacoes, oc: T.obrigContratada, ot: T.obrigContratante, prazo: T.prazo, px: T.prazoExtra, pag: T.pagamento, enc: T.encargos, seg: T.seguranca, ger: T.gerais },
       modo: c.pag.modo, parc: parcelasContrato(d).map(p => p.rot + '|' + p.quando + '|' + p.valor), avisos: avisos(d), comp: d.comp.map(x => x.item + '=' + x.sit),
       folha: document.getElementById('folha').textContent.replace(/\s+/g, ' '), cli: d.cliente, obra: d.obra }; }).catch(e => ({ erro: e.message }));
+  // o mesmo contrato em PDF (3 páginas, linhas quebradas, marcadores, timbrado e número em toda página)
+  const pdfB64 = await pg.evaluate(async linhas => {
+    if (typeof PDFLib === 'undefined') await new Promise(ok => { const s = document.createElement('script'); s.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js'; s.onload = ok; document.head.appendChild(s); });
+    const d = await PDFLib.PDFDocument.create(), f = await d.embedFont(PDFLib.StandardFonts.Helvetica); let pgx = null, y = 0, n = 0;
+    const nova = () => { pgx = d.addPage([595, 842]); n++; pgx.drawText('RM ESTRUTURAS - CONTRATO', { x: 40, y: 815, size: 8, font: f }); pgx.drawText(String(n), { x: 540, y: 25, size: 8, font: f }); y = 790; };
+    const poe = (txt, x) => { if (!pgx || y < 60) nova(); pgx.drawText(txt, { x, y, size: 9, font: f }); y -= 12; };
+    linhas.forEach(l => { const bullet = /^• /.test(l), ws = l.replace(/^• /, '').trim().split(' '); let at = '', prim = true;
+      const sai = () => { poe((bullet && prim ? '• ' : '') + at, bullet && !prim ? 52 : 40); prim = false; };
+      ws.forEach(w => { if ((at + ' ' + w).length > 62) { sai(); at = w; } else at = at ? at + ' ' + w : w; }); if (at) sai(); y -= 4; });
+    const by = await d.save(); let x = ''; by.forEach(c => { x += String.fromCharCode(c); }); return btoa(x);
+  }, LINHAS);
+  await pg.evaluate(() => { const m = document.getElementById('modal'); m.classList.remove('on'); });
+  await pg.setInputFiles('#arqWord', { name: 'Contrato fictício.pdf', mimeType: 'application/pdf', buffer: Buffer.from(pdfB64, 'base64') });
+  await pg.waitForTimeout(1500);
+  const rp = await pg.evaluate(() => { const d = docs[atualId], c = d.contrato, T = c.textos;
+    return { T: { pre: T.preambulo, obs: T.observacoes, oc: T.obrigContratada, ot: T.obrigContratante, prazo: T.prazo, px: T.prazoExtra, pag: T.pagamento, enc: T.encargos, seg: T.seguranca, ger: T.gerais },
+      parc: parcelasContrato(d).map(p => p.rot + '|' + p.quando + '|' + p.valor), aviso: (document.querySelector('#modalTxt .imp-av') || {}).textContent || '', comp: d.comp.map(x => x.item + '=' + x.sit),
+      cli: { e: d.cliente.endereco, c: d.cliente.cidade, r: d.cliente.rep }, sobras: document.querySelectorAll('#modalTxt .imp-r').length, sobrasTxt: [...document.querySelectorAll('#modalTxt .imp-orig')].map(x => x.textContent),
+      botao: document.getElementById('btnImportar').textContent.trim(), aceita: document.getElementById('arqWord').accept }; }).catch(e => ({ erro: e.message }));
+  // PDF escaneado (sem texto): recusa com motivo
+  const scan = await pg.evaluate(async () => { const d = await PDFLib.PDFDocument.create(); d.addPage([595, 842]).drawRectangle({ x: 40, y: 40, width: 100, height: 100 });
+    const u = await d.save(); try { await window.__prop.lerPdf(u.buffer); return 'aceitou'; } catch (e) { return e.message; } });
   const J = JSON.stringify(r).slice(0, 2500) + ' ' + erros.join(' | ');
+  const JP = JSON.stringify({ rp, scan }).slice(0, 2500);
   const T = r.T || {};
   t.ok('as cláusulas ficam como estão no contrato (obrigações, prazo, pagamento, encargos, segurança, gerais, observações, preâmbulo)', !r.erro && /texto próprio do preâmbulo/.test(T.pre)
     && T.obs === '- Observação própria deste contrato sobre a ART.' && T.oc === '1.3.1. Obrigação própria da contratada neste contrato.\n1.3.2. Dentre outras, são de responsabilidade da CONTRATADA:\n- Marcação própria da obra;'
@@ -12227,6 +12251,10 @@ teste('propostas-importa-contrato-como-esta', async (b, t) => {
   t.ok('falta de parcela: o aviso aparece já na importação e na ficha', !r.erro && /faltam R\$\s200\.000,00/.test(r.aviso) && r.avisos.some(x => /faltam R\$\s200\.000,00/.test(x)) && /como estão no contrato/.test(r.modal), J);
   t.ok('itens complementares: duas linhas de portão viram dois itens; a escada de cortesia fica como cortesia', !r.erro && r.comp.join(',') === 'Quatro portões cortina 4,00x5,00m=aparte,Portão cortina 2,00x3,00m=aparte,Escada metálica com corrimão=cortesia', J);
   t.ok('endereço com travessões, sem UF antes do CEP e "CPG" no lugar de CPF: contratante e obra lidos do jeito que estão escritos', !r.erro && r.cli.endereco === 'Rua Exemplo, n° 1 – Bairro: Centro' && r.cli.cidade === 'Cidade Modelo' && r.cli.cep === '00000-000' && r.cli.rep === 'Pessoa Exemplo' && r.cli.repDoc === 'CPF 000.000.000-00' && r.obra.endereco === 'Rua Exemplo, n° 1 – Bairro: Centro' && r.obra.cidade === 'Cidade Modelo/RS', J);
+  t.ok('PDF: botão "Importar Word ou PDF"; o mesmo contrato em PDF dá as mesmas cláusulas, parcelas, aviso, endereço e itens do Word', !rp.erro && /PDF/.test(rp.botao) && /\.pdf/.test(rp.aceita)
+    && JSON.stringify(rp.T) === JSON.stringify(r.T) && rp.parc.join() === r.parc.join() && /faltam R\$\s200\.000,00/.test(rp.aviso) && rp.comp.join() === r.comp.join()
+    && rp.cli.e === 'Rua Exemplo, n° 1 – Bairro: Centro' && rp.cli.r === 'Pessoa Exemplo' && rp.sobras === 0, JP);
+  t.ok('PDF sem texto (escaneado): recusa e diz para usar o Word', /escaneada/.test(scan), JP);
   t.ok('a folha nova sai com o texto do contrato importado', !r.erro && /Encargo próprio deste contrato/.test(r.folha) && /Cláusula geral própria/.test(r.folha) && /após trinta dias da assinatura/.test(r.folha) && !erros.length, J);
   await ctx.close();
 });
