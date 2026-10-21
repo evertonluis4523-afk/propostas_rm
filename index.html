@@ -1543,7 +1543,6 @@ else poe();
      continua funcionando. */
   html{ touch-action:manipulation; }
   .wrap{max-width:1600px;margin:0 auto;padding:22px 18px 60px;}
-  body.fs .wrap{max-width:1180px;}
 
   /* ---------- Header ---------- */
   .topbar{
@@ -1591,25 +1590,8 @@ else poe();
   }
   .btn-print:hover{background:var(--red-dark);}
 
-  .print-head{display:none;}
   @media print{
     .topbar{display:none!important;}
-    /* A REGUA da identidade fecha o cabecalho: laranja cheia com um fio
-       escuro embaixo, no lugar do fio unico que estava aqui. Vem em
-       ::after/::before com print-color-adjust -- em border-bottom o
-       print-color-adjust nao vale, e a barra sumiria ao imprimir com
-       "graficos de fundo" desligado, que e o padrao da caixa. */
-    .print-head{
-      display:flex;align-items:center;gap:18px;
-      padding:14px 0 16px;margin-bottom:10px;position:relative;
-    }
-    .print-head::after{content:"";position:absolute;left:0;right:0;bottom:0;height:4px;
-      background:var(--rm-laranja);-webkit-print-color-adjust:exact;print-color-adjust:exact}
-    .print-head::before{content:"";position:absolute;left:0;right:0;bottom:-5.5px;height:1.5px;
-      background:var(--rm-escuro);opacity:.85;-webkit-print-color-adjust:exact;print-color-adjust:exact}
-    .print-head img{height:48px;width:auto;}
-    .print-head .ph-txt .ph-sub{font-size:10px;text-transform:uppercase;letter-spacing:1.4px;color:var(--red);font-weight:600;}
-    .print-head .ph-txt h1{font-size:15px;font-weight:700;color:var(--ink);margin:2px 0 0;}
   }
 
   /* ---------- Card ---------- */
@@ -1617,11 +1599,6 @@ else poe();
     background:var(--card);border:1px solid var(--line);border-radius:var(--radius);
     box-shadow:var(--shadow);padding:18px 20px;margin-bottom:14px;
   }
-  .eyebrow{
-    font-size:12px;text-transform:uppercase;letter-spacing:1.6px;color:var(--gray);
-    font-weight:700;margin:0 0 14px;display:flex;align-items:center;gap:8px;
-  }
-  .eyebrow::before{content:"";width:14px;height:3px;border-radius:2px;background:var(--red);display:inline-block;}
 
   label{display:block;font-size:13px;color:var(--gray-2);margin:0 0 5px;font-weight:530;}
   input,select{
@@ -1634,8 +1611,6 @@ else poe();
   input:disabled{background:#F2F2EF;color:var(--muted);cursor:not-allowed;}
 
   .grid{display:grid;gap:14px;}
-  .add-grid{grid-template-columns:1.15fr repeat(4,minmax(105px,.85fr)) .55fr auto;align-items:end;}
-  .preco-grid{grid-template-columns:repeat(5,1fr);}
 
   /* ---------- Buttons ---------- */
   .btn{
@@ -1654,30 +1629,10 @@ else poe();
   .icon-btn{background:none;border:none;cursor:pointer;color:var(--muted);padding:4px 6px;border-radius:6px;font-size:13px;font-weight:600;}
   .icon-btn:hover{background:var(--line-2);}
   .icon-btn.del:hover{color:var(--red);background:var(--red-soft);}
-  .icon-btn.edit:hover{color:var(--gray);}
 
   /* ---------- Tabela de preços ---------- */
-  .preco-item{border:1px solid var(--line);border-radius:11px;padding:12px 13px;background:#FCFCFA;}
-  .preco-item .pi-top{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:9px;}
-  .preco-item .pi-unid{font-size:11px;text-transform:uppercase;letter-spacing:1px;color:#55585f;font-weight:700;background:var(--line-2);padding:2px 7px;border-radius:20px;white-space:nowrap;}
-  .preco-item input{font-weight:700;font-variant-numeric:tabular-nums;}
-  .density-setting{margin-top:12px;padding:12px 14px;border:1px solid var(--line);border-radius:11px;background:#FCFCFA;display:flex;align-items:flex-end;gap:16px;}
-  .density-setting .ds-field{width:210px;flex:0 0 auto;}
-  .density-setting input{font-weight:700;font-variant-numeric:tabular-nums;}
-  .density-setting .ds-note{font-size:13px;color:var(--muted);line-height:1.45;padding-bottom:8px;font-weight:530}
 
   /* ---------- Resultado da calculadora ---------- */
-  .calc-actions{display:flex;align-items:center;gap:14px;margin-top:10px;flex-wrap:wrap;}
-  .pilar-secoes{display:none;margin-top:12px;padding:12px 14px;border:1px solid var(--line);border-radius:11px;background:#FAFBFC;align-items:flex-end;gap:10px;flex-wrap:wrap;}
-  .pilar-secoes.on{display:flex;}
-  .pilar-secoes .ps-field{min-width:220px;flex:1;}
-  .pilar-secoes .ps-note{width:100%;font-size:12px;color:var(--muted);margin-top:-2px;font-weight:560}
-  .med-inp{width:88px;padding:5px 8px;font-size:14px;border-radius:7px;font-variant-numeric:tabular-nums;font-weight:505}
-  .med-inp.small{width:60px;}
-  .sec-fields{display:flex;align-items:center;gap:5px;white-space:nowrap;}
-  .calc-aviso{font-size:13px;color:var(--red);font-weight:600;opacity:0;transition:opacity .3s;}
-  .calc-aviso.show{opacity:1;}
-  .calc-aviso.ok{color:var(--gray-2);}
 
   /* ---------- Confirmação (substitui o confirm() do navegador) ---------- */
   .modal{position:fixed;inset:0;z-index:900;display:flex;align-items:center;justify-content:center;padding:22px;
@@ -1688,28 +1643,8 @@ else poe();
   .modal.on .modal-box{transform:none;}
   .modal-box .mb-txt{font-size:14px;color:var(--ink);line-height:1.5;margin-bottom:18px;}
   .modal-box .mb-acoes{display:flex;gap:9px;justify-content:flex-end;}
-  .calc-result{
-    margin-top:14px;padding:14px 18px;border-radius:11px;
-    background:#FBFAF7;border:1px solid var(--line);
-    display:flex;align-items:center;justify-content:space-between;gap:18px;flex-wrap:wrap;
-  }
-  .calc-result.on{background:var(--red-soft);border-color:#EBD3D1;}
-  .cr-formula{font-size:14px;color:var(--gray);font-variant-numeric:tabular-nums;line-height:1.6;font-weight:505}
-  .cr-formula b{color:var(--ink);font-weight:700;}
-  .cr-formula .cr-hint{color:var(--muted);font-style:italic;}
-  .cr-vals{display:flex;gap:22px;align-items:flex-end;flex-wrap:wrap;justify-content:flex-end;}
-  .cr-vals .cv{text-align:right;}
-  .cr-vals .cv .l{display:block;font-size:11px;text-transform:uppercase;letter-spacing:1.1px;color:var(--gray);font-weight:700;margin-bottom:2px;}
-  .cr-vals .cv .v{font-size:17px;font-weight:700;color:var(--ink);font-variant-numeric:tabular-nums;}
-  .cr-vals .cv.big .v{font-size:24px;color:var(--red);letter-spacing:-.4px;}
 
   /* ---------- KPIs ---------- */
-  .kpis{display:grid;grid-template-columns:repeat(5,1fr);gap:14px;margin-bottom:14px;}
-  .kpi{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);padding:16px 18px;}
-  .kpi .k-label{font-size:12px;text-transform:uppercase;letter-spacing:1.3px;color:var(--gray);font-weight:700;}
-  .kpi .k-val{font-size:26px;font-weight:700;margin:6px 0 1px;color:var(--ink);letter-spacing:-.5px;font-variant-numeric:tabular-nums;}
-  .kpi .k-sub{font-size:12px;color:var(--muted);font-weight:560}
-  .kpi.accent{background:var(--red);border-color:var(--red);}
   /* CONTRASTE NO CARTAO LARANJA. O rotulo e a linha de apoio eram rosa claro
      (#F6CFCD e #F2BAB7) sobre o #D53309: 3,42:1 e 2,90:1, abaixo do minimo de
      4,5:1 -- de longe, some. E nao ha tom de rosa que resolva: medindo os dois
@@ -1718,46 +1653,13 @@ else poe();
      hierarquia passa a ser de TAMANHO e PESO -- rotulo 10,5 px em caixa alta
      e negrito, valor 26 px, apoio 11 px normal --, que e o que ja distinguia
      os tres antes da cor entrar. */
-  .kpi.accent .k-label{color:#fff;}
-  .kpi.accent .k-val{color:#fff;}
-  .kpi.accent .k-sub{color:#fff;}
-  .kpi.weight{background:var(--gray);border-color:var(--gray);}
-  .kpi.weight .k-label{color:#D7D7D7;}
-  .kpi.weight .k-val{color:#fff;font-size:23px;}
   /* 4,45:1 sobre o cinza #474E5C, a um fio do minimo. #BFBFBF da 4,55:1. */
-  .kpi.weight .k-sub{color:#BFBFBF;}
 
   /* ---------- Abas de nota ---------- */
-  .notas-card{padding-bottom:14px;}
-  .notas-head{display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap;margin-bottom:11px;}
-  .notas-acoes{display:flex;gap:7px;flex-wrap:wrap;}
-  .notas-bar{display:flex;gap:8px;flex-wrap:wrap;}
-  .nota-tab{
-    display:flex;flex-direction:column;gap:2px;text-align:left;cursor:pointer;
-    padding:9px 14px;border:1px solid var(--line);border-radius:11px;background:#fff;
-    font-family:inherit;min-width:150px;transition:border-color .15s,background .15s;
-  }
-  .nota-tab:hover{border-color:var(--gray-2);}
-  .nota-tab.on{background:var(--ink);border-color:var(--ink);}
-  .nota-tab .nt-nome{font-size:14px;font-weight:700;color:var(--ink);}
-  .nota-tab .nt-sub{font-size:12px;color:var(--gray-2);font-variant-numeric:tabular-nums;font-weight:560}
-  .nota-tab.on .nt-nome{color:#fff;}
-  .nota-tab.on .nt-sub{color:#C9C9C9;}
-  .notas-nota{font-size:13px;color:var(--muted);margin-top:10px;line-height:1.45;font-weight:530}
-  .nota-impressa{display:none;}
 
   /* ---------- Resumo para manifesto ---------- */
-  .manifest-card{display:flex;align-items:center;justify-content:space-between;gap:22px;border-left:4px solid var(--red);}
-  .manifest-main{display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;}
-  .manifest-kg{font-size:30px;font-weight:800;color:var(--ink);letter-spacing:-.5px;font-variant-numeric:tabular-nums;}
-  .manifest-ton{font-size:16px;font-weight:700;color:var(--red);font-variant-numeric:tabular-nums;}
-  .manifest-meta{font-size:13px;color:var(--gray-2);margin-top:5px;line-height:1.45;font-weight:530}
-  .manifest-warn{color:#B45309;font-weight:600;}
 
   /* ---------- Tabelas ---------- */
-  .tbl-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;}
-  .tbl-head .hint{font-size:13px;color:var(--muted);font-weight:530}
-  .tbl-wrap{overflow-x:auto;}
   table{width:100%;border-collapse:collapse;}
   thead th{
     font-size:12px;text-transform:uppercase;letter-spacing:.8px;color:var(--gray);font-weight:700;
@@ -1765,43 +1667,13 @@ else poe();
   }
   tbody td{padding:10px;border-bottom:1px solid var(--line-2);font-size:14px;color:var(--ink);vertical-align:middle;font-weight:505}
   tbody tr:last-child td{border-bottom:none;}
-  tbody tr.editando{background:#FFFBEB;}
   td.num,th.num{text-align:right;}
   .pill{display:inline-block;font-size:12px;font-weight:600;padding:3px 9px;border-radius:20px;background:var(--line-2);color:var(--gray);white-space:nowrap;}
-  .pill.placa{background:#EAF1FB;color:#2D5D9E;}
-  .pill.contencao{background:#F2EEF8;color:#6A4FA0;}
   .pill.pilar{background:var(--red-soft);color:var(--red);}
   .pill.viga{background:#EAF6EE;color:#2C7A47;}
-  .pill.calice{background:#FFF1DF;color:#9A5A0A;}
-  .pill.laje{background:#E6F4F1;color:#0F7A66;}
-  .empty{text-align:center;color:var(--muted);padding:26px 10px;font-size:14px;font-weight:505}
-  .money{font-variant-numeric:tabular-nums;font-weight:600;}
-  .dim{font-variant-numeric:tabular-nums;color:var(--gray-2);font-size:14px;font-weight:505}
 
   /* ---------- Barra de total ---------- */
-  .totalbar{
-    display:flex;align-items:center;justify-content:space-between;gap:18px;
-    background:var(--gray);color:#fff;border-radius:var(--radius);padding:18px 24px;margin-top:2px;
-  }
-  .totalbar .breakdown{display:flex;gap:26px;flex-wrap:wrap;}
-  .totalbar .bd{font-size:12px;letter-spacing:.4px;font-weight:560}
-  .totalbar .bd .l{display:block;text-transform:uppercase;letter-spacing:1px;color:#C9C9C9;font-size:11px;font-weight:700;margin-bottom:2px;}
-  .totalbar .bd .v{font-size:15px;font-weight:600;font-variant-numeric:tabular-nums;}
-  .totalbar .grand{text-align:right;}
-  .totalbar .grand .l{font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:#E7BDBB;font-weight:700;}
-  .totalbar .grand .v{font-size:30px;font-weight:800;letter-spacing:-.5px;color:#fff;font-variant-numeric:tabular-nums;}
 
-  .save-status{font-size:12px;color:var(--rm-ok,#1f7a4d);font-weight:600;opacity:0;transition:opacity .4s;display:inline-flex;align-items:center;white-space:nowrap;}
-  .save-status.show{opacity:1;}
-  .fb-badge{display:inline-flex;align-items:center;gap:5px;font-size:12px;font-weight:600;
-    padding:3px 9px;border-radius:20px;white-space:nowrap;margin-left:10px;transition:all .3s;}
-  .fb-badge .fb-dot{width:7px;height:7px;border-radius:50%;flex-shrink:0;}
-  .fb-badge.conectado{color:#2C9E5F;background:rgba(44,158,95,.1);border:1px solid rgba(44,158,95,.25);}
-  .fb-badge.conectado .fb-dot{background:#2C9E5F;}
-  .fb-badge.sincronizando{color:#B45309;background:rgba(180,83,9,.1);border:1px solid rgba(180,83,9,.25);}
-  .fb-badge.sincronizando .fb-dot{background:#B45309;animation:pulse .8s infinite;}
-  .fb-badge.erro{color:var(--red);background:var(--red-soft);border:1px solid #F1C9C7;}
-  .fb-badge.erro .fb-dot{background:var(--red);}
   @keyframes pulse{0%,100%{opacity:1;}50%{opacity:.3;}}
 
   /* ---------- Login ---------- */
@@ -1873,7 +1745,6 @@ else poe();
     radial-gradient(50% 40% at 0% 100%,rgba(140,29,24,.15),transparent 55%);}
   .login-card{position:relative;width:100%;max-width:380px;background:var(--card);border-radius:16px;overflow:hidden;box-shadow:0 30px 80px rgba(0,0,0,.5);border-top:4px solid var(--rm-laranja);}
   .login-card .lc-head{padding:30px 30px 20px;text-align:center;border-bottom:1px solid var(--line);}
-  .login-card .lc-head .lc-icon{font-size:30px;margin-bottom:8px;}
   .login-card .lc-head .ttl{font-size:12px;letter-spacing:.18em;text-transform:uppercase;color:var(--red);font-weight:800;}
   .login-card .lc-head .sub{font-size:13px;color:var(--gray-2);margin-top:4px;font-weight:530}
   .login-card .lc-body{padding:24px 30px 30px;}
@@ -1894,44 +1765,17 @@ else poe();
     .wrap{max-width:none;padding:0;}
     .no-print{display:none !important;}
     .card{box-shadow:none;border:1px solid #DDD;break-inside:avoid;margin-bottom:10px;padding:12px 14px;}
-    .kpis{gap:8px;margin-bottom:10px;}
-    .kpi{box-shadow:none;padding:10px 12px;break-inside:avoid;}
-    .kpi .k-val{font-size:18px;}
-    .kpi.accent{background:var(--red) !important;-webkit-print-color-adjust:exact;print-color-adjust:exact;}
-    .kpi.weight{background:var(--gray) !important;-webkit-print-color-adjust:exact;print-color-adjust:exact;}
-    .manifest-card{break-inside:avoid;padding:10px 14px;}
-    .notas-card{padding:8px 14px;break-inside:avoid;}
-    .nota-impressa{display:block;font-size:12.5px;color:var(--gray);font-weight:505}
-    .nota-impressa .ni-l{display:block;font-size:10px;color:var(--gray-2);margin-top:1px;font-weight:600}
-    .nota-impressa b{font-size:15px;color:var(--ink);}
-    .manifest-kg{font-size:23px;}
     thead{display:table-header-group;}
     tr{break-inside:avoid;}
     .pill{-webkit-print-color-adjust:exact;print-color-adjust:exact;}
-    .totalbar{
-      background:var(--gray) !important;-webkit-print-color-adjust:exact;print-color-adjust:exact;
-      break-inside:avoid;padding:12px 16px;border-radius:8px;margin-top:6px;
-    }
-    .totalbar .grand .v{font-size:22px !important;}
     .version{display:block;text-align:center;font-size:11px;color:#6e6e6e;margin-top:8px;font-weight:600}
   }
-  @media (max-width:1100px) and (min-width:861px){
-    .add-grid{grid-template-columns:repeat(4,1fr);}
-    .kpis{grid-template-columns:repeat(3,1fr);}
-  }
   @media (max-width:860px){
-    .add-grid,.kpis,.preco-grid{grid-template-columns:1fr;}
     .topbar{height:auto;flex-wrap:wrap;padding:0;}
     .topbar-brand{width:100%;border-right:none;border-bottom:1px solid var(--line);}
     .topbar-nav{flex-wrap:wrap;height:auto;padding:4px;}
     .tb-btn{height:42px;}
     .topbar-right{border-left:none;padding:8px 14px 10px;}
-    .calc-result{flex-direction:column;align-items:stretch;}
-    .cr-vals{justify-content:space-between;}
-    .density-setting,.manifest-card{align-items:stretch;flex-direction:column;}
-    .density-setting .ds-field{width:100%;}
-    .pilar-secoes .ps-field{min-width:100%;}
-    .tbl-wrap{overflow-x:auto;}
   }
 
 /* ---- tela de entrada, padrao da casa ----
@@ -1984,12 +1828,10 @@ input,select,textarea,button,option,optgroup{font-weight:inherit}
 /* A Satoshi e mais larga que a fonte do sistema na mesma altura, e coluna de
    dinheiro com largura cravada em px passou a quebrar o valor em duas linhas.
    Valor, data e documento nao quebram. */
-td.r,th.r,td.val,.money,.brl,.valor,.num{white-space:nowrap}
+td.r,th.r,td.val,.brl,.valor,.num{white-space:nowrap}
 
 </style>
 <style>
-/* Tela nao vai para o papel: o cabecalho proprio do impresso, que repetia o timbrado padrao logo abaixo (duas reguas laranja empilhadas) saiam impressos. */
-@media print{.print-head{display:none!important}}
 </style>
 <style id="rmTemaRM">
 /* ===========================================================================
@@ -2903,7 +2745,6 @@ body:not(.com-doc) .docs-card,body:not(.com-doc) .ed-grid{display:none}
 .seg button.on{border-color:var(--red);background:var(--red-soft);color:var(--red-dark)}
 .imp-l{margin-top:8px;font-size:13px;color:var(--muted)}
 .imp-l b{color:var(--ink)}
-.imp-s{margin:6px 0 0;padding-left:18px;font-size:12px;color:var(--muted);max-height:220px;overflow:auto}
 .modal-box:has(.imp-l){max-width:560px}
 .modal-box:has(.imp-rev){max-width:760px;max-height:calc(100vh - 44px);overflow:auto}
 .imp-rev{display:flex;flex-direction:column;gap:10px;margin:8px 0 4px}
@@ -2960,7 +2801,7 @@ body:not(.com-doc) .docs-card,body:not(.com-doc) .ed-grid{display:none}
 .folha table.ft thead{display:table-header-group}
 .folha table.tot tr.grand td{border-top:1.5px solid #141414;border-bottom:0;font-size:calc(12px*var(--fe,1.15));font-weight:800;padding-top:2mm;color:#141414}
 .folha table.tot tr.subt td{border-top:1px solid #c8ccd2;font-weight:700;color:#141414}
-.folha table.tot tr.depois-grand td,.folha table.tot tr.sep~tr.grand td{border-top:1.5px solid #141414}
+.folha table.tot tr.sep~tr.grand td{border-top:1.5px solid #141414}
 .folha table.tot tr.sep td{font-size:calc(7.5px*var(--fe,1.15));font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#6E747C;background:#fafbfc;padding-top:2.5mm}
 .folha .f-partes{display:grid;grid-template-columns:1fr 1fr;gap:4mm;margin:1mm 0 4mm}
 .folha .f-parte{border:1px solid #eceef1;border-radius:3px;padding:3mm;font-size:calc(9px*var(--fe,1.15));color:#3c424a;min-width:0;overflow-wrap:anywhere}
@@ -3436,7 +3277,6 @@ const FONTES = { rm: { rot: 'Satoshi', ex: 'a do sistema' }, arial: { rot: 'Aria
 const FORMAS_MOEDA = ['Dinheiro', 'Depósito'];
 const BENS_PADRAO = ['Terreno', 'Imóvel', 'Carro', 'Moto', 'Caminhão'];
 function bensLista() { const b = Array.isArray(config.bens) ? config.bens.filter(x => x && String(x).trim()) : null; return b && b.length ? b : BENS_PADRAO.slice(); }
-function formasPag() { return FORMAS_MOEDA.concat(bensLista()); }
 function ehBem(f) { return !!f && FORMAS_MOEDA.indexOf(f) < 0; }
 function formaTxt(x) { return x && x.forma ? x.forma + (ehBem(x.forma) && String(x.bem || '').trim() ? ' — ' + x.bem.trim() : '') : ''; }
 /* CHAVE NA MÃO: os mesmos serviços do Chave na mão do Orçamento RM (lá eles
@@ -4097,7 +3937,6 @@ async function docxBytes(bl) {
    A TELA
 ═══════════════════════════════════════════════════════════ */
 function atual() { return atualId && docs[atualId] ? docs[atualId] : null; }
-function getP(o, p) { return p.split('.').reduce((a, k) => a == null ? a : a[k], o); }
 function setP(o, p, v) { const ks = p.split('.'), u = ks.pop(); const alvo = ks.reduce((a, k) => a[k], o); alvo[u] = v; }
 const inp = (p, val, o) => { o = o || {}; return '<input data-p="' + p + '"' + (o.tipo ? ' data-t="' + o.tipo + '"' : '') + ' value="' + esc(val) + '"' + (o.ph ? ' placeholder="' + esc(o.ph) + '"' : '') + (o.lista ? ' list="' + o.lista + '"' : '') + (o.mode ? ' inputmode="' + o.mode + '"' : '') + (o.type ? ' type="' + o.type + '"' : '') + (o.cls ? ' class="' + o.cls + '"' : '') + (o.rot ? ' aria-label="' + esc(o.rot) + '"' : '') + ' autocomplete="off">'; };
 const campo = (rot, html, cls) => '<div class="fld' + (cls ? ' ' + cls : '') + '"><label>' + esc(rot) + '</label>' + html + '</div>';
@@ -4804,7 +4643,6 @@ function authMsg(code) {
   const m = { 'auth/invalid-email': 'E-mail inválido.', 'auth/user-not-found': 'Usuário não encontrado.', 'auth/wrong-password': 'Senha incorreta.', 'auth/invalid-credential': 'E-mail ou senha incorretos.', 'auth/too-many-requests': 'Muitas tentativas. Aguarde um momento.', 'auth/network-request-failed': 'Sem conexão.' };
   return m[code] || 'Não foi possível entrar. Tente novamente.';
 }
-function doLogout() { if (fbAuth) fbAuth.signOut(); const p = $('li_pass'); if (p) p.value = ''; }
 
 /* ═══════════════════════════════════════════════════════════
    BOOT
