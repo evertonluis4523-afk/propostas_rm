@@ -9307,7 +9307,8 @@ teste('cores-depois-de-usar', async (b, t) => {
 /* docx mínimo (zip sem compressão) com parágrafos e tabelas -- contratos FICTÍCIOS */
 function docxContratoFicticio(blocos) {
   const W = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main', x = t => String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;');
-  const par = t => '<w:p><w:r><w:t xml:space="preserve">' + x(t) + '</w:t></w:r></w:p>';
+  /* '• texto' vira item de lista do Word (numPr), como os marcadores reais */
+  const par = t => /^• /.test(t) ? '<w:p><w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr></w:pPr><w:r><w:t xml:space="preserve">' + x(t.slice(2)) + '</w:t></w:r></w:p>' : '<w:p><w:r><w:t xml:space="preserve">' + x(t) + '</w:t></w:r></w:p>';
   const corpo = blocos.map(bl => Array.isArray(bl) ? '<w:tbl>' + bl.map(r => '<w:tr>' + r.map(c => '<w:tc>' + par(c) + '</w:tc>').join('') + '</w:tr>').join('') + '</w:tbl>' : par(bl)).join('');
   const arqs = { '[Content_Types].xml': '<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/></Types>',
     'word/document.xml': '<?xml version="1.0" encoding="UTF-8"?><w:document xmlns:w="' + W + '"><w:body>' + corpo + '</w:body></w:document>' };
@@ -12168,9 +12169,65 @@ teste('propostas-importa-word', async (b, t) => {
   t.ok('contrato: contratante com CNPJ, endereço, CEP e representante', c.cli && c.cli.nome === 'CLIENTE FICTÍCIO LTDA' && c.cli.doc === '00.000.000/0001-00' && c.cli.endereco === 'Rua Exemplo, nº100' && c.cli.cidade === 'Cidade Exemplo/RS' && c.cli.cep === '00000-000' && c.cli.rep === 'Pessoa Exemplo' && c.cli.repDoc === 'CPF 000.000.000-00', J);
   t.ok('contrato: obra, objeto, peças e esquadrias', c.end === 'Rua Exemplo, nº100' && c.cidade === 'Cidade Exemplo/RS' && c.c && /pavilhão de exemplo/.test(c.c.obj) && c.pre[0] === 'Pavilhão de exemplo:Pilar de concreto armado 25x35x7,40mts|8|un' && c.comp.join() === 'Esquadrias=nao', J);
   t.ok('contrato: prazo, valor, entrada e parcelas, data', c.c && c.c.prazo === 150 && c.val.join() === 'Valor do contrato=100000' && c.c.pag.entrada === 40000 && c.c.pag.entradaData === '2026-09-10' && c.c.pag.n === 3 && c.c.pag.dia === 10 && c.c.pag.inicio === '2026-10' && c.c.data === '2026-09-01', J);
-  t.ok('contrato: abre na aba Contrato, com as cláusulas do padrão', c.contrato && c.aba === 'contrato' && /cláusulas fixas são as do padrão/.test(c.modal) && /Das cláusulas gerais/.test(c.folha), J);
+  t.ok('contrato: abre na aba Contrato; a cláusula que veio no Word fica como está', c.contrato && c.aba === 'contrato' && /como estão no contrato/.test(c.modal) && /Das cláusulas gerais/.test(c.folha) && /Texto fixo/.test(c.folha), J);
   t.ok('arquivo que não é Word: recusa com motivo', /não é um arquivo \.docx/.test(ruim), J);
   t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
+teste('propostas-importa-contrato-como-esta', async (b, t) => {
+  // "Tentei importar um contrato e ele não respeitou o que já estava escrito e
+  // não acusou o erro da falta de valor": as cláusulas eram trocadas pelas do
+  // padrão e as parcelas ("R$ ... após trinta dias da assinatura") não eram
+  // lidas -- saíam 6 parcelas inventadas que sempre fechavam com o preço.
+  // Agora o texto fica como está, as parcelas vêm com as palavras do
+  // contrato e a falta de uma parcela aparece. Contrato FICTÍCIO.
+  if (!fs.existsSync(path.join(RAIZ, 'propostas_rm'))) return;
+  const con = docxContratoFicticio(['CONTRATO DE FORNECIMENTO E INSTALAÇÃO DE PAVILHÃO INDUSTRIAL',
+    'CONTRATADA: NUNES E KUHN ESTRUTURAS METALICAS LTDA (RM ESTRUTURAS), inscrita no CNPJ sob n° 28.654.965/0001-17.',
+    'CONTRATANTE: COMERCIO FICTICIO EXEMPLO LTDA, inscrita no CNPJ 00.000.000/0001-00 sediada na Rua Exemplo, n° 1 – Bairro: Centro – Cidade Modelo/ CEP 00.000-000neste ato representado pelo senhor Pessoa Exemplo, portador do CPG n°000.000.000-00.',
+    'Pelo presente instrumento, as partes têm entre si o presente contrato de um pavilhão a ser realizado na Rua Exemplo, n° 1 – Bairro: Centro – Cidade Modelo/RS sob o regime de empreitada, texto próprio do preâmbulo.',
+    '- DO OBJETO', '1.1. O presente instrumento tem por objeto um pavilhão fictício de exemplo.', '1.2. A estrutura encomendada tem as seguintes especificações:',
+    'ESTRUTURA PRÉ-MOLDADA', 'A seguir relacionamos suas dimensões e quantidades:', 'Pilar de concreto armado 40x40x10,00mts ......................................10un.',
+    'PORTÃO', 'Quatro portões cortina 4,00x5,00m inclusos separadamente no orçamento.', 'Um portão cortina 2,00x3,00m incluso separadamente no orçamento.',
+    'ESCADA METÁLICA E GUARDA CORPO', 'Uma escada metálica com corrimão fornecida como cortesia sem custo adicional.',
+    'OBSERVAÇÕES:', '• Observação própria deste contrato sobre a ART.',
+    '1.3. DAS OBRIGAÇÕES DA CONTRATADA', '1.3.1. Obrigação própria da contratada neste contrato.', '1.3.2. Dentre outras, são de responsabilidade da CONTRATADA:', '• Marcação própria da obra;',
+    '1.4. DAS OBRIGAÇÕES DO CONTRATANTE', 'a) Obrigação própria do contratante;',
+    '2 - DO PRAZO', '2.1. O prazo é de até 200 dias.', '2.2. Multa própria de 3% (três por cento) sobre o valor da obra.',
+    '3 - DO PREÇO E DO PAGAMENTO', '3.1. O CONTRATANTE pagará à CONTRATADA o preço certo e ajustado de R$1.000.000,00 (um milhão de reais).',
+    '3.2. CONDIÇÕES DE PAGAMENTO:', ' O montante do preço ajustado deverá ser adimplido da seguinte forma:',
+    ' Entrada de 30% no valor de R$300.000,00 (trezentos mil reais) na assinatura do contrato.',
+    'R$200.000,00 (duzentos mil reais) após trinta dias da assinatura do contrato.',
+    'R$200.000,00 (duzentos mil reais) na entrega da obra mediante termo de recebimento.',
+    'R$100.000,00 (cem mil reais) Reserva técnica, paga 60 dias após o recebimento.',
+    '3.2.1. Cláusula própria de pagamento deste contrato.', '3.3. FATURAMENTO', 'Faturamento próprio deste contrato.',
+    '4 - DOS ENCARGOS', '4.1. Encargo próprio deste contrato.', '5 - DA SEGURANÇA', '5.1. Segurança própria deste contrato.',
+    '6 - DAS CLÁUSULAS GERAIS', '6.1. Cláusula geral própria deste contrato.', 'Estrela, 8 de fevereiro de 2026.',
+    '__________________________', 'CONTRATANTE: COMERCIO FICTICIO EXEMPLO LTDA CNPJ 00.000.000/0001-00']);
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'propostas_rm' });
+  await semLogin(pg);
+  await pg.evaluate(async () => { await iniciarApp(); });
+  await pg.setInputFiles('#arqWord', { name: 'Contrato fictício.docx', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', buffer: con });
+  await pg.waitForTimeout(600);
+  const r = await pg.evaluate(() => { const d = docs[atualId], c = d.contrato, T = c.textos;
+    return { modal: document.getElementById('modalTxt').textContent, aviso: (document.querySelector('#modalTxt .imp-av') || {}).textContent || '',
+      T: { pre: T.preambulo, obs: T.observacoes, oc: T.obrigContratada, ot: T.obrigContratante, prazo: T.prazo, px: T.prazoExtra, pag: T.pagamento, enc: T.encargos, seg: T.seguranca, ger: T.gerais },
+      modo: c.pag.modo, parc: parcelasContrato(d).map(p => p.rot + '|' + p.quando + '|' + p.valor), avisos: avisos(d), comp: d.comp.map(x => x.item + '=' + x.sit),
+      folha: document.getElementById('folha').textContent.replace(/\s+/g, ' '), cli: d.cliente, obra: d.obra }; }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r).slice(0, 2500) + ' ' + erros.join(' | ');
+  const T = r.T || {};
+  t.ok('as cláusulas ficam como estão no contrato (obrigações, prazo, pagamento, encargos, segurança, gerais, observações, preâmbulo)', !r.erro && /texto próprio do preâmbulo/.test(T.pre)
+    && T.obs === '- Observação própria deste contrato sobre a ART.' && T.oc === '1.3.1. Obrigação própria da contratada neste contrato.\n1.3.2. Dentre outras, são de responsabilidade da CONTRATADA:\n- Marcação própria da obra;'
+    && T.ot === 'a) Obrigação própria do contratante;' && /200 dias/.test(T.prazo) && T.px === '2.2. Multa própria de 3% (três por cento) sobre o valor da obra.'
+    && T.pag === '3.2.1. Cláusula própria de pagamento deste contrato.\n3.3. FATURAMENTO\nFaturamento próprio deste contrato.' && T.enc === '4.1. Encargo próprio deste contrato.'
+    && T.seg === '5.1. Segurança própria deste contrato.' && T.ger === '6.1. Cláusula geral própria deste contrato.', J);
+  t.ok('as parcelas do contrato, com as palavras dele (e não 6 parcelas inventadas)', !r.erro && r.modo === 'manual' && r.parc.join(',') === ['Entrada (30%)|na assinatura do contrato|300000', '1ª parcela|após trinta dias da assinatura do contrato|200000',
+    '2ª parcela|na entrega da obra mediante termo de recebimento|200000', 'Reserva técnica|paga 60 dias após o recebimento|100000'].join(','), J);
+  t.ok('falta de parcela: o aviso aparece já na importação e na ficha', !r.erro && /faltam R\$\s200\.000,00/.test(r.aviso) && r.avisos.some(x => /faltam R\$\s200\.000,00/.test(x)) && /como estão no contrato/.test(r.modal), J);
+  t.ok('itens complementares: duas linhas de portão viram dois itens; a escada de cortesia fica como cortesia', !r.erro && r.comp.join(',') === 'Quatro portões cortina 4,00x5,00m=aparte,Portão cortina 2,00x3,00m=aparte,Escada metálica com corrimão=cortesia', J);
+  t.ok('endereço com travessões, sem UF antes do CEP e "CPG" no lugar de CPF: contratante e obra lidos do jeito que estão escritos', !r.erro && r.cli.endereco === 'Rua Exemplo, n° 1 – Bairro: Centro' && r.cli.cidade === 'Cidade Modelo' && r.cli.cep === '00000-000' && r.cli.rep === 'Pessoa Exemplo' && r.cli.repDoc === 'CPF 000.000.000-00' && r.obra.endereco === 'Rua Exemplo, n° 1 – Bairro: Centro' && r.obra.cidade === 'Cidade Modelo/RS', J);
+  t.ok('a folha nova sai com o texto do contrato importado', !r.erro && /Encargo próprio deste contrato/.test(r.folha) && /Cláusula geral própria/.test(r.folha) && /após trinta dias da assinatura/.test(r.folha) && !erros.length, J);
   await ctx.close();
 });
 
