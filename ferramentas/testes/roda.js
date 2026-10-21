@@ -789,6 +789,127 @@ teste('nuvem-rede', async (b, t) => {
   }
 });
 
+teste('orcamento-banco-fornecedores', async (b, t) => {
+  // o banco de dados confuso: fornecedor novo (JR) cadastrado não aparecia em
+  // Vergalhões e telas; cada área tratava fornecedor de um jeito ("Editando:",
+  // "Preços de:", colunas). Agora: cadastro único de fornecedores (marca onde
+  // ele vende e ele vira coluna), um fornecedor por coluna em todas as áreas,
+  // menu ⋯ no título (reajustar, desfazer, referência, tirar), menu lateral.
+  if (!fs.existsSync(path.join(RAIZ, 'orcamento-rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'orcamento-rm' });
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    const l = document.getElementById('loginScreen'); if (l) l.style.setProperty('display', 'none', 'important');
+    if (typeof renderFornCad !== 'function') return { semRecurso: true };
+    window.confirm = () => true; window.alert = () => {};
+    window.askText = (msg, def, cb) => cb(window.__resp);
+    const ref = cpRefNome();
+    S.fornecedores.push({ id: 'fa', nome: 'AÇO EXEMPLO', precos: {} }, { id: 'fb', nome: 'FERRO MODELO', precos: {}, catPrecos: { 'cat_vt~i1': 30, 'cat_vt~i2': 45 } });
+    S.categorias.push({ id: 'cat_vt', nome: 'VERGALHÕES E TELAS', fornBase: 'AÇO EXEMPLO', items: [
+      { id: 'i1', grupo: 'VERGALHÃO CA50', tipo: '8,0 MM RETO 12 M', esp: '8,00', unidade: 'barra', comp: 12000, valor: 31 },
+      { id: 'i2', grupo: 'VERGALHÃO CA50', tipo: '10,0 MM RETO 12 M', esp: '10,00', unidade: 'barra', comp: 12000, valor: 44 },
+      { id: 'i3', grupo: 'TELA SOLDADA', tipo: 'Q92 2,45 X 6,00 M', esp: '4,20', unidade: 'peça', comp: 6000, valor: 140 }] });
+    openDB('fornecedores'); await esp(80);
+    const o = { velhos: ['supEdit', 'telhaForn', 'chapasForn', 'reajForn', 'reajTelhas', 'reajChapas'].filter(id => document.getElementById(id)), faixas: document.getElementById('dbNav').closest('.modal').querySelectorAll('.reajuste-bar').length };
+    o.nav = [...document.querySelectorAll('#dbNav .db-g')].map(x => x.textContent);
+    o.navItens = [...document.querySelectorAll('#dbNav .tab')].map(x => x.dataset.tab);
+    /* 1) cadastro: JR em Telhas e em Vergalhões e telas */
+    [...document.querySelectorAll('#fornCad button')].find(x => /Novo fornecedor/.test(x.textContent)).click(); await esp(50);
+    document.getElementById('fd_nome').value = 'JR';
+    document.querySelectorAll('#fornDlg [data-area]').forEach(x => { x.checked = x.dataset.area === 'telhas' || x.dataset.area === 'cat:cat_vt'; });
+    [...document.querySelectorAll('#fornDlg button')].find(x => /Cadastrar/.test(x.textContent)).click(); await esp(80);
+    const ths = id => [...document.querySelectorAll('[data-panel="' + id + '"] thead th')].map(x => x.textContent.replace(/\s+/g, ' ').trim());
+    o.cad = { aba: activeTab, telhas: [...document.querySelectorAll('#dbTelhaBody thead')][0] ? [...document.querySelectorAll('#dbTelhaBody thead')][0].textContent.includes('JR') : false, cat: ths('cat:cat_vt').some(x => /^JR/.test(x)), cartao: !!document.querySelector('#fornCad .db-fc[data-fid]') && /JR/.test(document.getElementById('fornCad').textContent) };
+    /* 2) preço do JR na coluna dele; o menor fica em verde; "atualizado" */
+    showTab('cat:cat_vt'); await esp(50);
+    const cols = catFornCols(catById('cat_vt')), iJR = cols.findIndex(n => n === 'JR');
+    const linha = () => document.querySelector('#catbody_cat_vt tr[data-item="i1"]');
+    const celJR = () => linha().querySelectorAll('td.r')[iJR + 1];
+    const inpJR = celJR().querySelector('input'); inpJR.value = '28,50'; inpJR.dispatchEvent(new Event('change')); await esp(50);
+    o.preco = { jr: catItemPrecoDe(catById('cat_vt'), catItemById(catById('cat_vt'), 'i1'), 'JR'), verde: celJR().classList.contains('cat-menor'), atual: ths('cat:cat_vt').some(x => /^JR.*atualizado/.test(x)) };
+    /* 3) grupos como seção, filtro por grupo, busca */
+    o.grupos = document.querySelectorAll('#catbody_cat_vt tr.db-grp').length;
+    document.querySelector('[data-cgrp="cat_vt"][data-g="TELA SOLDADA"]').click(); await esp(50);
+    o.filtro = document.querySelectorAll('#catbody_cat_vt tr[data-item]').length;
+    document.querySelector('[data-cgrp="cat_vt"][data-g=""]').click(); await esp(50);
+    /* 4) menu ⋯ do fornecedor: reajustar e desfazer; usar como referência */
+    const fbt = nome => [...document.querySelectorAll('[data-panel="cat:cat_vt"] .db-fbt')].find(x => x.textContent.includes(nome));
+    const menu = async (nome, rx) => { fbt(nome).click(); await esp(30); const bt = [...document.querySelectorAll('#dbPop button')].find(x => rx.test(x.textContent)); if (bt) bt.click(); await esp(60); return !!bt; };
+    window.__resp = '10'; await menu('FERRO MODELO', /Reajustar/);
+    const precoDe = n => catItemPrecoDe(catById('cat_vt'), catItemById(catById('cat_vt'), 'i1'), n);
+    o.reaj = { depois: precoDe('FERRO MODELO') };
+    await menu('FERRO MODELO', /Desfazer/); o.reaj.desfez = precoDe('FERRO MODELO');
+    const antes = {}; ['AÇO EXEMPLO', 'FERRO MODELO', 'JR'].forEach(n => { antes[n] = ['i1', 'i2', 'i3'].map(i => catItemPrecoDe(catById('cat_vt'), catItemById(catById('cat_vt'), i), n)); });
+    await menu('FERRO MODELO', /referência/);
+    const depois = {}; ['AÇO EXEMPLO', 'FERRO MODELO', 'JR'].forEach(n => { depois[n] = ['i1', 'i2', 'i3'].map(i => catItemPrecoDe(catById('cat_vt'), catItemById(catById('cat_vt'), i), n)); });
+    o.ref = { base: catFornBase(catById('cat_vt')), iguais: JSON.stringify(antes) === JSON.stringify(depois), valorItem: catItemById(catById('cat_vt'), 'i1').valor, primeira: catFornCols(catById('cat_vt'))[0], marca: ths('cat:cat_vt').some(x => /^FERRO MODELO.*referência/.test(x)) };
+    /* 5) tirar o JR da categoria pelo menu */
+    await menu('JR', /Tirar/);
+    o.tirou = !catFornCols(catById('cat_vt')).includes('JR') && precoDe('JR') == null;
+    /* 6) "＋ Fornecedor" em outra categoria: escolher da lista */
+    showTab('cat:cat_lam'); await esp(40);
+    [...document.querySelectorAll('[data-panel="cat:cat_lam"] .db-bar button')].find(x => /Fornecedor/.test(x.textContent)).click(); await esp(30);
+    o.escolher = [...document.querySelectorAll('#dbPop button')].map(x => x.textContent);
+    [...document.querySelectorAll('#dbPop button')].find(x => x.textContent === 'JR').click(); await esp(60);
+    o.lam = catFornCols(catById('cat_lam')).includes('JR') && ths('cat:cat_lam').some(x => /^JR/.test(x));
+    /* 7) item: mudar de grupo pelo ⋯; novo item no fim; ⚙ categoria */
+    showTab('cat:cat_vt'); await esp(30);
+    window.__resp = 'TELA NERVURADA'; document.querySelector('[data-cimenu="cat_vt"][data-item="i3"]').click(); await esp(30);
+    [...document.querySelectorAll('#dbPop button')].find(x => /grupo/.test(x.textContent)).click(); await esp(60);
+    o.grupoNovo = catItemById(catById('cat_vt'), 'i3').grupo;
+    catNovoItem('cat_vt'); await esp(30);
+    o.form = !document.getElementById('catform_cat_vt').hidden;
+    document.getElementById('ni_cat_vt_grupo').value = 'VERGALHÃO CA50'; document.getElementById('ni_cat_vt_tipo').value = '12,5 MM RETO 12 M'; document.getElementById('ni_cat_vt_valor').value = '58,30';
+    addCatItem('cat_vt'); await esp(60);
+    const novo = catById('cat_vt').items.find(x => x.tipo === '12,5 MM RETO 12 M');
+    o.novo = novo ? catItemPrecoDe(catById('cat_vt'), novo, 'FERRO MODELO') : null;
+    [...document.querySelectorAll('[data-panel="cat:cat_vt"] .db-h button')].find(x => /Categoria/.test(x.textContent)).click(); await esp(30);
+    const ac = document.querySelector('#dbPop input'); ac.value = '10'; ac.dispatchEvent(new Event('change')); await esp(50);
+    o.acrescimo = catById('cat_vt').acrescimoPct;
+    /* 8) Telhas, Chapas e preço por kg: colunas */
+    const t0 = S.telhas[0];
+    showTab('telhas'); await esp(30);
+    const thT = [...document.querySelectorAll('#dbTelhaBody thead')][0], iT = fornCols('telhas').indexOf('JR');
+    const inpT = document.querySelectorAll('#dbTelhaBody tbody tr')[0].querySelectorAll('td.r input')[iT]; inpT.value = '39,90'; inpT.dispatchEvent(new Event('change')); await esp(50);
+    o.telha = { jr: cpForn('JR').telhas && cpForn('JR').telhas[t0.id], ref: telhaPrecoDe(t0, ref) > 0 };
+    showTab('chapas'); await esp(30);
+    document.querySelector('[data-panel="chapas"] .db-bar .btn-sm.red').click(); await esp(30);
+    [...document.querySelectorAll('#dbPop button')].find(x => x.textContent === 'JR').click(); await esp(60);
+    const iC = fornCols('chapas').indexOf('JR'), m0 = S.materiaisKg[0];
+    const inpC = document.querySelectorAll('#chapasBody tr')[0].querySelectorAll('td.r input')[iC]; inpC.value = '9,10'; inpC.dispatchEvent(new Event('change')); await esp(50);
+    o.chapa = { jr: matPrecoDe(m0, 'JR'), col: iC > 0 };
+    showTab('forn'); await esp(30);
+    document.querySelector('[data-panel="forn"] .db-bar .btn-sm.red').click(); await esp(30);
+    [...document.querySelectorAll('#dbPop button')].find(x => x.textContent === 'JR').click(); await esp(60);
+    const iK = fornCols('kg').indexOf('JR'), e0 = S.espessuras[0];
+    const inpK = document.querySelectorAll('#fornBody tr')[0].querySelectorAll('td.r input')[iK]; inpK.value = '7,25'; inpK.dispatchEvent(new Event('change')); await esp(50);
+    o.kg = { jr: cpForn('JR').precos[e0], col: iK > 0 };
+    /* 9) excluir o JR: sai de todas as colunas */
+    showTab('fornecedores'); await esp(30);
+    const card = [...document.querySelectorAll('#fornCad .db-fc')].find(x => x.querySelector('h4').textContent.startsWith('JR'));
+    o.chips = [...card.querySelectorAll('.db-chip')].map(x => x.textContent);
+    [...card.querySelectorAll('button')].find(x => x.textContent === 'Excluir').click(); await esp(60);
+    o.excluiu = !cpForn('JR') && !catFornCols(catById('cat_lam')).includes('JR') && !fornCols('telhas').includes('JR');
+    /* a referência não tem Excluir */
+    o.refSemExcluir = ![...document.querySelectorAll('#fornCad .db-fc')].find(x => x.querySelector('h4').textContent.startsWith(ref)).textContent.includes('Excluir');
+    return o;
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r).slice(0, 2500) + ' ' + erros.join(' | ');
+  if (r.semRecurso) { t.ok('cadastro único de fornecedores', false, 'sem renderFornCad'); await ctx.close(); return; }
+  t.ok('menu lateral em grupos (Materiais, Serviços, Cadastros, Ferramentas); sem "Editando:", "Preços de:" e faixas de reajuste', !r.erro && r.nav.join('|') === 'Materiais|Serviços|Cadastros|Ferramentas' && !r.velhos.length && !r.faixas && r.navItens.includes('fornecedores') && !r.navItens.includes('ajustes') && !r.navItens.includes('empresa'), J);
+  t.ok('novo fornecedor (JR) marcado em Telhas e Vergalhões e telas: vira coluna nas duas e tem o cartão', !r.erro && r.cad.telhas && r.cad.cat && r.cad.cartao && r.cad.aba === 'telhas', J);
+  t.ok('preço digitado na coluna do JR fica dele, o menor fica em verde, e a coluna diz quando mudou', !r.erro && r.preco.jr === 28.5 && r.preco.verde && r.preco.atual, J);
+  t.ok('grupos como seção e filtro por grupo', !r.erro && r.grupos === 2 && r.filtro === 1, J);
+  t.ok('menu ⋯ do fornecedor: reajustar 10% e desfazer', !r.erro && r.reaj.depois === 33 && r.reaj.desfez === 30, J);
+  t.ok('usar como referência troca de verdade: cada fornecedor fica com os seus preços', !r.erro && r.ref.base === 'FERRO MODELO' && r.ref.iguais && r.ref.valorItem === 30 && r.ref.primeira === 'FERRO MODELO' && r.ref.marca, J);
+  t.ok('tirar o fornecedor da categoria pelo menu', !r.erro && r.tirou, J);
+  t.ok('"＋ Fornecedor" na categoria: escolhe da lista ou cadastra novo, e a coluna aparece', !r.erro && r.escolher.includes('JR') && r.escolher.some(x => /Cadastrar fornecedor novo/.test(x)) && r.lam, J);
+  t.ok('item: mudar de grupo pelo ⋯, novo item no fim da tabela (preço da referência), ⚙ Categoria com o acréscimo', !r.erro && r.grupoNovo === 'TELA NERVURADA' && r.form && r.novo === 58.3 && r.acrescimo === 10, J);
+  t.ok('Telhas, Chapas e preço por kg também em colunas: o preço do JR fica dele', !r.erro && r.telha.jr === 39.9 && r.telha.ref && r.chapa.jr === 9.1 && r.chapa.col && r.kg.jr === 7.25 && r.kg.col, J);
+  t.ok('cartão mostra onde ele vende; excluir tira de todas as colunas; a referência não se exclui', !r.erro && r.chips.length >= 3 && r.excluiu && r.refSemExcluir && !erros.length, J);
+  await ctx.close();
+});
+
 teste('orcamento-servicos-sem-fornecedor', async (b, t) => {
   // Serviços são terceiros, sem vínculo com as empresas do banco: a linha e
   // a seção não mostram "fornecedor", e o valor é o do cadastro do serviço
