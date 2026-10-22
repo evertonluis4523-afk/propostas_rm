@@ -12687,6 +12687,80 @@ teste('propostas-imagens-anexadas-sem-marca-da-pagina', async (b, t) => {
   await ctx.close();
 });
 
+teste('propostas-imagem-recorte', async (b, t) => {
+  // aba Imagens: recortar a imagem, como a arquiteta fazia no Word -- tirar
+  // as bordas para ela sair maior no papel. "Tirar bordas brancas" acha
+  // sozinho; cantos arrastam. O recorte vale no papel, PDF e Word; a imagem
+  // guardada continua inteira; as setas de medida ficam no mesmo ponto.
+  if (!fs.existsSync(path.join(RAIZ, 'propostas_rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'propostas_rm' });
+  await semLogin(pg);
+  const r = await pg.evaluate(async (FICT) => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    await iniciarApp();
+    const d = eval(FICT); docs[d.id] = d; abrir(d.id); await esp(50);
+    document.getElementById('abaImagens').click(); await esp(80);
+    /* uma imagem 1600 x 1000 com borda branca: o desenho (cinza) de 400 a 1200 e de 250 a 750 */
+    const c0 = document.createElement('canvas'); c0.width = 1600; c0.height = 1000; const g0 = c0.getContext('2d');
+    g0.fillStyle = '#ffffff'; g0.fillRect(0, 0, 1600, 1000); g0.fillStyle = '#7d848c'; g0.fillRect(400, 250, 800, 500);
+    const f = new File([await new Promise(ok => c0.toBlob(ok, 'image/png'))], 'Fachada.png', { type: 'image/png' });
+    const dt = new DataTransfer(); dt.items.add(f); const inp = document.getElementById('imArq'); inp.files = dt.files; inp.dispatchEvent(new Event('change', { bubbles: true }));
+    for (let k = 0; k < 60 && !d.imgs.itens.length; k++) await esp(100); await esp(200);
+    const x = d.imgs.itens[0];
+    const o = { botao: !!document.querySelector('#ficha [data-acao="imgCorta"]') };
+    if (!o.botao) return o;
+    /* uma seta de medida antes do recorte, no meio do desenho (x = 800 px) */
+    x.cotas = [{ x1: 0.5, y1: 0.3, x2: 0.5, y2: 0.7, txt: '7,10m' }];
+    const larg0 = (document.querySelector('#folha .f-fig img') || {}).getBoundingClientRect ? document.querySelector('#folha .f-fig img').getBoundingClientRect().height : 0;
+    document.querySelector('#ficha [data-acao="imgCorta"]').click(); await esp(300);
+    o.janela = document.getElementById('cortaTela').classList.contains('on');
+    document.getElementById('cortaAuto').click(); await esp(30);
+    o.auto = Object.values(CORTE.r).map(v => +v.toFixed(3));
+    /* arrasta o canto de cima à esquerda um pouco para dentro */
+    const cv = document.getElementById('cortaCv');
+    const ev = (tipo, fx, fy) => { const rc = cv.getBoundingClientRect(); cv.dispatchEvent(new PointerEvent(tipo, { bubbles: true, pointerId: 1, clientX: rc.left + rc.width * fx, clientY: rc.top + rc.height * fy })); };
+    const r0 = Object.assign({}, CORTE.r);
+    ev('pointerdown', r0.x, r0.y); ev('pointermove', r0.x + 0.02, r0.y + 0.02); ev('pointerup', r0.x + 0.02, r0.y + 0.02); await esp(20);
+    o.canto = [CORTE.r.x - r0.x, CORTE.r.y - r0.y, (CORTE.r.x + CORTE.r.w) - (r0.x + r0.w)].map(v => +v.toFixed(3)).join();
+    document.getElementById('cortaAuto').click(); await esp(20);
+    document.getElementById('cortaSim').click();
+    for (let k = 0; k < 40 && !/✓/.test((document.querySelector('#ficha [data-acao="imgCorta"]') || {}).textContent || ''); k++) await esp(100);
+    await esp(300);
+    o.gravou = x.recorte ? Object.values(x.recorte).map(v => +v.toFixed(3)) : [];
+    o.tam = [x.w, x.h];
+    o.seta = x.cotas[0] ? [x.cotas[0].x1, x.cotas[0].y1, x.cotas[0].y2] : [];
+    o.setaEsperada = x.recorte ? [(0.5 - x.recorte.x) / x.recorte.w, (0.3 - x.recorte.y) / x.recorte.h, (0.7 - x.recorte.y) / x.recorte.h] : [];
+    const c = document.createElement('canvas'), g = c.getContext('2d');
+    const le = async src => { const im = await carregaImg(src); c.width = im.naturalWidth; c.height = im.naturalHeight; g.drawImage(im, 0, 0); };
+    const mx = (x0, y0, w, h) => { const a = g.getImageData(x0, y0, w, h).data; let m = 0; for (let k = 0; k < a.length; k += 4) m = Math.max(m, a[k]); return m; };
+    await le(IMG[x.id]);
+    o.saida = { w: c.width, h: c.height, dentro: mx(Math.round(c.width * 0.04), Math.round(c.height * 0.04), 6, 6) };
+    await le(BRUTO[x.id]); o.guardada = [c.width, c.height].join();
+    const im = document.querySelector('#folha .f-fig img');
+    o.papel = im && im.src === IMG[x.id];
+    o.maior = im ? im.getBoundingClientRect().width : 0;
+    o.volta = JSON.stringify(normalizar(JSON.parse(JSON.stringify(d))).imgs.itens[0].recorte);
+    /* "Imagem inteira" desfaz */
+    document.querySelector('#ficha [data-acao="imgCorta"]').click(); await esp(300);
+    document.getElementById('cortaTudo').click(); document.getElementById('cortaSim').click();
+    for (let k = 0; k < 40 && x.recorte; k++) await esp(100); await esp(300);
+    await le(IMG[x.id]); o.inteira = { sem: !x.recorte, w: c.width, h: c.height, tam: [x.w, x.h].join(), seta: [x.cotas[0].x1, x.cotas[0].y1].map(v => +v.toFixed(2)).join() };
+    return o;
+  }, PROP_FICT).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  t.ok('a imagem tem o botão "Recortar" e abre a janela', !r.erro && r.botao && r.janela, J);
+  const perto = (a, bb, tol) => Array.isArray(a) && a.length === bb.length && a.every((v, k) => Math.abs(v - bb[k]) <= tol);
+  t.ok('"Tirar bordas brancas" acha o desenho (com uma folga pequena)', !r.erro && perto(r.auto, [0.24, 0.24, 0.52, 0.52], 0.008), J);
+  t.ok('arrastar o canto muda só aquele canto', !r.erro && r.canto === '0.02,0.02,0', J);
+  t.ok('grava o recorte; o tamanho da imagem passa a ser o do recorte', !r.erro && perto(r.gravou, [0.24, 0.24, 0.52, 0.52], 0.008) && Math.abs(r.tam[0] - 832) < 14 && Math.abs(r.tam[1] - 520) < 14, J);
+  t.ok('a saída é recortada (a borda branca sai, o desenho chega perto da beira); a guardada continua inteira', !r.erro && r.saida.w === r.tam[0] && r.saida.h === r.tam[1] && r.saida.dentro < 200 && r.guardada === '1600,1000' && r.papel, J);
+  t.ok('a seta de medida fica no mesmo ponto da imagem', !r.erro && perto(r.seta, r.setaEsperada, 0.001) && Math.abs(r.seta[0] - 0.5) < 0.01, J);
+  t.ok('grava e volta', !r.erro && /"w":0\.52/.test(r.volta), J);
+  t.ok('"Imagem inteira" desfaz o recorte (e a seta volta ao lugar)', !r.erro && r.inteira.sem && r.inteira.w === 1600 && r.inteira.tam === '1600,1000' && r.inteira.seta === '0.5,0.3', J);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
 teste('propostas-nuvem', async (b, t) => {
   // cada proposta no seu nó (quem grava o banco inteiro apaga o do outro);
   // gravação recusada avisa e a alteração fica guardada para subir depois;
