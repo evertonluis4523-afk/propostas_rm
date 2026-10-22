@@ -12946,6 +12946,69 @@ teste('propostas-imagem-trocar', async (b, t) => {
   await ctx.close();
 });
 
+teste('propostas-imagens-aviso', async (b, t) => {
+  // Configurações: aviso "Imagens ilustrativas" no documento das imagens,
+  // desligado de início; ligado, sai embaixo do quadro de dados (sozinho e
+  // anexado à proposta), no Word também, com o texto que se escrever; e não
+  // tira as duas imagens da 1ª folha do lugar.
+  if (!fs.existsSync(path.join(RAIZ, 'propostas_rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'propostas_rm' });
+  await semLogin(pg);
+  const r = await pg.evaluate(async (FICT) => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    await iniciarApp();
+    const d = eval(FICT); docs[d.id] = d; abrir(d.id); await esp(50);
+    document.getElementById('abaImagens').click(); await esp(80);
+    const dt = new DataTransfer();
+    for (const n of ['A', 'B']) { const c = document.createElement('canvas'); c.width = 1600; c.height = 900; const g = c.getContext('2d'); g.fillStyle = '#8a9097'; g.fillRect(0, 0, 1600, 900); dt.items.add(new File([await new Promise(ok => c.toBlob(ok, 'image/png'))], n + '.png', { type: 'image/png' })); }
+    const inp = document.getElementById('imArq'); inp.files = dt.files; inp.dispatchEvent(new Event('change', { bubbles: true }));
+    for (let k = 0; k < 80 && d.imgs.itens.length < 2; k++) await esp(100);
+    await carregaImagensDoc(d); renderFolha(); await esp(200);
+    const folha = () => document.getElementById('folha').textContent.replace(/\s+/g, ' ');
+    const docx = async bl => new TextDecoder('latin1').decode(await docxBytes(bl));
+    const o = { inicio: { cfg: !!config.avisoImg, papel: /Imagens ilustrativas/.test(folha()) } };
+    /* liga nas Configurações, com o texto padrão */
+    document.getElementById('btnModelo').click(); await esp(100);
+    o.tela = { caixa: !!document.getElementById('cfgAvisoImg'), txt: document.getElementById('cfgAvisoTxt').value };
+    document.getElementById('cfgAvisoImg').checked = true;
+    document.getElementById('modeloSalvar').click(); await esp(200);
+    o.ligado = { cfg: config.avisoImg, papel: /Imagens ilustrativas\. Prevalecem o projeto, o memorial descritivo e o contrato\./.test(folha()),
+      depoisDoQuadro: (() => { const m = document.querySelector('#folha .f-meta'), a = document.querySelector('#folha .f-aviso'); return !!(m && a && (m.compareDocumentPosition(a) & Node.DOCUMENT_POSITION_FOLLOWING)); })(),
+      word: /Imagens ilustrativas/.test(await docx(blocosImagens(d))) };
+    /* texto próprio */
+    document.getElementById('btnModelo').click(); await esp(100);
+    document.getElementById('cfgAvisoTxt').value = 'Imagens meramente ilustrativas; vale o projeto aprovado.';
+    document.getElementById('modeloSalvar').click(); await esp(200);
+    o.proprio = { papel: /meramente ilustrativas; vale o projeto aprovado/.test(folha()), guardado: config.avisoImgTxt };
+    /* anexado à proposta */
+    d.imgs.anexar = true; document.getElementById('abaProposta').click(); await esp(150);
+    o.anexo = /meramente ilustrativas/.test(folha()) && /meramente ilustrativas/.test(await docx(blocosProposta(d)));
+    /* vazio volta ao padrão; desligar tira */
+    document.getElementById('btnModelo').click(); await esp(100);
+    document.getElementById('cfgAvisoTxt').value = ''; document.getElementById('modeloSalvar').click(); await esp(150);
+    o.vazio = avisoImgTxt();
+    document.getElementById('btnModelo').click(); await esp(100);
+    document.getElementById('cfgAvisoImg').checked = false; document.getElementById('modeloSalvar').click(); await esp(150);
+    o.desligado = !/Imagens ilustrativas/.test(folha()) && !blocosImagens(d).some(x => x.t === 'aviso');
+    /* para a folha das imagens no PDF: aviso ligado de novo, aba Imagens */
+    config.avisoImg = true; d.imgs.anexar = false; document.getElementById('abaImagens').click(); await esp(200);
+    return o;
+  }, PROP_FICT).catch(e => ({ erro: e.message }));
+  await pg.emulateMedia({ media: 'print' });
+  const pdf = r.erro ? null : await pg.pdf({ format: 'A4' });
+  const paginas = pdf ? (pdf.toString('latin1').match(/\/Type\s*\/Page[^s]/g) || []).length : 0;
+  const J = JSON.stringify(Object.assign({}, r, { paginas })) + ' ' + erros.join(' | ');
+  t.ok('desligado de início', !r.erro && !r.inicio.cfg && !r.inicio.papel, J);
+  t.ok('as Configurações têm a opção e o texto padrão', !r.erro && r.tela.caixa && r.tela.txt === 'Imagens ilustrativas. Prevalecem o projeto, o memorial descritivo e o contrato.', J);
+  t.ok('ligado: sai embaixo do quadro de dados, e no Word', !r.erro && r.ligado.cfg === true && r.ligado.papel && r.ligado.depoisDoQuadro && r.ligado.word, J);
+  t.ok('o texto pode ser mudado', !r.erro && r.proprio.papel && r.proprio.guardado === 'Imagens meramente ilustrativas; vale o projeto aprovado.', J);
+  t.ok('também com as imagens anexadas à proposta (papel e Word)', !r.erro && r.anexo, J);
+  t.ok('vazio volta ao texto padrão; desligar tira', !r.erro && /^Imagens ilustrativas\. Prevalecem/.test(r.vazio) && r.desligado, J);
+  t.ok('com o aviso, as duas imagens continuam na 1ª folha', !r.erro && paginas === 1, J);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
 teste('propostas-nuvem', async (b, t) => {
   // cada proposta no seu nó (quem grava o banco inteiro apaga o do outro);
   // gravação recusada avisa e a alteração fica guardada para subir depois;
