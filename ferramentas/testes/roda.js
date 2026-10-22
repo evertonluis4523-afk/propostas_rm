@@ -13009,6 +13009,49 @@ teste('propostas-imagens-aviso', async (b, t) => {
   await ctx.close();
 });
 
+teste('propostas-extensao-cenas', async (b, t) => {
+  // a extensão do SketchUp "RM Cenas": exporta todas as cenas em PNG, uma
+  // por cena, na proporção da cena (sem as faixas cinza), com fundo
+  // transparente, suavização à escolha (vídeo integrado saía escuro em 4K) e
+  // as sombras de agora em todas; o modelo volta como estava, mesmo com erro.
+  // Mora em propostas_rm/sketchup; o .rbz é o que se baixa na aba Imagens.
+  const raiz = path.join(RAIZ, 'propostas_rm', 'sketchup'); if (!fs.existsSync(raiz)) return;
+  let ruby = true; try { cp.execSync('ruby -v', { stdio: 'ignore' }); } catch (e) { ruby = false; }
+  if (ruby) {
+    let saida = '', ok = true;
+    try { saida = cp.execSync('ruby ' + JSON.stringify(path.join(raiz, 'testes', 'exportar_cenas.rb')), { env: Object.assign({}, process.env, { LANG: 'C.UTF-8' }) }).toString(); } catch (e) { ok = false; saida = String(e.stdout || e.message); }
+    const tem = l => ok && new RegExp('OK ' + l).test(saida);
+    t.ok('uma imagem por cena, numerada na ordem, nome sem caractere proibido', tem('A'), saida);
+    t.ok('na proporção da cena (ou da tela), na largura escolhida: sem as faixas cinza', tem('B'), saida);
+    t.ok('fundo transparente e suavização como escolhidos', tem('C') && tem('F'), saida);
+    t.ok('as sombras de agora em todas as cenas, sem transição', tem('D'), saida);
+    t.ok('depois, o modelo como estava (transição, sombras, cena), mesmo se a exportação falhar', tem('E') && tem('G'), saida);
+    t.ok('modelo sem cenas: exporta a vista atual', tem('H'), saida);
+    t.ok('qualidade máxima: texturas, arestas por material, sombras nas faces, sem céu nem chão, igual em todas as cenas', tem('J'), saida);
+    t.ok('qualidade máxima: depois, estilo, sol e cenas exatamente como estavam (oclusão só onde existe)', tem('K') && tem('L'), saida);
+    // a imagem saía escura e com céu e chão: cada cena reaplicava o estilo e o
+    // sol (de noite) guardados nela ao entrar
+    t.ok('qualidade máxima: cena guardada com céu, chão e sol de noite não volta; a tela fica como estava', tem('M'), saida);
+    // o view.write_image saía escuro em alguns computadores; o "Exportar 2D" saía certo
+    t.ok('grava pelo mesmo exportador do "Exportar 2D" (o write_image fica de reserva)', tem('N'), saida);
+    // continuava escuro: gravava antes de o SketchUp terminar de desenhar a cena
+    t.ok('espera o SketchUp desenhar cada cena antes de gravar; no fim, avisa e devolve o modelo', tem('O'), saida);
+    t.ok('"Só a vista atual": grava a tela sem trocar de cena', tem('P'), saida);
+    t.ok('erro no meio da espera: avisa o erro e devolve o modelo como estava', tem('Q'), saida);
+    // no SketchUp, um aviso aberto dentro do relógio fazia ele disparar de novo
+    t.ok('o aviso do fim aparece uma vez só e cada cena é gravada uma vez', tem('R'), saida);
+  } else t.ok('ruby instalado para testar a extensão (pulado)', true);
+  // o .rbz baixado é exatamente o código do repositório, e a versão é uma só
+  const lista = cp.execSync('unzip -l ' + JSON.stringify(path.join(raiz, 'RM_Cenas.rbz'))).toString();
+  const igual = ['RM_Cenas.rb', 'RM_Cenas/main.rb'].every(f => cp.execSync('unzip -p ' + JSON.stringify(path.join(raiz, 'RM_Cenas.rbz')) + ' ' + f).toString() === fs.readFileSync(path.join(raiz, f), 'utf8'));
+  t.ok('o .rbz tem os mesmos arquivos do repositório', igual && /RM_Cenas\/main\.rb/.test(lista), lista);
+  const html = fs.readFileSync(path.join(RAIZ, 'propostas_rm', 'index.html'), 'utf8');
+  const vLoader = (fs.readFileSync(path.join(raiz, 'RM_Cenas.rb'), 'utf8').match(/extension\.version = '([\d.]+)'/) || [])[1];
+  const vMain = (fs.readFileSync(path.join(raiz, 'RM_Cenas', 'main.rb'), 'utf8').match(/EXTENSION_VERSION = '([\d.]+)'/) || [])[1];
+  const vTela = (html.match(/RM Cenas ([\d.]+)\)/) || [])[1];
+  t.ok('a aba Imagens tem o link para baixar a extensão, com a mesma versão', /href="sketchup\/RM_Cenas\.rbz"/.test(html) && !!vLoader && vLoader === vMain && vMain === vTela, JSON.stringify({ vLoader, vMain, vTela }));
+});
+
 teste('propostas-nuvem', async (b, t) => {
   // cada proposta no seu nó (quem grava o banco inteiro apaga o do outro);
   // gravação recusada avisa e a alteração fica guardada para subir depois;
