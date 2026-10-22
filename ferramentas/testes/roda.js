@@ -12890,6 +12890,62 @@ teste('propostas-imagens-meia-folha', async (b, t) => {
   await ctx.close();
 });
 
+teste('propostas-imagem-trocar', async (b, t) => {
+  // aba Imagens: "Trocar imagem" põe outra imagem no bloco (o render novo da
+  // arquiteta) sem perder o título, a descrição, o tamanho, o lugar na lista
+  // e o realce; o recorte e as setas eram da anterior e saem. A anterior só
+  // é apagada se nada mais a cita (uma revisão, por exemplo).
+  if (!fs.existsSync(path.join(RAIZ, 'propostas_rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'propostas_rm' });
+  await semLogin(pg);
+  const r = await pg.evaluate(async (FICT) => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    await iniciarApp();
+    const d = eval(FICT); docs[d.id] = d; abrir(d.id); await esp(50);
+    document.getElementById('abaImagens').click(); await esp(80);
+    const png = async (nome, w, h, cor) => { const c = document.createElement('canvas'); c.width = w; c.height = h; const g = c.getContext('2d'); g.fillStyle = cor; g.fillRect(0, 0, w, h); return new File([await new Promise(ok => c.toBlob(ok, 'image/png'))], nome, { type: 'image/png' }); };
+    const dt = new DataTransfer(); dt.items.add(await png('A.png', 1600, 900, '#8a9097')); dt.items.add(await png('B.png', 1600, 900, '#6f7a85'));
+    const inp = document.getElementById('imArq'); inp.files = dt.files; inp.dispatchEvent(new Event('change', { bubbles: true }));
+    for (let k = 0; k < 80 && d.imgs.itens.length < 2; k++) await esp(100); await esp(200);
+    const [a, bb] = d.imgs.itens;
+    Object.assign(a, { tit: 'Fachada frontal', desc: 'Vista da rua, com as cinco lojas.', tam: 'inteira', recorte: { x: 0.1, y: 0.1, w: 0.8, h: 0.8 }, cotas: [{ x1: 0.5, y1: 0.2, x2: 0.5, y2: 0.8, txt: '7,10m' }], realce: { nivel: 'leve', grao: false } });
+    alterou(d, true); await carregaImagensDoc(d); await esp(200);
+    const idA = a.id, idB = bb.id;
+    const troca = async (i, arq) => {
+      const bts = document.querySelectorAll('#ficha [data-acao="imgTroca"]');
+      if (!bts[i]) return false;
+      bts[i].click();
+      const tf = document.getElementById('imTroca'), dt2 = new DataTransfer(); dt2.items.add(arq); tf.files = dt2.files; tf.dispatchEvent(new Event('change', { bubbles: true }));
+      for (let k = 0; k < 80 && d.imgs.itens[i].id === (i ? idB : idA); k++) await esp(100);
+      for (let k = 0; k < 40 && IMG_PCT[d.imgs.itens[i].id] !== imgChave(d.imgs.itens[i]); k++) await esp(100);
+      await esp(300); return true;
+    };
+    const o = { botoes: document.querySelectorAll('#ficha [data-acao="imgTroca"]').length };
+    o.trocou = await troca(0, await png('Render novo.png', 3000, 1500, '#5d6873'));
+    const x = d.imgs.itens[0];
+    o.a = { novoId: x.id !== idA, tit: x.tit, desc: x.desc, tam: x.tam, realce: JSON.stringify(x.realce), recorte: x.recorte || null, cotas: (x.cotas || []).length, wh: [x.w, x.h].join(), ordem: d.imgs.itens.map(y => y.id === x.id ? 'A' : y.id === idB ? 'B' : '?').join('') };
+    o.a.antigaApagada = !BRUTO[idA] && !(await IDBI.pega(idA));
+    o.a.papel = [...document.querySelectorAll('#folha .f-fig img')].some(im => im.src === IMG[x.id]);
+    o.a.tituloNoPapel = /Fachada frontal/i.test(document.getElementById('folha').textContent) && /cinco lojas/.test(document.getElementById('folha').textContent);
+    o.a.cartao = (document.querySelector('#ficha [data-p="imgs.itens.0.tit"]') || {}).value;
+    /* B está numa revisão guardada: trocar não apaga a imagem antiga */
+    d.revisoes = [{ rev: 1, em: Date.now(), total: 0, json: JSON.stringify(fotoDoc(d)) }];
+    await troca(1, await png('Outro.png', 1600, 900, '#4f5a65'));
+    o.b = { novoId: d.imgs.itens[1].id !== idB, guardada: !!(BRUTO[idB] || await IDBI.pega(idB)) };
+    o.n = d.imgs.itens.length;
+    return o;
+  }, PROP_FICT).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  t.ok('cada imagem tem o botão "Trocar imagem"', !r.erro && r.botoes === 2 && r.trocou, J);
+  t.ok('a imagem nova entra no lugar (tamanho dela)', !r.erro && r.a.novoId && r.a.wh === '1800,900' && r.a.papel && r.n === 2, J);
+  t.ok('título, descrição, tamanho no papel, lugar na lista e realce continuam', !r.erro && r.a.tit === 'Fachada frontal' && r.a.desc === 'Vista da rua, com as cinco lojas.' && r.a.tam === 'inteira' && r.a.ordem === 'AB' && r.a.realce === '{"nivel":"leve","grao":false}' && r.a.tituloNoPapel && r.a.cartao === 'Fachada frontal', J);
+  t.ok('o recorte e as setas da imagem anterior saem', !r.erro && r.a.recorte === null && r.a.cotas === 0, J);
+  t.ok('a imagem anterior é apagada quando nada mais a cita', !r.erro && r.a.antigaApagada, J);
+  t.ok('citada numa revisão, a anterior fica guardada', !r.erro && r.b.novoId && r.b.guardada, J);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
 teste('propostas-nuvem', async (b, t) => {
   // cada proposta no seu nó (quem grava o banco inteiro apaga o do outro);
   // gravação recusada avisa e a alteração fica guardada para subir depois;
