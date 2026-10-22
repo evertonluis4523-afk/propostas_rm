@@ -12579,7 +12579,7 @@ teste('propostas-imagem-seta-medida', async (b, t) => {
     // tirar a seta: a imagem volta sem ela
     document.querySelector('#ficha [data-acao="imgCota"]').click(); await esp(300);
     document.querySelector('#cotaLista [data-cdel="0"]').click(); document.getElementById('cotaSim').click();
-    for (let k = 0; k < 40 && (x.cotas || []).length > 1; k++) await esp(100); await esp(200);
+    for (let k = 0; k < 60 && ((x.cotas || []).length > 1 || IMG_PCT[x.id] !== imgChave(x)); k++) await esp(100); await esp(200);
     await le(IMG[x.id]); o.tirou = { n: (x.cotas || []).length, linha: mn(545, 380, 10, 240), linha2: mn(1435, 380, 10, 240) };
     return o;
   }, PROP_FICT).catch(e => ({ erro: e.message }));
@@ -12706,7 +12706,7 @@ teste('propostas-imagem-recorte', async (b, t) => {
     const f = new File([await new Promise(ok => c0.toBlob(ok, 'image/png'))], 'Fachada.png', { type: 'image/png' });
     const dt = new DataTransfer(); dt.items.add(f); const inp = document.getElementById('imArq'); inp.files = dt.files; inp.dispatchEvent(new Event('change', { bubbles: true }));
     for (let k = 0; k < 60 && !d.imgs.itens.length; k++) await esp(100); await esp(200);
-    const x = d.imgs.itens[0];
+    const x = d.imgs.itens[0]; delete x.realce; /* aqui só o recorte */
     const o = { botao: !!document.querySelector('#ficha [data-acao="imgCorta"]') };
     if (!o.botao) return o;
     /* uma seta de medida antes do recorte, no meio do desenho (x = 800 px) */
@@ -12743,7 +12743,7 @@ teste('propostas-imagem-recorte', async (b, t) => {
     /* "Imagem inteira" desfaz */
     document.querySelector('#ficha [data-acao="imgCorta"]').click(); await esp(300);
     document.getElementById('cortaTudo').click(); document.getElementById('cortaSim').click();
-    for (let k = 0; k < 40 && x.recorte; k++) await esp(100); await esp(300);
+    for (let k = 0; k < 60 && (x.recorte || IMG_PCT[x.id] !== imgChave(x)); k++) await esp(100); await esp(300);
     await le(IMG[x.id]); o.inteira = { sem: !x.recorte, w: c.width, h: c.height, tam: [x.w, x.h].join(), seta: [x.cotas[0].x1, x.cotas[0].y1].map(v => +v.toFixed(2)).join() };
     return o;
   }, PROP_FICT).catch(e => ({ erro: e.message }));
@@ -12757,6 +12757,135 @@ teste('propostas-imagem-recorte', async (b, t) => {
   t.ok('a seta de medida fica no mesmo ponto da imagem', !r.erro && perto(r.seta, r.setaEsperada, 0.001) && Math.abs(r.seta[0] - 0.5) < 0.01, J);
   t.ok('grava e volta', !r.erro && /"w":0\.52/.test(r.volta), J);
   t.ok('"Imagem inteira" desfaz o recorte (e a seta volta ao lugar)', !r.erro && r.inteira.sem && r.inteira.w === 1600 && r.inteira.tam === '1600,1000' && r.inteira.seta === '0.5,0.3', J);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
+teste('propostas-imagem-realce', async (b, t) => {
+  // aba Imagens: "Realçar" -- o render chapado e pequeno fica mais real sem
+  // mudar o desenho: amplia a imagem pequena, nitidez nas texturas, volume,
+  // tons e cor, grão opcional. O fundo branco fica como está. A imagem nova
+  // já entra com o nível Médio; a guardada continua como veio.
+  if (!fs.existsSync(path.join(RAIZ, 'propostas_rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'propostas_rm' });
+  await semLogin(pg);
+  const r = await pg.evaluate(async (FICT) => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    await iniciarApp();
+    const d = eval(FICT); docs[d.id] = d; abrir(d.id); await esp(50);
+    document.getElementById('abaImagens').click(); await esp(80);
+    /* um render fictício, chapado e pequeno: parede com juntas, janelas, faixa verde, fundo branco */
+    const c0 = document.createElement('canvas'); c0.width = 800; c0.height = 450; const g0 = c0.getContext('2d');
+    g0.fillStyle = '#ffffff'; g0.fillRect(0, 0, 800, 450);
+    g0.fillStyle = '#b0b5ba'; g0.fillRect(40, 60, 720, 240);
+    g0.fillStyle = '#8f959b'; for (let x = 52; x < 760; x += 24) g0.fillRect(x, 60, 2, 240);
+    g0.fillStyle = '#5f666e'; for (let k = 0; k < 5; k++) g0.fillRect(80 + k * 140, 150, 60, 110);
+    g0.fillStyle = '#5a8a55'; g0.fillRect(40, 300, 720, 80);
+    const f = new File([await new Promise(ok => c0.toBlob(ok, 'image/png'))], 'Fachada.png', { type: 'image/png' });
+    const dt = new DataTransfer(); dt.items.add(f); const inp = document.getElementById('imArq'); inp.files = dt.files; inp.dispatchEvent(new Event('change', { bubbles: true }));
+    for (let k = 0; k < 80 && !d.imgs.itens.length; k++) await esp(100); await esp(300);
+    const x = d.imgs.itens[0];
+    const bt = () => document.querySelector('#ficha [data-acao="imgReal"]');
+    const o = { nova: JSON.stringify(x.realce || null), botao: (bt() || {}).textContent || '' };
+    const c = document.createElement('canvas'), g = c.getContext('2d');
+    const le = async (src, w, h) => { const im = await carregaImg(src); c.width = w || im.naturalWidth; c.height = h || im.naturalHeight; g.imageSmoothingQuality = 'high'; g.drawImage(im, 0, 0, c.width, c.height); return [im.naturalWidth, im.naturalHeight]; };
+    const px = (x0, y0, w, h) => g.getImageData(x0, y0, w, h).data;
+    const minimo = (x0, y0, w, h) => { const a = px(x0, y0, w, h); let m = 255; for (let k = 0; k < a.length; k += 4) m = Math.min(m, a[k], a[k + 1], a[k + 2]); return m; };
+    const nitido = (x0, y0, w, h) => { const a = px(x0, y0, w, h); let s = 0, n = 0; for (let y = 0; y < h; y++) for (let x = 1; x < w; x++) { const i = (y * w + x) * 4, j = i - 4; s += Math.abs(a[i + 1] - a[j + 1]); n++; } return s / n; };
+    const satura = (x0, y0, w, h) => { const a = px(x0, y0, w, h); let s = 0; for (let k = 0; k < a.length; k += 4) s += Math.max(a[k], a[k + 1], a[k + 2]) - Math.min(a[k], a[k + 1], a[k + 2]); return s / (a.length / 4); };
+    const desvio = (x0, y0, w, h) => { const a = px(x0, y0, w, h); let s = 0, s2 = 0, n = a.length / 4; for (let k = 0; k < a.length; k += 4) { s += a[k + 1]; s2 += a[k + 1] * a[k + 1]; } return Math.sqrt(Math.max(0, s2 / n - (s / n) * (s / n))); };
+    const mede = () => ({ fundo: minimo(0, 0, 60, 60), juntas: nitido(100, 130, 400, 150), verde: satura(200, 640, 360, 100), janela: desvio(185, 330, 70, 160) });
+    o.tam = await le(IMG[x.id]); o.depois = mede();
+    o.guardada = (await le(BRUTO[x.id])).join();
+    await le(BRUTO[x.id], 1600, 900); o.antes = mede();
+    /* a janela: níveis, grão, antes|depois */
+    bt().click(); for (let k = 0; k < 40 && !REAL.depois; k++) await esp(100); await esp(100);
+    o.janela = { on: document.getElementById('realTela').classList.contains('on'), niveis: [...document.querySelectorAll('#realNivel [data-nivel]')].map(e => e.textContent).join(','), marcado: (document.querySelector('#realNivel .on') || {}).dataset.nivel, info: document.getElementById('realInfo').textContent };
+    document.querySelector('#realNivel [data-nivel="forte"]').click(); await esp(50);
+    const gr = document.getElementById('realGrao'); gr.checked = true; gr.dispatchEvent(new Event('change'));
+    for (let k = 0; k < 40 && !REAL.cache['forte|true']; k++) await esp(100);
+    document.getElementById('realSim').click();
+    for (let k = 0; k < 40 && (!x.realce || x.realce.nivel !== 'forte' || IMG_PCT[x.id] !== imgChave(x)); k++) await esp(100); await esp(200);
+    o.forte = JSON.stringify(x.realce);
+    await le(IMG[x.id]); o.comGrao = mede();
+    /* a mesma imagem sai sempre igual (o grão é fixo) */
+    const um = IMG[x.id]; delete IMG[x.id]; await imgPronta(x); o.igual = IMG[x.id] === um;
+    /* desligado: volta ao tamanho e ao jeito de antes */
+    bt().click(); for (let k = 0; k < 40 && !REAL.depois; k++) await esp(100);
+    document.querySelector('#realNivel [data-nivel="off"]').click(); await esp(100); document.getElementById('realSim').click();
+    for (let k = 0; k < 40 && x.realce; k++) await esp(100); await esp(300);
+    o.desligado = { realce: x.realce || null, tam: (await le(IMG[x.id])).join(), botao: (bt() || {}).textContent };
+    o.velha = normalizar({ imgs: { itens: [{ id: 'imx', w: 800, h: 450, orig: true }] } }).imgs.itens[0].realce;
+    o.volta = JSON.stringify(normalizar({ imgs: { itens: [{ id: 'imx', realce: { nivel: 'leve', grao: true } }] } }).imgs.itens[0].realce);
+    return o;
+  }, PROP_FICT).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  t.ok('a imagem nova já entra realçada (Médio)', !r.erro && r.nova === '{"nivel":"medio","grao":false}' && /Realçar ✓/.test(r.botao), J);
+  t.ok('imagem pequena (800 px) sai com o dobro; a guardada continua como veio', !r.erro && r.tam.join() === '1600,900' && r.guardada === '800,450', J);
+  t.ok('o fundo branco fica branco', !r.erro && r.depois.fundo >= 250, J);
+  t.ok('as texturas (juntas) ficam mais nítidas', !r.erro && r.depois.juntas > r.antes.juntas * 1.15, J);
+  t.ok('a cor ganha vida (verde mais vivo)', !r.erro && r.depois.verde > r.antes.verde * 1.05, J);
+  t.ok('a janela: Desligado / Leve / Médio / Forte, com antes e depois', !r.erro && r.janela.on && r.janela.niveis === 'Desligado,Leve,Médio,Forte' && r.janela.marcado === 'medio' && /800 px: sai com 1600 px/.test(r.janela.info), J);
+  t.ok('Forte com grão: grava, e a parte lisa ganha o grão de foto', !r.erro && r.forte === '{"nivel":"forte","grao":true}' && r.comGrao.janela > r.antes.janela + 1, J);
+  t.ok('a mesma imagem sai sempre igual', !r.erro && r.igual, J);
+  t.ok('Desligado: volta ao tamanho e ao jeito de antes', !r.erro && r.desligado.realce === null && r.desligado.tam === '800,450' && !/✓/.test(r.desligado.botao), J);
+  t.ok('imagem antiga (sem o campo) continua sem realce; o campo grava e volta', !r.erro && r.velha === null && r.volta === '{"nivel":"leve","grao":true}', J);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
+teste('propostas-imagens-meia-folha', async (b, t) => {
+  // duas imagens "meia página" na folha: cada uma na sua metade, mesmo
+  // quando a de cima é larga e baixa -- a segunda começa sempre na metade de
+  // baixo. Medido no PDF de verdade (onde cai cada imagem na folha).
+  if (!fs.existsSync(path.join(RAIZ, 'propostas_rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'propostas_rm' });
+  await semLogin(pg);
+  const r0 = await pg.evaluate(async (FICT) => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    await iniciarApp();
+    const d = eval(FICT); docs[d.id] = d; abrir(d.id); await esp(50);
+    document.getElementById('abaImagens').click(); await esp(80);
+    /* 1ª folha: duas 16:9; 2ª folha: uma larga e baixa (4:1, como uma fachada) e uma 16:9 */
+    const dt = new DataTransfer();
+    for (const [nome, w, h] of [['A', 1600, 900], ['B', 1600, 900], ['Larga', 1600, 400], ['C', 1600, 900]]) {
+      const c = document.createElement('canvas'); c.width = w; c.height = h; const g = c.getContext('2d'); g.fillStyle = '#8a9097'; g.fillRect(0, 0, w, h);
+      dt.items.add(new File([await new Promise(ok => c.toBlob(ok, 'image/png'))], nome + '.png', { type: 'image/png' }));
+    }
+    const inp = document.getElementById('imArq'); inp.files = dt.files; inp.dispatchEvent(new Event('change', { bubbles: true }));
+    for (let k = 0; k < 100 && d.imgs.itens.length < 4; k++) await esp(100);
+    await carregaImagensDoc(d); renderFolha(); await esp(300);
+    const z = await docxBytes(blocosImagens(d)); const tx = new TextDecoder('latin1').decode(z);
+    return { n: d.imgs.itens.length, docx: (tx.match(/w:hRule="exact"/g) || []).length };
+  }, PROP_FICT).catch(e => ({ erro: e.message }));
+  await pg.emulateMedia({ media: 'print' });
+  const pdf = r0.erro ? null : await pg.pdf({ format: 'A4' });
+  await pg.emulateMedia({ media: 'screen' });
+  const r = pdf ? await pg.evaluate(async (b64) => {
+    await carregaPdfJs();
+    const bin = atob(b64), u = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i);
+    const doc = await pdfjsLib.getDocument({ data: u }).promise, out = [];
+    for (let n = 1; n <= doc.numPages; n++) {
+      const p = await doc.getPage(n), vp = p.getViewport({ scale: 1 }), c = document.createElement('canvas'); c.width = vp.width; c.height = vp.height;
+      const g = c.getContext('2d'); g.fillStyle = '#fff'; g.fillRect(0, 0, c.width, c.height);
+      await p.render({ canvasContext: g, viewport: vp }).promise;
+      const a = g.getImageData(0, 0, c.width, c.height).data, W = c.width, H = c.height;
+      /* linhas da folha que são imagem (o cinza delas cobre boa parte da largura) */
+      const linha = y => { let k = 0; for (let x = 0; x < W; x++) { const i = (y * W + x) * 4; if (a[i] > 90 && a[i] < 190 && Math.abs(a[i] - a[i + 2]) < 30) k++; } return k > W * 0.4; };
+      const blocos = []; let ini = -1;
+      for (let y = 0; y < H; y++) { const l = linha(y); if (l && ini < 0) ini = y; if (!l && ini >= 0) { if (y - ini > 10) blocos.push([ini / H, y / H]); ini = -1; } }
+      out.push(blocos.map(bb => bb.map(v => +v.toFixed(3))));
+    }
+    return out;
+  }, pdf.toString('base64')).catch(e => ({ erro: e.message })) : { erro: r0.erro };
+  const J = JSON.stringify({ r0, r }) + ' ' + erros.join(' | ');
+  const pags = Array.isArray(r) ? r : [];
+  const duas = pags.filter(p => p.length === 2);
+  t.ok('quatro imagens meia página: duas folhas, duas imagens em cada', !r0.erro && r0.n === 4 && pags.length === 2 && duas.length === 2, J);
+  const meio = p => (p[0] + p[1]) / 2;
+  t.ok('2ª folha (a de cima larga e baixa): cada imagem na sua metade', duas.length === 2 && meio(duas[1][0]) < 0.5 && meio(duas[1][1]) > 0.5 && duas[1][1][0] > 0.47, J);
+  t.ok('1ª folha (com o cabeçalho): a segunda também começa embaixo da primeira metade útil', duas.length === 2 && duas[0][1][0] > 0.5, J);
+  t.ok('no Word, cada imagem numa caixa de altura fixa', !r0.erro && r0.docx === 4, J);
   t.ok('sem erro na página', !erros.length, erros.join(' | '));
   await ctx.close();
 });
