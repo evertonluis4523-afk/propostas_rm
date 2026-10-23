@@ -13108,6 +13108,163 @@ teste('cheques-vencidos', async (b, t) => {
   await ctx.close();
 });
 
+teste('central-indicadores', async (b, t) => {
+  // "Como melhorar esses indicadores, hoje uso muito pouco": mostravam número
+  // sem ajudar a decidir, e a "conversão 100%" enganava (aprovados ÷
+  // (aprovados + perdidos), e ninguém marca perdido). Agora: período com
+  // comparação, fluxo de 8 semanas, funil com a conversão real, recebimento
+  // em dia × atrasado, um "a pagar" só, barras no lugar das roscas, compras
+  // por categoria; a gaveta só com o que pede ação; e o resumo da semana.
+  // Dados fictícios; hoje = quarta, 21/10/2026.
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'central_rm' }, 'index.html', { relogio: '2026-10-21T15:00:00Z', fuso: 'America/Sao_Paulo' });
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    if (typeof window.__painelTeste !== 'function') return { erro: 'sem __painelTeste' };
+    try { localStorage.clear(); } catch (e) { }
+    CURRENT_EMAIL = 'teste@exemplo.com';
+    const dados = {
+      obras: { o1: { obra: 'Galpão Exemplo A', valor: 1000000, status: 'andamento', parcelas: [
+        { valor: 300000, data: '2026-10-05', recebida: true }, { valor: 200000, data: '2026-09-10', recebida: true },
+        { valor: 100000, data: '2026-10-10' }, { valor: 150000, data: '2026-10-23' }, { valor: 250000, data: '2026-11-20' }] } },
+      cheques: { lotes: { L1: { id: 'L1', cliente: 'Cliente Exemplo' } }, cheques: {
+        c1: { loteId: 'L1', emitente: 'Emitente Fictício', valor: 40000, bomPara: '2026-10-24', status: 'carteira' },
+        c2: { loteId: 'L1', emitente: 'Emitente Fictício', valor: 10000, bomPara: '2026-10-01', status: 'carteira' },
+        c3: { loteId: 'L1', emitente: 'Emitente Fictício', valor: 7000, bomPara: '2026-10-02', status: 'compensado' } } },
+      contas: { k1: { fornecedor: 'Fornecedor Exemplo', valor: 20000, venc: '2026-10-15' }, k2: { fornecedor: 'Fornecedor Modelo', valor: 500000, venc: '2026-11-03' } },
+      compras: {
+        p1: { fornecedor: 'Usina Exemplo', valor: 30000, categoria: 'Matéria-prima', dataCompra: '2026-10-05', parcelas: [{ venc: '2026-10-27', valor: 30000, pago: false }] },
+        p2: { fornecedor: 'Loja Exemplo', valor: 10000, categoria: '', dataCompra: '2026-09-10', parcelas: [{ venc: '2026-09-20', valor: 10000, pago: true }] },
+        p3: { fornecedor: 'Transporte Exemplo', valor: 5000, categoria: 'Frete', dataCompra: '2026-10-12', parcelas: [{ venc: '2026-10-12', valor: 5000, pago: true }] } },
+      prop: {
+        a: { s: 'aprovada', t: 100000, tc: 90000, d: '2026-10-02', ap: '2026-10-15', c: 'Cliente Fictício A' },
+        b: { s: 'negociacao', t: 200000, d: '2026-10-01', c: 'Cliente Fictício B' },
+        c: { s: 'perdida', t: 50000, d: '2026-10-03', c: 'Cliente Fictício C' },
+        d: { s: 'negociacao', t: 80000, d: '2026-07-01', c: 'Cliente Fictício D' },
+        e: { s: 'aprovada', t: 60000, d: '2026-09-05', ap: '2026-09-20', c: 'Cliente Fictício E' } },
+      pu: { u1: { nome: 'Obra PU Exemplo', valorCombinado: 20000, pagamentos: [{ valor: 18000, data: '2026-10-03' }] } } };
+    window.__painelTeste(dados); await esp(60);
+    const graf = () => document.getElementById('dash-graf');
+    const txt = el => (el ? el.textContent : '').replace(/\s+/g, ' ');
+    const o = {};
+    const ri = graf() && graf().querySelector('.ri');
+    o.periodo = ri && ri.getAttribute('data-periodo');
+    o.kpis = [...document.querySelectorAll('#dash-graf .ri-kpi')].map(k => ({ t: txt(k), var: (k.querySelector('.ri-var') || {}).className || '' }));
+    o.funil = txt(document.getElementById('ri-funil'));
+    o.semCem = !/conversão 100%/.test(txt(graf()));
+    o.fluxo = txt(document.getElementById('ri-fluxo'));
+    window.rmFluxoSemana(2); await esp(10);
+    o.det = txt(document.getElementById('ri-fluxo-det'));
+    o.receb = txt(document.getElementById('ri-receb'));
+    o.pagar = txt(document.getElementById('ri-pagar'));
+    o.pu = txt(document.getElementById('ri-pu'));
+    o.cat = txt(document.getElementById('ri-cat'));
+    o.semRosca = !document.querySelector('#dash-graf circle[stroke-dasharray]');
+    // a gaveta: só ação
+    const gav = document.getElementById('rm-drawer');
+    o.gaveta = { titulo: txt(gav && gav.querySelector('.rm-dw-head b')), grupos: [...document.querySelectorAll('#rm-host .ri-grp')].map(x => x.textContent),
+      itens: [...document.querySelectorAll('#rm-host .ri-acao')].map(x => txt(x)), semPanorama: !/Panorama dos sistemas|Obras em carteira/.test(txt(document.getElementById('rm-host'))),
+      cheque: [...document.querySelectorAll('#rm-host .ri-acao')].map(x => x.getAttribute('onclick')).find(x => /cheques/.test(x || '')) };
+    // o resumo da semana na tela inicial
+    o.resumo = { vis: document.getElementById('dash-acoes-block').style.display !== 'none', titulo: txt(document.querySelector('#dash-acoes-block .rm-collapse-title')),
+      per: txt(document.getElementById('dash-acoes-per')), linhas: [...document.querySelectorAll('#dash-acoes .acao-t')].map(x => x.textContent), semVenc: !document.getElementById('dash-venc-block') };
+    // o período troca tudo
+    window.rmPeriodo('ano'); await esp(30);
+    o.ano = { periodo: graf().querySelector('.ri').getAttribute('data-periodo'), on: txt(graf().querySelector('.ri-chip.on')), funil: txt(document.getElementById('ri-funil')) };
+    // abrir já filtrado: manda o filtro para o sistema
+    const lay = document.createElement('div'); lay.id = 'layer-cheques'; const fr = document.createElement('iframe'); lay.appendChild(fr); document.body.appendChild(lay);
+    const recebido = []; fr.contentWindow.addEventListener('message', e => recebido.push(e.data));
+    const om = window.openModule; window.openModule = () => { }; window.rmAbrir('cheques', 'vencidos'); window.openModule = om; await esp(30);
+    o.filtro = recebido;
+    // saldo do banco informado: a linha vira o saldo previsto
+    window.prompt = () => '50.000,00'; window.rmSaldoConta(); await esp(20);
+    o.saldo = txt(document.getElementById('ri-fluxo'));
+    return o;
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r).slice(0, 2500) + ' ' + erros.join(' | ');
+  const k = (r.kpis || []).map(x => x.t).join(' || ');
+  t.ok('período padrão: mês, com os números contra o mês anterior', r.periodo === 'mes' && /Aprovado em outubroR\$ 90 mil▲ 50%1 proposta · setembro: R\$ 60 mil/.test(k) , J);
+  t.ok('recebido (obras + PU), gasto com compras (subir é ruim) e propostas enviadas', /Recebido em outubroR\$ 318 mil▲ 59%obras \+ PU/.test(k) && /Gasto com compras em outubroR\$ 35 mil▲ 250%/.test(k)
+    && r.kpis[2].var === 'ri-var ruim' && r.kpis[0].var === 'ri-var bom' && /Propostas enviadas em outubro3▲ 2setembro: 1/.test(k), J);
+  t.ok('funil das propostas com a conversão real (não mais 100%)', r.semCem && /lido das Propostas/.test(r.funil) && /Enviadas3 · R\$ 350 mil/.test(r.funil.replace(/ (?=3 ·)/, ''))
+    && /33%das enviadas viraram obra \(1 de 3\)/.test(r.funil.replace(/% /g, '%')) && /50%das decididas foram aprovadas \(1 de 2\)/.test(r.funil.replace(/% /g, '%')) && /26%do valor enviado/.test(r.funil.replace(/% /g, '%')), J);
+  t.ok('fluxo de 8 semanas: avisa a semana que fica no vermelho e mostra o que entra e sai nela', /Semana de 02\/11: as saídas passam as entradas/.test(r.fluxo) && /Fornecedor Modelo/.test(r.det) && /−R\$ 500 mil/.test(r.det), J);
+  t.ok('recebimento das obras: % recebido, em dia × atrasado e quem atrasou', /50% recebido/.test(r.receb) && /A receber em dia R\$ 400 mil/.test(r.receb) && /Atrasado R\$ 100 mil/.test(r.receb) && /Galpão Exemplo AR\$ 100 mil · 11 dias/.test(r.receb), J);
+  t.ok('um "a pagar" só (contas + compras), sem linha zerada', /Vencido · 1R\$ 20 mil/.test(r.pagar) && /Próximos 7 dias/.test(r.pagar) && /8 a 30 dias/.test(r.pagar) && !/Vence hoje/.test(r.pagar), J);
+  t.ok('barra no lugar da rosca (PU) e compras por categoria com o aviso das sem categoria', r.semRosca && /90% recebido/.test(r.pu) && /Matéria-prima/.test(r.cat) && /Frete/.test(r.cat) && !/Sem categoria R\$/.test(r.cat) && /1 compra sem categoria — classificar/.test(r.cat), J);
+  t.ok('a gaveta é "O que fazer hoje", só com ação, em grupos', r.gaveta && r.gaveta.titulo === 'O que fazer hoje' && r.gaveta.semPanorama && r.gaveta.grupos.join() === 'Urgente,Esta semana,Em dia'
+    && r.gaveta.itens.some(x => /parcela de obra em atraso/.test(x) && /cobrar →/.test(x)) && r.gaveta.itens.some(x => /no vermelho/.test(x)) && r.gaveta.itens.some(x => /1 proposta sem resposta há mais de 15 dias/.test(x) && /ligar →/.test(x)), J);
+  t.ok('cheque vencido sem baixa abre o Cheques já nos vencidos', /rmAbrir\('cheques','vencidos'\)/.test(r.gaveta && r.gaveta.cheque) && JSON.stringify(r.filtro) === '[{"rm":"filtro","filtro":"vencidos"}]', J);
+  t.ok('resumo da semana na tela inicial (no lugar do "Precisa de você" e dos "Próximos 15 dias")', r.resumo && r.resumo.vis && r.resumo.titulo === 'Resumo da semana' && r.resumo.semVenc
+    && /19\/10 a domingo, 25\/10/.test(r.resumo.per) && r.resumo.linhas[0] === 'Entra R$ 190 mil' && r.resumo.linhas[1] === 'Sai R$ 20 mil', J);
+  t.ok('trocar o período refaz os indicadores (ano: a proposta parada há mais de 60 dias vira "sem retorno")', r.ano && r.ano.periodo === 'ano' && r.ano.on === 'Ano' && /Sem retorno1/.test(r.ano.funil.replace(/ (?=1 ·)/, '')), J);
+  t.ok('saldo do banco informado: a linha vira o saldo previsto', /saldo em conta R\$ 50 mil \(21\/10\)/.test(r.saldo) && /Saldo previsto/.test(r.saldo), J);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
+teste('indicadores-sistemas', async (b, t) => {
+  // o que os sistemas passaram a fazer para os indicadores da Central:
+  // Propostas grava o resumo leve e a data em que fechou; Compras exige a
+  // categoria e abre nas "sem categoria"; Cheques abre nos vencidos.
+  if (fs.existsSync(path.join(RAIZ, 'propostas_rm'))) {
+    const { ctx, pg, erros } = await abre(b, { 'sis.local': 'propostas_rm' }, 'index.html', { relogio: '2026-10-20T12:00:00-03:00', fuso: 'America/Sao_Paulo' });
+    await semLogin(pg);
+    const r = await pg.evaluate(async (FICT) => {
+      const esp = ms => new Promise(x => setTimeout(x, ms));
+      await iniciarApp();
+      const gravou = []; fbDB = { ref: p => ({ set: async v => { gravou.push([p, JSON.parse(JSON.stringify(v))]); }, remove: async () => { }, on() { }, off() { } }) }; fbAuthReady = true;
+      const d = eval(FICT); d.numero = '2026-031'; d.data = '2026-10-10'; docs[d.id] = d; abrir(d.id); await esp(50);
+      const sel = document.getElementById('docStatus'); sel.value = 'aprovada'; sel.dispatchEvent(new Event('change')); await esp(2300);
+      const res = gravou.filter(x => /\/resumo$/.test(x[0])).pop();
+      const linha = res && res[1][d.id];
+      sel.value = 'negociacao'; sel.dispatchEvent(new Event('change')); await esp(10);
+      return { linha, ap: d.aprovadaEm === undefined, total: totalProposta(d) };
+    }, PROP_FICT).catch(e => ({ erro: e.message }));
+    const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+    t.ok('Propostas grava o resumo leve (situação, valor, data, cliente) e a data em que fechou', r.linha && r.linha.s === 'aprovada' && r.linha.t === r.total && r.linha.d === '2026-10-10'
+      && r.linha.c === 'Cliente Fictício Ltda' && r.linha.ap === '2026-10-20' && r.ap, J);
+    t.ok('Propostas: sem erro na página', !erros.length, erros.join(' | '));
+    await ctx.close();
+  }
+  if (fs.existsSync(path.join(RAIZ, 'controle_compras'))) {
+    const { ctx, pg, erros } = await abre(b, { 'sis.local': 'controle_compras' });
+    await semLogin(pg);
+    const r = await pg.evaluate(async () => {
+      const esp = ms => new Promise(x => setTimeout(x, ms));
+      DB.compras = [{ id: 'a', fornecedor: 'Loja Exemplo', descricao: 'Item exemplo', valor: 100, categoria: '', dataCompra: '2026-10-01', parcelas: [{ venc: '', valor: 100, pago: true }] },
+        { id: 'b', fornecedor: 'Usina Exemplo', descricao: 'Aço exemplo', valor: 200, categoria: 'Matéria-prima', dataCompra: '2026-10-02', parcelas: [{ venc: '', valor: 200, pago: true }] }];
+      render();
+      const alertas = []; window.alert = m => alertas.push(m);
+      openForm(); await esp(20);
+      document.getElementById('i_forn').value = 'Loja Exemplo'; document.getElementById('i_desc').value = 'Outro item'; document.getElementById('i_valor').value = '50'; document.getElementById('i_cat').value = '';
+      const antes = DB.compras.length; saveForm();
+      const barrou = DB.compras.length === antes && /categoria/.test(alertas.join(' '));
+      try { closeForm(); } catch (e) { }
+      window.postMessage({ rm: 'filtro', filtro: 'sem-categoria' }, '*'); await esp(60);
+      return { barrou, filtro: document.getElementById('fCat').value, lista: filterCompras(DB.compras, currentFilters()).map(c => c.id) };
+    }).catch(e => ({ erro: e.message }));
+    const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+    t.ok('Compras: não salva sem categoria', r.barrou, J);
+    t.ok('Compras: a Central abre já nas "sem categoria"', r.filtro === '(sem categoria)' && JSON.stringify(r.lista) === '["a"]', J);
+    await ctx.close();
+  }
+  if (fs.existsSync(path.join(RAIZ, 'controle_cheques'))) {
+    const { ctx, pg, erros } = await abre(b, { 'sis.local': 'controle_cheques' }, 'index.html', { relogio: '2026-10-17T15:00:00Z', fuso: 'America/Sao_Paulo' });
+    await semLogin(pg);
+    const r = await pg.evaluate(async () => {
+      const esp = ms => new Promise(x => setTimeout(x, ms));
+      db = { lotes: [{ id: 'L1', cliente: 'CLIENTE EXEMPLO', data: '2026-09-01', criadoEm: 1 }], cheques: [
+        { id: 'v', loteId: 'L1', numero: '1', valor: 100, bomPara: '2026-10-01', status: 'carteira', hist: [] },
+        { id: 'f', loteId: 'L1', numero: '2', valor: 100, bomPara: '2026-11-01', status: 'carteira', hist: [] }] };
+      ui.status = ''; ui.tab = 'lotes'; render();
+      window.postMessage({ rm: 'filtro', filtro: 'vencidos' }, '*'); await esp(60);
+      return { status: ui.status, tab: ui.tab, nums: [...document.querySelectorAll('#content .ch-num')].map(x => x.textContent.trim()) };
+    }).catch(e => ({ erro: e.message }));
+    t.ok('Cheques: a Central abre já nos vencidos', r.status === 'vencidos' && r.tab === 'todos' && JSON.stringify(r.nums) === '["1"]', JSON.stringify(r) + ' ' + erros.join(' | '));
+    await ctx.close();
+  }
+});
+
 teste('propostas-nuvem', async (b, t) => {
   // cada proposta no seu nó (quem grava o banco inteiro apaga o do outro);
   // gravação recusada avisa e a alteração fica guardada para subir depois;

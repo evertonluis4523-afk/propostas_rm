@@ -435,6 +435,21 @@ Tudo que imprime segue a mesma papelaria:
   junto, e as abas de sistema abertas também fecham: a próxima pessoa no
   mesmo programa não vê nada da anterior. Testes `central-enxuta-arquiteta`
   e `central-troca-de-conta-fecha-abas`.
+- Painel da Central: a tela inicial tem o "Resumo da semana" (o que entra
+  e sai na semana e os pontos de atenção) e os Indicadores (período com
+  comparação ao anterior, fluxo de caixa de 8 semanas, funil das propostas,
+  recebimento das obras, a pagar, PU, compras por categoria); a gaveta
+  lateral é "O que fazer hoje", só com o que pede ação. Cor com significado
+  fixo: verde bom, laranja atenção, vermelho problema, azul informação.
+  O que os sistemas fazem para isso:
+  - o Propostas grava um resumo leve de cada proposta em
+    `propostas_rm/resumo` (situação, valor, datas, cliente; a lixeira fica
+    de fora) e a data em que fechou (`aprovadaEm`); a Central lê só isso;
+  - o Compras exige a categoria da compra;
+  - a Central abre um sistema já filtrado pela mensagem
+    `{rm:'filtro', filtro:'...'}` (`vencidos` no Cheques, `sem-categoria` no
+    Compras); sistema que não conhece o filtro só abre normal.
+  Testes `central-indicadores` e `indicadores-sistemas`.
 - A cópia automática (backup) só roda com a conta que lê o banco inteiro
   (a do dono). Com outra conta no programa ela espera, sem marcar falha e
   sem gravar cópia pela metade. Teste `backup-pagina-ao-fechar-e-atrasado`.
