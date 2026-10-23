@@ -13043,6 +13043,14 @@ teste('propostas-extensao-cenas', async (b, t) => {
     // continuava escuro mesmo esperando: o fundo transparente vira opção, o padrão é branco
     t.ok('fundo branco: branco ao gravar, sem transparência, e o fundo de antes volta', tem('S'), saida);
     t.ok('Diagnóstico: a vista atual de 8 formas, uma diferença por vez, e o .txt do que estava ligado', tem('T'), saida);
+    // "não gerou nem um relatório": o .txt só era gravado no fim, e os nomes tinham acento
+    t.ok('Diagnóstico: relatório antes da 1ª imagem; com erro em tudo e pasta sem gravar, vai para a pasta do usuário', tem('U'), saida);
+    // a imagem saía com 1/4 do brilho (o branco virava 64), mesmo sem suavizar, só
+    // quando maior que a tela; o Exportar 2D no tamanho da tela saía certo
+    t.ok('só a suavização escurece: percebe na 1ª imagem, regrava sem suavizar, segue sem e avisa', tem('W'), saida);
+    t.ok('placa boa: suavizada em todas, sem regravar', tem('X'), saida);
+    t.ok('maior que a tela escurece: tenta sem suavizar, depois no tamanho da tela (na proporção da cena) e segue nele', tem('Y'), saida);
+    t.ok('escura de todo jeito: tenta só na 1ª, segue como escolhido e manda rodar o Diagnóstico', tem('Z'), saida);
   } else t.ok('ruby instalado para testar a extensão (pulado)', true);
   // o .rbz baixado é exatamente o código do repositório, e a versão é uma só
   const lista = cp.execSync('unzip -l ' + JSON.stringify(path.join(raiz, 'RM_Cenas.rbz'))).toString();
