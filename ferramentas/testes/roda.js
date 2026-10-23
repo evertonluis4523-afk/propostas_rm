@@ -13040,6 +13040,9 @@ teste('propostas-extensao-cenas', async (b, t) => {
     t.ok('erro no meio da espera: avisa o erro e devolve o modelo como estava', tem('Q'), saida);
     // no SketchUp, um aviso aberto dentro do relógio fazia ele disparar de novo
     t.ok('o aviso do fim aparece uma vez só e cada cena é gravada uma vez', tem('R'), saida);
+    // continuava escuro mesmo esperando: o fundo transparente vira opção, o padrão é branco
+    t.ok('fundo branco: branco ao gravar, sem transparência, e o fundo de antes volta', tem('S'), saida);
+    t.ok('Diagnóstico: a vista atual de 8 formas, uma diferença por vez, e o .txt do que estava ligado', tem('T'), saida);
   } else t.ok('ruby instalado para testar a extensão (pulado)', true);
   // o .rbz baixado é exatamente o código do repositório, e a versão é uma só
   const lista = cp.execSync('unzip -l ' + JSON.stringify(path.join(raiz, 'RM_Cenas.rbz'))).toString();
