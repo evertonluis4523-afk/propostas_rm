@@ -13063,6 +13063,51 @@ teste('propostas-extensao-cenas', async (b, t) => {
   t.ok('a aba Imagens tem o link para baixar a extensão, com a mesma versão', /href="sketchup\/RM_Cenas\.rbz"/.test(html) && !!vLoader && vLoader === vMain && vMain === vTela, JSON.stringify({ vLoader, vMain, vTela }));
 });
 
+teste('cheques-vencidos', async (b, t) => {
+  // "Opção também de status vencidos": ver os cheques em carteira cujo bom para
+  // já passou e marcar, um a um, os que foram depositados.
+  if (!fs.existsSync(path.join(RAIZ, 'controle_cheques'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'controle_cheques' }, 'index.html', { relogio: '2026-10-17T15:00:00Z', fuso: 'America/Sao_Paulo' });
+  await semLogin(pg);
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    db = { lotes: [{ id: 'L1', cliente: 'CLIENTE EXEMPLO', desc: '', data: '2026-09-01', criadoEm: 1 }], cheques: [
+      { id: 'v1', loteId: 'L1', numero: '101', emitente: 'Emitente Fictício A', valor: 100, bomPara: '2026-10-10', status: 'carteira', hist: [] },
+      { id: 'v2', loteId: 'L1', numero: '102', emitente: 'Emitente Fictício B', valor: 250, bomPara: '2026-09-05', status: 'carteira', hist: [] },
+      { id: 'f1', loteId: 'L1', numero: '103', valor: 300, bomPara: '2026-10-20', status: 'carteira', hist: [] },
+      { id: 'f2', loteId: 'L1', numero: '104', valor: 400, bomPara: '', status: 'carteira', hist: [] },
+      { id: 'f3', loteId: 'L1', numero: '105', valor: 500, bomPara: '2026-09-01', status: 'repassado', fornecedor: 'F', hist: [] },
+      { id: 'f4', loteId: 'L1', numero: '106', valor: 600, bomPara: '2026-09-01', status: 'depositado', hist: [] }] };
+    ui.status = ''; ui.tab = 'lotes'; render();
+    const opcao = [...document.querySelectorAll('#fStatus option')].some(o => o.value === 'vencidos');
+    const nums = () => [...document.querySelectorAll('#content .ch-num')].map(x => x.textContent.trim());
+    // o card "Vencidos em carteira" abre a lista dos vencidos, do mais antigo
+    const card = [...document.querySelectorAll('#cards .card')].find(c => /Vencidos em carteira/i.test(c.textContent));
+    card && card.click(); await esp(20);
+    const aberto = { status: ui.status, sel: document.getElementById('fStatus').value, tab: ui.tab, nums: nums() };
+    // "Foi depositado" na linha: a data vem do bom para
+    const bt = [...document.querySelectorAll('#content tr')].find(tr => /101/.test(tr.textContent))?.querySelector('.ch-foidep');
+    bt && bt.click(); await esp(20);
+    const dataSugerida = document.getElementById('aData')?.value;
+    document.getElementById('actConfirm').click(); await esp(30);
+    const v1 = db.cheques.find(c => c.id === 'v1');
+    const depois = { nums: nums(), v1: [v1.status, v1.depositadoEm], card: card ? document.querySelector('#cards .card.danger .sub').textContent : '' };
+    // escolher "Vencidos" pelo filtro também funciona (e não pega o que não está em carteira)
+    ui.status = ''; document.getElementById('fStatus').value = 'vencidos'; app.onFilter();
+    const peloFiltro = nums();
+    return { opcao, temCard: !!card, aberto, dataSugerida, depois, peloFiltro, semBotaoNoNaoVencido: !document.querySelector('#content .ch-foidep[onclick*="f1"]') };
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  t.ok('o filtro de status tem "Vencidos"', r.opcao, J);
+  t.ok('o card "Vencidos em carteira" abre a lista dos vencidos (todos os cheques, do mais antigo)', r.temCard && r.aberto && r.aberto.status === 'vencidos' && r.aberto.sel === 'vencidos' && r.aberto.tab === 'todos' && JSON.stringify(r.aberto.nums) === '["102","101"]', J);
+  t.ok('só entra o que está em carteira com bom para passado (sem data, a vencer, repassado e depositado ficam fora)', r.aberto && r.aberto.nums.length === 2, J);
+  t.ok('"Foi depositado" na linha: a data já vem a do bom para', r.dataSugerida === '2026-10-10', J);
+  t.ok('depois de depositar, o cheque sai dos vencidos e o card diminui', r.depois && r.depois.v1[0] === 'depositado' && r.depois.v1[1] === '2026-10-10' && JSON.stringify(r.depois.nums) === '["102"]' && /^1 cheque/.test(r.depois.card), J);
+  t.ok('escolher "Vencidos" no filtro mostra o mesmo', JSON.stringify(r.peloFiltro) === '["102"]', J);
+  t.ok('sem erro na página', erros.length === 0, erros.join(' | '));
+  await ctx.close();
+});
+
 teste('propostas-nuvem', async (b, t) => {
   // cada proposta no seu nó (quem grava o banco inteiro apaga o do outro);
   // gravação recusada avisa e a alteração fica guardada para subir depois;
