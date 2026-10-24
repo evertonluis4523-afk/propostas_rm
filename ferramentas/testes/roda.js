@@ -13389,16 +13389,28 @@ teste('recibos-publica-resultados', async (b, t) => {
     state.rescisoes = [{ ts: new Date('2026-10-14T12:00:00').getTime() }];
     state.pfPontos = { f1: { '2026-10': { '2026-10-01': { e: '07:00' } }, '2026-09': {} }, f2: { '2026-10': { '2026-10-02': { e: '07:00' } } } };
     state.epiMovimentos = { m1: { confirmadoEm: '2026-10-03T13:00:00.000Z' }, m2: { status: 'pendente' } };
+    state.fichasAdm = { f1: { criadaEm: '2026-10-03T13:00:00.000Z' } };
+    state.entrevistas = { e1: { criadaEm: '2026-10-04T13:00:00.000Z' }, e2: { criadaEm: '2026-09-02T13:00:00.000Z' } };
+    state.assiduidade = { '2026-10': { faltou: { a: true }, assid: {} }, '2026-09': { faltou: {}, assid: {} } };
+    state.bancoHoras = { '2026-10': { a: { faltas: [{ h: 2 }], recuperacoes: [] }, b: { faltas: [], recuperacoes: [] } } };
     const m = contagemResultados();
-    const gravou = []; fb = { db: { ref: p => ({ set: v => { gravou.push([p, JSON.parse(JSON.stringify(v))]); return Promise.resolve(); } }) } };
+    const gravou = [], marcas = []; fb = { db: { ref: p => ({ update: v => { gravou.push([p, JSON.parse(JSON.stringify(v))]); return Promise.resolve(); },
+      set: v => { marcas.push([p, v]); return Promise.resolve(); } }) } };
     contabilPublicado = true; agendarResultados(); await esp(3300);
     agendarResultados(); await esp(3300);
-    return { m, gravou };
+    // documentos do RH que não ficam guardados: um por documento e dia
+    infoImpressao('Advertência · Funcionário Exemplo', ['Advertência']); infoImpressao('Advertência · Funcionário Exemplo', ['Advertência']);
+    infoImpressao('Pedido de demissão · Funcionário Exemplo', ['Pedido']); infoImpressao('Recibo cliente · Cliente Exemplo', ['Recibo']);
+    return { m, gravou, marcas };
   }).catch(e => ({ erro: e.message }));
   const J = JSON.stringify(r) + ' ' + erros.join(' | ');
-  t.ok('conta por mês: recibos (pagamento + adiantamento), terceiros, rescisão, cartão PF e EPI', r.m && JSON.stringify(r.m['2026-10']) === '{"pag":9,"terc":2,"resc":1,"pf":2,"epi":1}'
-    && JSON.stringify(r.m['2026-09']) === '{"pag":6,"terc":0,"resc":0,"pf":0,"epi":0}', J);
-  t.ok('publica em recibos_resultados e não regrava a mesma contagem', r.gravou && r.gravou.length === 1 && r.gravou[0][0] === 'recibos_resultados' && r.gravou[0][1]['2026-10'].pag === 9, J);
+  t.ok('conta por mês: recibos, terceiros, rescisão, cartão PF, EPI, ficha de admissão, entrevista, assiduidade e banco de horas', r.m
+    && JSON.stringify(r.m['2026-10']) === '{"pag":9,"terc":2,"resc":1,"pf":2,"epi":1,"fadm":1,"entrev":1,"assid":1,"bh":1}'
+    && JSON.stringify(r.m['2026-09']) === '{"pag":6,"terc":0,"resc":0,"pf":0,"epi":0,"fadm":0,"entrev":1,"assid":0,"bh":0}', J);
+  t.ok('publica em recibos_resultados (sem apagar os documentos contados) e não regrava a mesma contagem', r.gravou && r.gravou.length === 1 && r.gravou[0][0] === 'recibos_resultados' && r.gravou[0][1]['2026-10'].pag === 9, J);
+  const mk = (r.marcas || []).map(x => x[0]);
+  t.ok('documento do RH aberto para imprimir conta um por documento e dia (recibo de cliente não)', mk.length === 3 && mk.every(p => /^recibos_resultados\/_emitidos\/\d{4}-\d{2}\/d[0-9a-z]+$/.test(p))
+    && mk[0] === mk[1] && mk[2] !== mk[0], J);
   t.ok('sem erro na página', !erros.length, erros.join(' | '));
   await ctx.close();
 });
@@ -13543,6 +13555,92 @@ teste('maquinas-publica-resultados', async (b, t) => {
     && JSON.stringify(r.vazio['2026-09']) === '{"mov":0,"conf":1,"termo":0}' && r.cheio && r.cheio['2026-10'].mov === 3, J);
   t.ok('sem erro na página', !erros.length, erros.join(' | '));
   await ctx.close();
+});
+
+teste('central-meus-resultados-todas-as-fontes', async (b, t) => {
+  // "Falta algum sistema?" -- entram os documentos do Recibos (ficha de
+  // admissão, entrevista, documento do RH, assiduidade, banco de horas),
+  // a estrutura metálica, a planificação, o pré-moldado, o pedido de
+  // esquadrias, as imagens da obra, os documentos, etiquetas e lembretes
+  // da Central. Dados fictícios; hoje = 21/10/2026.
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'central_rm' }, 'index.html', { relogio: '2026-10-21T15:00:00Z', fuso: 'America/Sao_Paulo' });
+  const r = await pg.evaluate(async () => {
+    const T = window.__resTeste; if (!T) return { erro: 'sem __resTeste' };
+    const ms = s => new Date(s + 'T12:00:00-03:00').getTime();
+    _lembretes = { l1: { text: 'Lembrete exemplo', createdAt: ms('2026-10-02') }, l2: { text: 'Outro', createdAt: ms('2026-09-02') } };
+    T.dados({
+      recres: { '2026-10': { pag: 0, fadm: 2, entrev: 3, assid: 1, bh: 4 }, _emitidos: { '2026-10': { d1: 1, d2: 1 } } },
+      prop: { a: { d: '2026-09-01', im: [ms('2026-10-05'), ms('2026-10-06'), ms('2026-09-01')] } },
+      orc: { o1: { ts: ms('2026-10-02'), quote: { esquadrias: [{ tipo: 'Janela' }] } } },
+      corte: { det: { '2026-10': 1 }, pln: { '2026-10': 2 } },
+      metal: { m1: { criadoEm: '2026-10-08T13:00:00.000Z' } },
+      pmres: { '2026-10': { c1: 1, c2: 1, c3: 1 } },
+      docs: { x1: { criadoEm: ms('2026-10-09') } },
+      etq: { '2026-10': { l1: 12 } }, meus: null });
+    const o = { c: T.contagemMes('2026-10') };
+    // o formato antigo do resumo do Leitor (só os detalhamentos) continua valendo
+    T.dados({ corte: { '2026-10': 3 }, meus: null }); o.antigo = T.contagemMes('2026-10');
+    return o;
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r).slice(0, 2500) + ' ' + erros.join(' | ');
+  const ord = x => JSON.stringify(Object.keys(x || {}).sort().map(c => [c, x[c]]));
+  t.ok('conta todas as fontes novas', !r.erro && ord(r.c) === ord({ fadm: 2, entrev: 3, assid: 1, bh: 4, doc_rh: 2, img: 2, orcamento: 1, esq: 1, detalhamento: 1, pln: 2, metal: 1, pm: 3, doc: 1, etiq: 1, lemb: 1 }), J);
+  t.ok('o resumo antigo do Leitor (só detalhamentos) continua contando', !r.erro && ord(r.antigo) === ord({ detalhamento: 3, lemb: 1 }), J);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
+teste('fontes-publicam-resultados', async (b, t) => {
+  // Leitor DWG (planificação), Pré-moldados (cálculo impresso), Propostas
+  // (data de cada imagem) e Etiquetas da Central (lote impresso) registram
+  // só a marca para o "Meus resultados". Dados fictícios.
+  if (fs.existsSync(path.join(RAIZ, 'leitor_dwg'))) {
+    const { ctx, pg, erros } = await abre(b, { 'sis.local': 'leitor_dwg' });
+    const r = await pg.evaluate(() => {
+      const ms = s => new Date(s + 'T12:00:00').getTime();
+      localStorage.setItem('rm_pln_projetos_v1', JSON.stringify([{ nome: 'Projeto A', em: ms('2026-10-06') }, { nome: 'Projeto B', em: ms('2026-10-09') }, { nome: 'Projeto C', em: ms('2026-08-01') }, { nome: 'Sem data' }]));
+      return typeof window.__corteResumoPln === 'function' ? window.__corteResumoPln() : { erro: 'sem __corteResumoPln' };
+    }).catch(e => ({ erro: e.message }));
+    t.ok('Leitor DWG: planificação conta no mês em que o projeto foi salvo', JSON.stringify(r) === '{"2026-10":2,"2026-08":1}', JSON.stringify(r) + ' ' + erros.join(' | '));
+    await ctx.close();
+  }
+  if (fs.existsSync(path.join(RAIZ, 'calculo_pre_moldados'))) {
+    const { ctx, pg, erros } = await abre(b, { 'sis.local': 'calculo_pre_moldados' });
+    const r = await pg.evaluate(() => {
+      const gravou = []; fbDB = { ref: p => ({ set: v => { gravou.push([p, v]); return Promise.resolve(); }, update: () => Promise.resolve(), on() { }, off() { } }) }; fbAuthReady = true;
+      window.dispatchEvent(new Event('beforeprint')); window.dispatchEvent(new Event('afterprint'));
+      window.dispatchEvent(new Event('beforeprint')); window.dispatchEvent(new Event('afterprint'));
+      return gravou.filter(x => /^pre_moldados\/resumo\//.test(x[0]));
+    }).catch(e => ({ erro: e.message }));
+    t.ok('Pré-moldados: imprimir registra o cálculo, uma vez por cálculo e dia', Array.isArray(r) && r.length === 2 && /^pre_moldados\/resumo\/\d{4}-\d{2}\/c[0-9a-z]+$/.test(r[0][0]) && r[0][0] === r[1][0] && r[0][1] === 1, JSON.stringify(r) + ' ' + erros.join(' | '));
+    t.ok('Pré-moldados: sem erro na página', !erros.length, erros.join(' | '));
+    await ctx.close();
+  }
+  if (fs.existsSync(path.join(RAIZ, 'propostas_rm'))) {
+    const { ctx, pg, erros } = await abre(b, { 'sis.local': 'propostas_rm' });
+    await semLogin(pg);
+    const r = await pg.evaluate(async (FICT) => {
+      await iniciarApp();
+      const d = eval(FICT); d.imgs = { itens: [{ id: 'imA', em: 1761000000000 }, { id: 'imB' }] };
+      return resumoDoc(d).im;
+    }, PROP_FICT).catch(e => ({ erro: e.message }));
+    t.ok('Propostas: o resumo leva quando cada imagem da obra entrou', JSON.stringify(r) === '[1761000000000]', JSON.stringify(r) + ' ' + erros.join(' | '));
+    await ctx.close();
+  }
+  {
+    const { ctx, pg, erros } = await abre(b, { 'sis.local': 'central_rm' });
+    const r = await pg.evaluate(() => {
+      const gravou = []; firebase.database = () => ({ ref: p => ({ set: v => { gravou.push([p, v]); return Promise.resolve(); } }) });
+      window.rmImprimirHTML = () => true;
+      const E = window.__etqTeste; if (!E || !E.imprimir) return { erro: 'sem imprimir' };
+      const lista = [{ nome: 'Item exemplo', qtd: 2 }, { nome: 'Outro item', qtd: 1 }, { nome: '' }];
+      E.imprimir(lista); E.imprimir(lista);
+      return gravou;
+    }).catch(e => ({ erro: e.message }));
+    t.ok('Etiquetas: cada lote impresso conta uma vez por dia, com quantas etiquetas', Array.isArray(r) && r.length === 2 && /^rm_documentos\/etiquetas\/\d{4}-\d{2}\/l[0-9a-z]+$/.test(r[0][0]) && r[0][0] === r[1][0] && r[0][1] === 2, JSON.stringify(r) + ' ' + erros.join(' | '));
+    t.ok('Central: sem erro na página', !erros.length, erros.join(' | '));
+    await ctx.close();
+  }
 });
 
 teste('propostas-nuvem', async (b, t) => {

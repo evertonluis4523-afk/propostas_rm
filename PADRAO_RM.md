@@ -465,12 +465,21 @@ Tudo que imprime segue a mesma papelaria:
   as datas das revisões (`rv`); o Leitor DWG grava em
   `corte_estruturas/resumo` quantos detalhamentos houve por mês (cada obra
   uma vez); o Estoque de Máquinas grava em `maquinas_rm/resumo` as
-  conferências, movimentos e termos do mês. A espera pela cotação dos
+  conferências, movimentos e termos do mês (e o Leitor, os projetos de
+  planificação, em `corte_estruturas/resumo/pln`). O Recibos conta também
+  ficha de admissão, entrevista, assiduidade e banco de horas, e marca em
+  `recibos_resultados/_emitidos` cada documento do RH aberto para imprimir;
+  o Pré-moldados marca cada cálculo impresso em `pre_moldados/resumo`; as
+  Etiquetas, cada lote em `rm_documentos/etiquetas` (um por documento e
+  dia, só a marca). A Central lê ainda a estrutura metálica, os documentos
+  arquivados, os pedidos de esquadrias, as imagens das propostas e os
+  lembretes do dono. A espera pela cotação dos
   fornecedores (antes do banco de preços) conta em dias de prazo, não em
   horas. Atividade nova entra na lista `ATIV` da Central, sempre com uma
   fonte que se conta sozinha. Testes `central-meus-resultados`,
   `central-meus-resultados-fontes`, `recibos-publica-resultados`,
-  `corte-publica-resultados` e `maquinas-publica-resultados`.
+  `corte-publica-resultados`, `maquinas-publica-resultados`,
+  `central-meus-resultados-todas-as-fontes` e `fontes-publicam-resultados`.
 - Salvos do Orçamento RM: a lista e, ao lado, a prévia do orçamento
   escolhido (cabeçalho, itens, fretes, desconto, total, chave na mão,
   esquadrias), sem trocar o orçamento aberto; "Editar orçamento" abre na
