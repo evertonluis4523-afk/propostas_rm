@@ -450,6 +450,21 @@ Tudo que imprime segue a mesma papelaria:
     `{rm:'filtro', filtro:'...'}` (`vencidos` no Cheques, `sem-categoria` no
     Compras); sistema que não conhece o filtro só abre normal.
   Testes `central-indicadores` e `indicadores-sistemas`.
+- "Meus resultados" (Central, só na conta do dono): horas e valores
+  economizados com os sistemas, contados sozinhos do que cada um registrou.
+  Cada atividade tem o tempo de antes (Word, Excel, papel) e o tempo no
+  sistema; horas = vezes × (antes − no sistema); a hora vale salário ÷
+  horas do mês, tudo editável em "Valores de referência". Mais a multa
+  evitada (estimativa, pode desligar) e os cheques vencidos depositados.
+  O período em curso aparece como parcial (sem comparação). Nós:
+  `central_resultados` (só o dono lê e grava: a configuração e a contagem
+  de cada mês fechado, que não diminui se algo for apagado depois) e
+  `recibos_resultados` (o Recibos publica só a contagem do mês: recibos,
+  terceiros, rescisões, cartões PF e fichas de EPI -- nenhum nome nem
+  valor). O Propostas leva no resumo quando a proposta foi criada (`cr`) e
+  as datas das revisões (`rv`). Atividade nova entra na lista `ATIV` da
+  Central, sempre com uma fonte que se conta sozinha. Testes
+  `central-meus-resultados` e `recibos-publica-resultados`.
 - A cópia automática (backup) só roda com a conta que lê o banco inteiro
   (a do dono). Com outra conta no programa ela espera, sem marcar falha e
   sem gravar cópia pela metade. Teste `backup-pagina-ao-fechar-e-atrasado`.

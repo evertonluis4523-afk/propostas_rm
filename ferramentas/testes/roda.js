@@ -13213,7 +13213,7 @@ teste('indicadores-sistemas', async (b, t) => {
       const esp = ms => new Promise(x => setTimeout(x, ms));
       await iniciarApp();
       const gravou = []; fbDB = { ref: p => ({ set: async v => { gravou.push([p, JSON.parse(JSON.stringify(v))]); }, remove: async () => { }, on() { }, off() { } }) }; fbAuthReady = true;
-      const d = eval(FICT); d.numero = '2026-031'; d.data = '2026-10-10'; docs[d.id] = d; abrir(d.id); await esp(50);
+      const d = eval(FICT); d.numero = '2026-031'; d.data = '2026-10-10'; d.criado = 1760000000000; d.revisoes = [{ rev: 0, em: 1761000000000, total: 1, json: '{}' }]; docs[d.id] = d; abrir(d.id); await esp(50);
       const sel = document.getElementById('docStatus'); sel.value = 'aprovada'; sel.dispatchEvent(new Event('change')); await esp(2300);
       const res = gravou.filter(x => /\/resumo$/.test(x[0])).pop();
       const linha = res && res[1][d.id];
@@ -13223,6 +13223,7 @@ teste('indicadores-sistemas', async (b, t) => {
     const J = JSON.stringify(r) + ' ' + erros.join(' | ');
     t.ok('Propostas grava o resumo leve (situação, valor, data, cliente) e a data em que fechou', r.linha && r.linha.s === 'aprovada' && r.linha.t === r.total && r.linha.d === '2026-10-10'
       && r.linha.c === 'Cliente Fictício Ltda' && r.linha.ap === '2026-10-20' && r.ap, J);
+    t.ok('Propostas: o resumo leva quando foi criada e as revisões (para o "Meus resultados")', r.linha && r.linha.cr === 1760000000000 && JSON.stringify(r.linha.rv) === '[1761000000000]', J);
     t.ok('Propostas: sem erro na página', !erros.length, erros.join(' | '));
     await ctx.close();
   }
@@ -13263,6 +13264,143 @@ teste('indicadores-sistemas', async (b, t) => {
     t.ok('Cheques: a Central abre já nos vencidos', r.status === 'vencidos' && r.tab === 'todos' && JSON.stringify(r.nums) === '["1"]', JSON.stringify(r) + ' ' + erros.join(' | '));
     await ctx.close();
   }
+});
+
+teste('central-meus-resultados', async (b, t) => {
+  // "Meus resultados": só no login do dono, contado sozinho a partir do que
+  // os sistemas registraram. Cada atividade × (tempo antes − tempo no
+  // sistema); a hora vale salário ÷ horas do mês (R$ 10.000 ÷ 220 = R$ 45,45).
+  // Mês fechado fica guardado em central_resultados/meses. Dados fictícios;
+  // hoje = 21/10/2026.
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'central_rm' }, 'index.html', { relogio: '2026-10-21T15:00:00Z', fuso: 'America/Sao_Paulo' });
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    const T = window.__resTeste; if (!T) return { erro: 'sem __resTeste' };
+    try { localStorage.clear(); } catch (e) { }
+    const ms = s => new Date(s + 'T12:00:00-03:00').getTime();
+    const dono = Object.keys(CENTRAL_ACCESS).find(k => CENTRAL_ACCESS[k] === null);
+    const gravou = []; let recusa = false;
+    firebase.database = () => ({ ref: p => ({
+      update: v => { gravou.push(['update', p, JSON.parse(JSON.stringify(v))]); return Promise.resolve(); },
+      set: v => recusa ? Promise.reject(new Error('PERMISSION_DENIED')) : (gravou.push(['set', p, JSON.parse(JSON.stringify(v))]), Promise.resolve()) }) });
+    const dados = {
+      prop: { a: { d: '2026-10-05', cr: ms('2026-10-05'), rv: [ms('2026-10-08'), ms('2026-09-30')], cd: '2026-10-12', c: 'Cliente Fictício A' },
+        b: { d: '2026-09-15', c: 'Cliente Fictício B' } },
+      orc: { o1: { ts: ms('2026-10-10') }, o2: { ts: ms('2026-10-11') } },
+      obras: { o1: { obra: 'Obra Exemplo', parcelas: [{ valor: 1, data: '2026-10-05', recebida: true }, { valor: 1, data: '2026-10-20' }], fornecedores: [{ dataNF: '2026-10-03' }] } },
+      recres: { '2026-10': { pag: 20, terc: 3, resc: 1, pf: 12, epi: 4 }, '2026-09': { pag: 10 }, '2026-08': { pag: 10 } },
+      contabil: { '2026-09': { enviadoEm: '2026-10-05' } },
+      almocos: { '2026-10': { f1: { valor: 100 }, f2: { valor: 200 } } },
+      contas: { k1: { pago: true, dataPagamento: '2026-10-10', venc: '2026-10-15', valor: 1000, criadoEm: ms('2026-10-01') },
+        k2: { pago: true, dataPagamento: '2026-10-20', venc: '2026-10-15', valor: 500, criadoEm: ms('2026-10-02') } },
+      compras: { c1: { criadoEm: ms('2026-10-03'), obs: '' }, c2: { criadoEm: ms('2026-10-04'), obs: 'Importado do orçamento · Cliente: Exemplo' } },
+      cheques: { cheques: { h1: { criadoEm: ms('2026-10-06'), bomPara: '2026-10-01', depositadoEm: '2026-10-09', valor: 5000, status: 'depositado' } } },
+      meus: null };
+    const txt = el => (el ? el.textContent : '').replace(/\s+/g, ' ');
+    const nav = () => document.querySelector('[data-res]'), vis = el => !!el && el.style.display !== 'none';
+    const o = {};
+    // quem não é o dono não vê
+    CURRENT_EMAIL = 'teste@exemplo.com'; T.dados(dados); T.ajusta(); window.showResultados(); await esp(20);
+    o.outro = { nav: vis(nav()), view: vis(document.getElementById('res-view')), gravou: gravou.length };
+    // o dono
+    CURRENT_EMAIL = dono; T.ajusta(); await esp(20);
+    o.donoNav = vis(nav());
+    o.out = T.contagemMes('2026-10'); o.set = T.contagemMes('2026-09'); o.din = T.dinheiroMes('2026-10');
+    window.showResultados(); await esp(30);
+    const v = document.getElementById('res-view');
+    o.view = { vis: vis(v), titulo: txt(document.getElementById('topbar-title')), ativo: nav().classList.contains('active'), dash: vis(document.getElementById('dashboard')) };
+    o.kpis = [...v.querySelectorAll('.ri-kpis > div')].map(txt);
+    o.pf = txt([...v.querySelectorAll('.res-t tbody tr')].find(x => /Cartão de ponto PF/.test(x.textContent)));
+    o.total = txt(v.querySelector('.res-t tfoot'));
+    o.per = txt(v.querySelector('.res-per')); o.sub = txt(v.querySelector('.res-sub'));
+    // o mês fechado anterior: aí sim a comparação (setembro × agosto)
+    window.rmResAnda(1); await esp(20);
+    o.setK = txt(v.querySelector('.ri-kpis > div')); o.setPer = txt(v.querySelector('.res-per'));
+    window.rmResAnda(-1); await esp(20);
+    // o mês fechado (setembro) fica guardado; o de agora não
+    await esp(50);
+    o.foto = gravou.filter(x => x[0] === 'update');
+    // a mesma contagem voltando do banco (chaves em outra ordem) não grava de novo
+    if (o.foto.length) {
+      const meses = {};
+      Object.entries(o.foto[0][2]).forEach(([k, f]) => { meses[k.slice(6)] = { em: f.em, cheq: { v: 0, n: 0 }, multa: { base: 0, n: 0 }, c: Object.fromEntries(Object.entries(f.c).reverse()) }; });
+      T.dados(Object.assign({}, dados, { meus: { meses } })); T.fotografar(); await esp(30);
+    }
+    o.fotoDeNovo = gravou.filter(x => x[0] === 'update').length;
+    // trimestre
+    window.rmResPeriodo('tri'); await esp(20);
+    o.tri = { on: txt(v.querySelector('.ri-chip.on')), per: txt(v.querySelector('.res-per')), sub: txt(v.querySelector('.res-sub')) };
+    window.rmResPeriodo('mes'); await esp(10);
+    // valores de referência: muda o salário e grava
+    window.rmResConfig(); await esp(10);
+    o.conf = !!v.querySelector('.res-conf');
+    document.getElementById('res-sal').value = '11.000'; document.getElementById('res-m-cartao_pf').value = '33';
+    window.rmResSalvar(); await esp(20);
+    o.cfg = gravou.filter(x => x[0] === 'set').pop();
+    o.kpis2 = [...v.querySelectorAll('.ri-kpis > div')].map(txt);
+    recusa = true; window.rmResConfig(); await esp(5); window.rmResSalvar(); await esp(30);
+    o.aviso = txt(document.getElementById('res-aviso'));
+    // imprimir
+    let papel = ''; window.rmImprimirHTML = h => { papel = h; return true; }; window.rmResImprimir();
+    o.papel = { titulo: /Resultados dos sistemas RM · outubro de 2026/.test(papel), tabela: /Cartão de ponto PF/.test(papel), botoes: /rmRes/.test(papel) };
+    // saiu a conta do dono: a tela fecha e o item some
+    CURRENT_EMAIL = 'teste@exemplo.com'; T.ajusta(); await esp(20);
+    o.saiu = { nav: vis(nav()), view: vis(v) };
+    return o;
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r).slice(0, 3000) + ' ' + erros.join(' | ');
+  const k = (r.kpis || []).join(' || ');
+  const ord = x => JSON.stringify(Object.keys(x || {}).sort().map(c => [c, x[c]]));
+  t.ok('quem não é o dono não vê o item nem abre a tela', r.outro && !r.outro.nav && !r.outro.view && r.outro.gravou === 0, J);
+  t.ok('o dono vê "Meus resultados" e abre como tela da Central', r.donoNav && r.view && r.view.vis && !r.view.dash && r.view.titulo === 'Meus resultados' && r.view.ativo, J);
+  t.ok('conta sozinha cada atividade do mês (proposta nova × revisão, contrato, orçamento, obra, Recibos, almoços, contas, compra × pedido importado, cheque)',
+    ord(r.out) === ord({ prop_nova: 1, prop_rev: 1, contrato: 1, orcamento: 2, obra_parc: 1, obra_nf: 1, recibo: 20, recibo_terc: 3, rescisao: 1, cartao_pf: 12, epi: 4, almoco_mes: 1, almoco_func: 2, conta: 2, compra: 1, pedido: 1, cheque: 1 })
+    && ord(r.set) === ord({ prop_nova: 1, prop_rev: 1, recibo: 10, contabil: 1 }), J);
+  t.ok('horas = vezes × (antes − no sistema); o mês em curso é parcial, o fechado compara com o anterior', /Horas economizadas\s*18 h\s*parcial/.test(k) && /setembro de 2026: 6,7 h/.test(k)
+    && /a 21\/10 \(parcial\)/.test(r.sub) && r.setPer === 'setembro de 2026' && /Horas economizadas\s*6,7 h\s*▲ 471%/.test(r.setK)
+    && /12\s*25\s*3\s*4,4 h/.test(r.pf) && /Total\s*18 h/.test(r.total) && r.per === 'outubro de 2026', J);
+  t.ok('valor da hora pelo salário: R$ 10.000 ÷ 220 h = R$ 45,45', /R\$\s*795,45/.test(k) && /R\$\s*45,45\/h/.test(k), J);
+  t.ok('multa evitada (estimativa, 2% das pagas até o vencimento) e cheque vencido depositado', /Multas evitadas \(estimativa\)\s*R\$\s*20,00\s*1 conta paga/.test(k) && /Cheques vencidos depositados\s*R\$\s*5\.000,00/.test(k)
+    && r.din && r.din.multa.n === 1 && r.din.cheq.n === 1, J);
+  const foto = (r.foto || [])[0];
+  t.ok('o mês fechado fica guardado (central_resultados/meses), o de agora não', foto && foto[1] === 'central_resultados' && JSON.stringify(Object.keys(foto[2]).sort()) === '["meses/2026-08","meses/2026-09"]'
+    && foto[2]['meses/2026-09'].c.contabil === 1 && foto[2]['meses/2026-09'].c.recibo === 10, J);
+  t.ok('a mesma contagem voltando do banco não grava de novo', r.fotoDeNovo === 1, J);
+  t.ok('trimestre: compara com o trimestre anterior', r.tri && r.tri.on === 'Trimestre' && r.tri.per === '4º trimestre de 2026' && /comparado com 3º trimestre de 2026/.test(r.tri.sub), J);
+  t.ok('valores de referência gravam no banco e refazem as contas', r.conf && r.cfg && r.cfg[1] === 'central_resultados/config' && r.cfg[2].salario === 11000 && r.cfg[2].min.cartao_pf.m === 33
+    && /R\$\s*50,00\/h/.test((r.kpis2 || []).join(' ')), J);
+  t.ok('banco sem a regra nova: avisa que não gravou', /regras do banco ainda não têm "central_resultados"/.test(r.aviso), J);
+  t.ok('imprime o relatório do período, sem os botões', r.papel && r.papel.titulo && r.papel.tabela && !r.papel.botoes, J);
+  t.ok('saiu a conta do dono: a tela fecha e o item some', r.saiu && !r.saiu.nav && !r.saiu.view, J);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
+teste('recibos-publica-resultados', async (b, t) => {
+  // o Recibos publica só a contagem do mês (recibos_resultados) para o
+  // "Meus resultados" da Central: recibos, terceiros, rescisões, cartões PF
+  // e fichas de EPI -- nenhum nome nem valor. Dados fictícios.
+  if (!fs.existsSync(path.join(RAIZ, 'recibos_rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'recibos_rm' });
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    state.historico = { a: { ano: 2026, mes: 9, tipo: 'pagamento', qtd: 5 }, b: { ano: 2026, mes: 9, tipo: 'adiantamento', qtd: 4 }, c: { ano: 2026, mes: 9, tipo: 'terceiros', qtd: 2 },
+      d: { ano: 2026, mes: 8, tipo: 'pagamento', qtd: 6 }, e: { ano: 2026, mes: 9, tipo: 'rescisao', qtd: 1 } };
+    state.rescisoes = [{ ts: new Date('2026-10-14T12:00:00').getTime() }];
+    state.pfPontos = { f1: { '2026-10': { '2026-10-01': { e: '07:00' } }, '2026-09': {} }, f2: { '2026-10': { '2026-10-02': { e: '07:00' } } } };
+    state.epiMovimentos = { m1: { confirmadoEm: '2026-10-03T13:00:00.000Z' }, m2: { status: 'pendente' } };
+    const m = contagemResultados();
+    const gravou = []; fb = { db: { ref: p => ({ set: v => { gravou.push([p, JSON.parse(JSON.stringify(v))]); return Promise.resolve(); } }) } };
+    contabilPublicado = true; agendarResultados(); await esp(3300);
+    agendarResultados(); await esp(3300);
+    return { m, gravou };
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  t.ok('conta por mês: recibos (pagamento + adiantamento), terceiros, rescisão, cartão PF e EPI', r.m && JSON.stringify(r.m['2026-10']) === '{"pag":9,"terc":2,"resc":1,"pf":2,"epi":1}'
+    && JSON.stringify(r.m['2026-09']) === '{"pag":6,"terc":0,"resc":0,"pf":0,"epi":0}', J);
+  t.ok('publica em recibos_resultados e não regrava a mesma contagem', r.gravou && r.gravou.length === 1 && r.gravou[0][0] === 'recibos_resultados' && r.gravou[0][1]['2026-10'].pag === 9, J);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
 });
 
 teste('propostas-nuvem', async (b, t) => {
