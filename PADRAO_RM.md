@@ -462,9 +462,20 @@ Tudo que imprime segue a mesma papelaria:
   `recibos_resultados` (o Recibos publica só a contagem do mês: recibos,
   terceiros, rescisões, cartões PF e fichas de EPI -- nenhum nome nem
   valor). O Propostas leva no resumo quando a proposta foi criada (`cr`) e
-  as datas das revisões (`rv`). Atividade nova entra na lista `ATIV` da
-  Central, sempre com uma fonte que se conta sozinha. Testes
-  `central-meus-resultados` e `recibos-publica-resultados`.
+  as datas das revisões (`rv`); o Leitor DWG grava em
+  `corte_estruturas/resumo` quantos detalhamentos houve por mês (cada obra
+  uma vez); o Estoque de Máquinas grava em `maquinas_rm/resumo` as
+  conferências, movimentos e termos do mês. A espera pela cotação dos
+  fornecedores (antes do banco de preços) conta em dias de prazo, não em
+  horas. Atividade nova entra na lista `ATIV` da Central, sempre com uma
+  fonte que se conta sozinha. Testes `central-meus-resultados`,
+  `central-meus-resultados-fontes`, `recibos-publica-resultados`,
+  `corte-publica-resultados` e `maquinas-publica-resultados`.
+- Salvos do Orçamento RM: a lista e, ao lado, a prévia do orçamento
+  escolhido (cabeçalho, itens, fretes, desconto, total, chave na mão,
+  esquadrias), sem trocar o orçamento aberto; "Editar orçamento" abre na
+  tela principal e "Revisar" abre como nova revisão. Teste
+  `orcamento-salvos-previa`.
 - A cópia automática (backup) só roda com a conta que lê o banco inteiro
   (a do dono). Com outra conta no programa ela espera, sem marcar falha e
   sem gravar cópia pela metade. Teste `backup-pagina-ao-fechar-e-atrasado`.

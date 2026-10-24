@@ -13403,6 +13403,148 @@ teste('recibos-publica-resultados', async (b, t) => {
   await ctx.close();
 });
 
+teste('orcamento-salvos-previa', async (b, t) => {
+  // "Acessar os orçamentos salvos me obriga a abrir na tela do orçamento
+  // principal, não me deixa ver ele na própria tela salva, nem uma prévia."
+  // Agora Salvos é um painel: a lista e, ao lado, o orçamento escolhido
+  // inteiro (itens, fretes, desconto, total). Ver não troca o orçamento
+  // aberto; "Editar orçamento" abre na tela principal e "Revisar" abre como
+  // nova revisão. Dados fictícios.
+  if (!fs.existsSync(path.join(RAIZ, 'orcamento-rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'orcamento-rm' });
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    window.confirm = () => true;
+    const txt = el => (el ? el.textContent : '').replace(/\s+/g, ' ');
+    S.orcamentosSalvos = [];
+    clearQuote(); await esp(30);
+    S.cliente = 'Cliente Fictício A'; S.obra = 'Galpão Exemplo'; S.validade = '15 dias'; initRender();
+    addPerfilLine(S.perfis[0].id); addPerfilLine(S.perfis[1].id); await esp(30);
+    salvarOrcamento(); await esp(60);
+    const A = S.orcamentosSalvos[0];
+    clearQuote(); await esp(30);
+    S.cliente = 'Cliente Fictício B'; initRender(); addPerfilLine(S.perfis[2].id); await esp(30);
+    salvarOrcamento(); await esp(60);
+    const B = S.orcamentosSalvos.find(e => e.id !== A.id);
+    // o orçamento aberto agora é outro, ainda sem salvar
+    clearQuote(); await esp(30);
+    S.cliente = 'Cliente Aberto'; initRender(); addPerfilLine(S.perfis[0].id); await esp(30);
+    const antes = JSON.stringify(snapshotQuote());
+    orcAba('salvos'); await esp(150);
+    const prev = () => document.getElementById('savedPrev');
+    const o = { lista: document.querySelectorAll('#savedList .saved-item').length };
+    o.primeiro = txt(prev());   // já mostra o mais novo (B)
+    // escolhe o A: a prévia mostra tudo dele, sem abrir
+    document.querySelector('#savedList .saved-item[data-sid="' + A.id + '"]').click(); await esp(60);
+    o.a = { txt: txt(prev()), linhas: prev().querySelectorAll('.sp-t tbody tr').length, sel: document.querySelector('#savedList .saved-item.sel').dataset.sid === A.id,
+      total: A.total, botoes: [...prev().querySelectorAll('.sp-acoes button')].map(x => x.textContent.trim()) };
+    o.intacto = JSON.stringify(snapshotQuote()) === antes && S.cliente === 'Cliente Aberto' && S.orcamentoAtualId === null;
+    o.aba = document.querySelector('.orc-tab.on').dataset.aba;
+    // Editar orçamento: abre o A na tela principal
+    [...prev().querySelectorAll('.sp-acoes button')].find(x => /Editar/.test(x.textContent)).click(); await esp(120);
+    o.editar = { aberto: S.orcamentoAtualId === A.id, cliente: S.cliente, aba: document.querySelector('.orc-tab.on').dataset.aba, n: S.linhasPerfil.length };
+    // Revisar o B: abre e já vira a revisão R1; o B fica guardado como estava
+    orcAba('salvos'); await esp(100);
+    document.querySelector('#savedList .saved-item[data-sid="' + B.id + '"]').click(); await esp(60);
+    [...prev().querySelectorAll('.sp-acoes button')].find(x => /Revisar/.test(x.textContent)).click(); await esp(150);
+    const rev = S.orcamentosSalvos.find(e => e.id === S.orcamentoAtualId) || {};
+    const b2 = S.orcamentosSalvos.find(e => e.id === B.id) || {};
+    o.revisar = { numero: rev.numero, base: B.numero, revDe: rev.revDe === B.id, subst: b2.substituidoPor === rev.id, cliente: S.cliente, n: S.orcamentosSalvos.length };
+    return o;
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r).slice(0, 2500) + ' ' + erros.join(' | ');
+  t.ok('Salvos abre já com a prévia do mais novo', !r.erro && r.lista === 2 && /Cliente Fictício B/.test(r.primeiro), J);
+  t.ok('escolher na lista mostra o orçamento inteiro ao lado (cabeçalho, itens, total)', !r.erro && r.a.sel && /Cliente Fictício A/.test(r.a.txt) && /Galpão Exemplo/.test(r.a.txt)
+    && /Validade 15 dias/.test(r.a.txt) && r.a.linhas === 2 && r.a.txt.includes(String(r.a.total).replace(/\s+/g, ' ')) && /Perfis 2/.test(r.a.txt), J);
+  t.ok('ver não troca o orçamento aberto nem sai da aba', !r.erro && r.intacto && r.aba === 'salvos', J);
+  t.ok('botões Editar orçamento e Revisar', !r.erro && JSON.stringify(r.a.botoes) === '["Editar orçamento","Revisar"]', J);
+  t.ok('Editar orçamento abre na tela principal', !r.erro && r.editar.aberto && r.editar.cliente === 'Cliente Fictício A' && r.editar.aba === 'orc' && r.editar.n === 2, J);
+  t.ok('Revisar abre como nova revisão e guarda a anterior', !r.erro && r.revisar.numero === r.revisar.base + ' R1' && r.revisar.revDe && r.revisar.subst && r.revisar.cliente === 'Cliente Fictício B' && r.revisar.n === 3, J);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
+teste('central-meus-resultados-fontes', async (b, t) => {
+  // "Detalhamento levava 3 dias, orçamento sem banco de dados precisava
+  // aguardar orçamento dos fornecedores, nos outros sistemas era a mesma
+  // coisa": entram o detalhamento do Leitor DWG, o chave na mão, o PU, os
+  // pedidos Perfitec e o Estoque de Máquinas, e a espera por cotação vira
+  // dias de prazo ganhos. Dados fictícios; hoje = 21/10/2026.
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'central_rm' }, 'index.html', { relogio: '2026-10-21T15:00:00Z', fuso: 'America/Sao_Paulo' });
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    const T = window.__resTeste; if (!T) return { erro: 'sem __resTeste' };
+    try { localStorage.clear(); } catch (e) { }
+    const ms = s => new Date(s + 'T12:00:00-03:00').getTime();
+    CURRENT_EMAIL = Object.keys(CENTRAL_ACCESS).find(k => CENTRAL_ACCESS[k] === null);
+    firebase.database = () => ({ ref: () => ({ update: () => Promise.resolve(), set: () => Promise.resolve() }) });
+    T.dados({
+      orc: { a: { ts: ms('2026-10-02'), quote: { linhasPerfil: [{ lid: 1 }] } },
+        b: { ts: ms('2026-10-03'), quote: { chaveMao: { cidade: 'Cidade Exemplo', servicos: [{ nome: 'Montagem', rm2: 10 }] } } },
+        c: { ts: ms('2026-10-04'), quote: { linhasTelha: [{ lid: 2 }], chaveMao: { m2: 500, servicos: [] } } },
+        d: { ts: ms('2026-10-05'), quote: { chaveMao: { cidade: '', m2: 0, servicos: [{ nome: 'Pintura' }] } } } },
+      corte: { '2026-10': 2, '2026-09': 1 },
+      pu: { p1: { criadoEm: '2026-10-03T13:00:00.000Z' }, p2: { criadoEm: '2026-08-03T13:00:00.000Z' } },
+      perfitec: { x1: { criadoEm: ms('2026-10-07') }, x2: { criadoEm: ms('2026-10-08') } },
+      maqres: { '2026-10': { conf: 1, mov: 3, termo: 2 } }, meus: null });
+    const o = { c: T.contagemMes('2026-10') };
+    const cfg = T.resCfg(), sp = T.somaPeriodoRes({ ini: '2026-10-01', fim: '2026-10-31' }, cfg);
+    o.espera = sp.espera; o.hDet = sp.horasK.detalhamento;
+    T.ajusta(); window.showResultados(); await esp(40);
+    o.kpis = [...document.querySelectorAll('#res-view .ri-kpis > div')].map(x => x.textContent.replace(/\s+/g, ' '));
+    o.det = [...document.querySelectorAll('#res-view .res-t tbody tr')].map(x => x.textContent.replace(/\s+/g, ' ')).find(x => /Detalhamento da obra/.test(x));
+    return o;
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r).slice(0, 2500) + ' ' + erros.join(' | ');
+  const ord = x => JSON.stringify(Object.keys(x || {}).sort().map(c => [c, x[c]]));
+  t.ok('conta orçamento com itens, chave na mão, detalhamento do Leitor, PU, Perfitec e Máquinas', !r.erro
+    && ord(r.c) === ord({ orcamento: 3, detalhe_cnm: 2, detalhamento: 2, pu: 1, perfitec: 2, maq_conf: 1, maq_mov: 3, maq_termo: 2 }), J);
+  t.ok('detalhamento: 3 dias (1.440 min) antes × 2 h no sistema', !r.erro && Math.abs(r.hDet - 44) < 1e-9 && /Leitor DWG\s*à mão, ~3 dias\s*2\s*1440\s*120\s*44 h/.test(r.det), J);
+  t.ok('espera por cotação evitada em dias (3 orçamentos × 2 dias)', !r.erro && r.espera === 6 && r.kpis.some(x => /Espera por cotação evitada\s*6 dias\s*3 orçamentos × 2 dias/.test(x)), J);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
+teste('corte-publica-resultados', async (b, t) => {
+  // o Leitor DWG publica só quantos detalhamentos houve em cada mês (cada
+  // obra conta uma vez, no mês em que foi salva pela primeira vez).
+  if (!fs.existsSync(path.join(RAIZ, 'leitor_dwg'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'leitor_dwg' });
+  const r = await pg.evaluate(() => {
+    const ms = s => new Date(s + 'T12:00:00').getTime();
+    localStorage.setItem('corteRM_obras', JSON.stringify([{ obra: 'Obra Exemplo A', date: ms('2026-10-06') }, { obra: 'Obra Exemplo A', date: ms('2026-10-05') },
+      { obra: 'obra exemplo a ', date: ms('2026-10-09') }, { obra: 'Obra Exemplo B', date: ms('2026-09-20') }, { obra: 'Obra Exemplo C', date: ms('2026-10-11') }]));
+    return typeof window.__corteResumo === 'function' ? window.__corteResumo() : { erro: 'sem __corteResumo' };
+  }).catch(e => ({ erro: e.message }));
+  t.ok('uma por obra, no mês da primeira vez que foi salva', JSON.stringify(r) === '{"2026-10":2,"2026-09":1}', JSON.stringify(r));
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
+teste('maquinas-publica-resultados', async (b, t) => {
+  // o Estoque de Máquinas grava, junto do resto, quantas conferências,
+  // movimentos e termos houve em cada mês (maquinas_rm/resumo).
+  if (!fs.existsSync(path.join(RAIZ, 'Controle-estoque-maquinas'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'Controle-estoque-maquinas' });
+  const r = await pg.evaluate(() => {
+    let fn = null; fdb = { transaction(f) { fn = f; }, off() { } }; fdbLido = true;
+    fdbBase = { setores: [{ id: 's1', nome: 'Setor Exemplo' }], maquinas: [], auditorias: [], eventos: [], termos: [] };
+    db = { setores: [{ id: 's1', nome: 'Setor Exemplo' }], maquinas: [], iniciado: true,
+      auditorias: [{ id: 'a1', data: '2026-10-02' }, { id: 'a2', data: '2026-09-28' }],
+      eventos: [{ id: 'e1', tipo: 'baixa', data: '2026-10-03' }, { id: 'e2', tipo: 'entrada', data: '2026-10-04' }],
+      termos: [{ id: 't1', data: '2026-10-05' }] };
+    nuvemGrava();
+    if (!fn) return { erro: 'não gravou' };
+    const vazio = fn(null), cheio = fn({ iniciado: true, setores: [{ id: 's1', nome: 'Setor Exemplo' }], maquinas: [], auditorias: [], eventos: [{ id: 'e9', tipo: 'conserto', data: '2026-10-10' }], termos: [] });
+    return { vazio: vazio.resumo, cheio: cheio.resumo };
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  t.ok('o resumo vai junto da gravação (nuvem vazia e já iniciada)', r.vazio && JSON.stringify(r.vazio['2026-10']) === '{"mov":2,"conf":1,"termo":1}'
+    && JSON.stringify(r.vazio['2026-09']) === '{"mov":0,"conf":1,"termo":0}' && r.cheio && r.cheio['2026-10'].mov === 3, J);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
 teste('propostas-nuvem', async (b, t) => {
   // cada proposta no seu nó (quem grava o banco inteiro apaga o do outro);
   // gravação recusada avisa e a alteração fica guardada para subir depois;
