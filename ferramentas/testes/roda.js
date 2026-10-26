@@ -13548,11 +13548,22 @@ teste('maquinas-publica-resultados', async (b, t) => {
     nuvemGrava();
     if (!fn) return { erro: 'não gravou' };
     const vazio = fn(null), cheio = fn({ iniciado: true, setores: [{ id: 's1', nome: 'Setor Exemplo' }], maquinas: [], auditorias: [], eventos: [{ id: 'e9', tipo: 'conserto', data: '2026-10-10' }], termos: [] });
-    return { vazio: vazio.resumo, cheio: cheio.resumo };
+    // ao abrir, sobe a contagem do histórico inteiro, sem esperar alguém mexer; igual, não regrava
+    const sets = []; let ouvinte = null;
+    fdb = { on(ev, f) { ouvinte = f; }, off() { }, child: p => ({ set: v => { sets.push([p, v]); return Promise.resolve(); } }), transaction() { } };
+    const orig = firebase.database; firebase.database = () => ({ ref: () => fdb });
+    conectar(); firebase.database = orig;
+    const nuvem = { iniciado: true, setores: [{ id: 's1', nome: 'Setor Exemplo' }], maquinas: [], auditorias: [{ id: 'a1', data: '2026-10-02' }], eventos: [{ id: 'e1', tipo: 'baixa', data: '2026-09-03' }], termos: [] };
+    ouvinte({ val: () => nuvem });
+    const primeira = sets.length;
+    ouvinte({ val: () => Object.assign({}, nuvem, { resumo: { '2026-10': { termo: 0, mov: 0, conf: 1 }, '2026-09': { conf: 0, mov: 1, termo: 0 } } }) });
+    return { vazio: vazio.resumo, cheio: cheio.resumo, abrir: sets, primeira };
   }).catch(e => ({ erro: e.message }));
   const J = JSON.stringify(r) + ' ' + erros.join(' | ');
   t.ok('o resumo vai junto da gravação (nuvem vazia e já iniciada)', r.vazio && JSON.stringify(r.vazio['2026-10']) === '{"mov":2,"conf":1,"termo":1}'
     && JSON.stringify(r.vazio['2026-09']) === '{"mov":0,"conf":1,"termo":0}' && r.cheio && r.cheio['2026-10'].mov === 3, J);
+  t.ok('ao abrir, a contagem sobe com o histórico (e não regrava se já está igual)', r.abrir && r.primeira === 1 && r.abrir.length === 1 && r.abrir[0][0] === 'resumo'
+    && JSON.stringify(r.abrir[0][1]) === '{"2026-09":{"mov":1,"conf":0,"termo":0},"2026-10":{"mov":0,"conf":1,"termo":0}}', J);
   t.ok('sem erro na página', !erros.length, erros.join(' | '));
   await ctx.close();
 });
