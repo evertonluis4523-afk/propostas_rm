@@ -12498,6 +12498,57 @@ teste('propostas-total-digitado-e-acrescimo', async (b, t) => {
   await ctx.close();
 });
 
+teste('propostas-acrescimo-complementares-e-geral', async (b, t) => {
+  // pedido: % nos Itens complementares, como nos outros blocos, e um % GERAL
+  // no fim, sobre todos os valores (etapas, opcionais, chave na mão e itens
+  // complementares) -- em vez de pôr o mesmo % bloco por bloco. Os dois saem
+  // distribuídos: cada valor no papel já com eles, e o total é a soma.
+  if (!fs.existsSync(path.join(RAIZ, 'propostas_rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'propostas_rm' });
+  await semLogin(pg);
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    await iniciarApp();
+    const d = normalizar(novoDoc('chave'));
+    d.cliente.nome = 'Cliente Fictício Ltda';
+    d.valores = [{ etapa: 'Estrutura', valor: 100000, opcional: false, contrato: true, mostrar: true, cortesia: false },
+      { etapa: 'Fechamento', valor: 50000, opcional: false, contrato: true, mostrar: true, cortesia: false },
+      { etapa: 'Piso', valor: 20000, opcional: true, contrato: false, mostrar: true, cortesia: false }];
+    d.cnm.itens = [{ nome: 'Banheiros', valor: 20000, mostrar: true, texto: '', itens: [] }];
+    d.comp = [{ item: 'Projeto de fundação', sit: 'incluso', valor: 10000 }, { item: 'Calhas', sit: 'nao', valor: 5000 }];
+    docs[d.id] = d; abrir(d.id); await esp(80);
+    const folha = () => document.getElementById('folha').textContent.replace(/\s+/g, ' ');
+    const el = p => document.querySelector('#ficha [data-p="' + p + '"]');
+    const campo = (p, v) => { const e = el(p); e.value = v; e.dispatchEvent(new Event('input', { bubbles: true })); e.dispatchEvent(new Event('change', { bubbles: true })); };
+    const linha = q => { const e = document.querySelector('#ficha .tot-linha[data-tot="' + q + '"]'); return e ? e.textContent.replace(/\s+/g, ' ') : ''; };
+    const geral = el('tot.geral'), pct = el('tot.pct');
+    const o = { campos: !!el('compCfg.pct') && !!geral,
+      noFim: !!(geral && pct && (pct.compareDocumentPosition(geral) & Node.DOCUMENT_POSITION_FOLLOWING) && geral.closest('details') === pct.closest('details')),
+      antes: totalProposta(d) };
+    campo('compCfg.pct', '10'); await esp(300);
+    o.comp = { sub: totalComp(d), total: totalProposta(d), linha: linha('comp'), folha: folha() };
+    campo('tot.geral', '5'); await esp(300);
+    o.geral = { total: totalProposta(d), cnm: totalCnm(d), comp: totalComp(d), resumo: linha('proposta'), linhaComp: linha('comp'), folha: folha() };
+    d.valores[2].contrato = true; o.contrato = totalContratoBase(d);
+    d.tot.manual = 200000; o.digitado = totalProposta(d); d.tot.manual = 0;
+    const volta = normalizar(JSON.parse(JSON.stringify(d)));
+    o.volta = [volta.compCfg.pct, volta.tot.geral, totalProposta(volta)];
+    const velho = normalizar({ valores: [{ etapa: 'A', valor: 1000 }], comp: [{ item: 'X', sit: 'incluso', valor: 500 }] });
+    o.velho = [velho.compCfg.pct, velho.tot.geral, totalProposta(velho)];
+    return o;
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(Object.assign({}, r, { comp: r.comp && Object.assign({}, r.comp, { folha: undefined }), geral: r.geral && Object.assign({}, r.geral, { folha: (r.geral.folha || '').slice(-900) }) })) + ' ' + erros.join(' | ');
+  t.ok('Itens complementares tem "Acréscimo (%)" e Valores termina com o "Acréscimo geral (%)"', !r.erro && r.campos && r.noFim, J);
+  t.ok('sem acréscimo: total de sempre (150.000 + 20.000 chave na mão + 10.000 complementar)', !r.erro && r.antes === 180000, J);
+  t.ok('complementares + 10%: o item sai no papel com 11.000, o "Não incluso" fica fora, e o total soma', !r.erro && r.comp.sub === 11000 && r.comp.total === 181000 && /11\.000,00/.test(r.comp.folha) && /\+ 10%/.test(r.comp.linha), J);
+  t.ok('geral 5%: etapas, opcional, chave na mão e complementar, cada um já com ele', !r.erro && /105\.000,00/.test(r.geral.folha) && /52\.500,00/.test(r.geral.folha) && /21\.000,00/.test(r.geral.folha) && /11\.550,00/.test(r.geral.folha) && !/100\.000,00/.test(r.geral.folha), J);
+  t.ok('geral 5%: o total é a soma do que aparece (190.050) e o resumo mostra o antes do geral', !r.erro && r.geral.total === 190050 && r.geral.cnm === 21000 && r.geral.comp === 11550 && /190\.050,00/.test(r.geral.folha) && /antes do geral R\$\s?181\.000,00/.test(r.geral.resumo) && /\+ 5% geral/.test(r.geral.resumo) && /\+ 5% geral/.test(r.geral.linhaComp), J);
+  t.ok('contrato e total digitado também levam o geral', !r.erro && r.contrato === 211050 && r.digitado === 210000, J);
+  t.ok('grava e volta; proposta antiga sem os campos continua igual', !r.erro && r.volta.join() === '10,5,190050' && r.velho.join() === '0,0,1500', J);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
 teste('obras-parte-com-data-propria', async (b, t) => {
   // parcela dividida: uma parte pode ser paga noutro dia. Cada parte tem a
   // sua data; vazia, vale a da parcela (e acompanha quando ela muda). Os
