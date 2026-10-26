@@ -400,6 +400,12 @@ Tudo que imprime segue a mesma papelaria:
   `{rm:'fundo'}` e lê as chaves `rm_fundo*`). Sem escolha gravada fica o
   canto próprio do sistema. Dentro da Central, no tema claro, a margem do
   sistema é branca e a folha é marcada só pelo fio.
+  Fundos: Treliça, Grade técnica, Planta industrial, Canto discreto, Trama
+  completa, Arcos e Marca. Cores da marca: Laranja, Grafite e Vinho. Fundo
+  novo é minimalista (traço fino, sem desenho de obra) e entra pelo chip nas
+  Preferências + a regra em `fundo-estilo.html`; fundo ou cor que sai perde
+  chip e regra juntos, e quem o tinha gravado cai no primeiro da lista
+  (teste `central-fundos-arcos`).
 - Movimento (bloco comum `comum/fundo-movimento.html`, igual em todos): nas
   Preferências da Central, "Fundo em movimento" (a obra se montando em 3D
   atrás da tela: estrutura metálica, pavilhão pré-moldado com as placas

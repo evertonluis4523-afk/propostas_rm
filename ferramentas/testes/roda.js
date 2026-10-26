@@ -7526,6 +7526,42 @@ teste('central-fundos', async (b, t) => {
   await ctx.close();
 });
 
+teste('central-fundos-arcos', async (b, t) => {
+  // pedido: tirar Luz estrutural e Arquitetônico e as cores Verde e Aço, e
+  // entrar um fundo minimalista (Arcos: círculos finos saindo do canto).
+  // Quem tinha gravado um fundo ou cor que saiu cai no primeiro da lista,
+  // e os sistemas abertos sozinhos desenham os Arcos também.
+  if (!fs.existsSync(path.join(RAIZ, 'central_rm')) || !fs.existsSync(path.join(RAIZ, 'recibos_rm'))) return;
+  const sobra = () => [...document.styleSheets].flatMap(f => { try { return [...f.cssRules].map(r => r.cssText); } catch (e) { return []; } })
+    .filter(c => /data-wallpaper="(halo|diagonal)"|data-marca="(verde|aco)"/.test(c)).length;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'central_rm' }, 'index.html', { antes: () => { try { localStorage.setItem('rm_bg', 'halo'); localStorage.setItem('rm_marca', 'verde'); } catch (e) {} } });
+  const r = await pg.evaluate(sobra => {
+    loadAppearanceForUser();   // o que roda ao entrar na conta
+    const fundos = [...document.querySelectorAll('[data-wallpaper-chip]')].map(x => x.getAttribute('data-wallpaper-chip'));
+    const cores = [...document.querySelectorAll('[data-marca-chip]')].map(x => x.getAttribute('data-marca-chip'));
+    const velho = { fundo: document.body.getAttribute('data-wallpaper'), marca: document.body.getAttribute('data-marca'),
+      chave: [localStorage.getItem('rm_fundo'), localStorage.getItem('rm_fundo_marca')] };
+    setWallpaper('arcos');
+    const cs = getComputedStyle(document.querySelector('.content-watermark'), '::before');
+    const amostra = getComputedStyle(document.querySelector('.wp-arcos'), '::before');
+    return { fundos, cores, velho, mascara: (cs.webkitMaskImage || cs.maskImage || '').slice(0, 40), pos: cs.webkitMaskPosition || cs.maskPosition,
+      amostra: (amostra.webkitMaskImage || amostra.maskImage || '').slice(0, 40), sobra: eval('(' + sobra + ')')() };
+  }, sobra.toString()).catch(e => ({ erro: e.message }));
+  await ctx.close();
+  const so = await abre(b, { 'sis.local': 'recibos_rm' }, 'index.html', { antes: () => { try { localStorage.setItem('rm_fundo', 'arcos'); localStorage.setItem('rm_fundo_marca', 'vinho'); } catch (e) {} } });
+  r.sistema = await so.pg.evaluate(sobra => { const c = document.getElementById('rmFundo'); const cs = c ? getComputedStyle(c, '::before') : {};
+    return { tem: !!c, mascara: (cs.webkitMaskImage || cs.maskImage || '').slice(0, 40), sobra: eval('(' + sobra + ')')() }; }, sobra.toString()).catch(e => ({ erro: e.message }));
+  await so.ctx.close();
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  t.ok('fundos: sem Luz estrutural e Arquitetônico, com Arcos', !r.erro && r.fundos.join() === 'trelica,grade,planta,canto,trama,arcos,logo', J);
+  t.ok('cores: só Laranja, Grafite e Vinho', !r.erro && r.cores.join() === 'laranja,grafite,vinho', J);
+  t.ok('quem tinha Luz estrutural e Verde gravados cai na Treliça laranja, e os sistemas recebem isso', !r.erro && r.velho.fundo === 'trelica' && r.velho.marca === 'laranja' && r.velho.chave[0] === 'trelica' && r.velho.chave[1] === 'laranja', J);
+  t.ok('Arcos desenha no canto de baixo à direita, e a amostra do botão também', !r.erro && /svg/.test(r.mascara) && /100%/.test(r.pos) && /svg/.test(r.amostra), J);
+  t.ok('nenhuma regra dos fundos e cores que saíram ficou (Central e sistema)', !r.erro && r.sobra === 0 && r.sistema.sobra === 0, J);
+  t.ok('sistema aberto sozinho com Arcos gravado desenha os Arcos', r.sistema.tem && /svg/.test(r.sistema.mascara), J);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+});
+
 teste('fundo-movimento', async (b, t) => {
   // pedido: um fundo com vida, como o do Claude -- a obra se montando atrás
   // da tela e o clique com cara de CAD. Vem desligado; ligado na Central vale
@@ -10592,7 +10628,7 @@ teste('fundo-da-central-nos-sistemas', async (b, t) => {
   } catch (e) { r.erro = e.message; }
   await ctx.close();
   // o sistema aberto sozinho, com a escolha já gravada: mesmo fundo, margem cinza de sempre
-  const so = await abre(b, { 'sis.local': 'recibos_rm' }, 'index.html', { antes: () => { try { localStorage.setItem('rm_fundo', 'logo'); localStorage.setItem('rm_fundo_marca', 'verde'); } catch (e) {} } });
+  const so = await abre(b, { 'sis.local': 'recibos_rm' }, 'index.html', { antes: () => { try { localStorage.setItem('rm_fundo', 'logo'); localStorage.setItem('rm_fundo_marca', 'grafite'); } catch (e) {} } });
   r.sozinho = await so.pg.evaluate(() => ({ tem: !!document.getElementById('rmFundo'), fundo: document.body.getAttribute('data-wallpaper'), quadro: document.documentElement.classList.contains('rm-quadro'), corpo: getComputedStyle(document.body).backgroundColor }));
   await so.ctx.close();
   // sem escolha nenhuma: o canto de sempre do sistema
