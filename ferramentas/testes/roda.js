@@ -1253,6 +1253,48 @@ teste('orcamento-compras-da-obra', async (b, t) => {
   await ctx.close();
 });
 
+teste('orcamento-compras-obra-sem-orcamento', async (b, t) => {
+  // obra antiga, em andamento, que nunca passou pelo sistema: "a forma que
+  // construiu me limita a usar apenas as feitas no sistema". Entra à mão,
+  // com nome e cliente, as linhas de sempre (editáveis) e tudo o mais igual.
+  if (!fs.existsSync(path.join(RAIZ, 'orcamento-rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'orcamento-rm' });
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    S.orcamentosSalvos = []; S.comprasObras = [];
+    orcAba('cob'); await esp(120);
+    const o = { form: !!document.getElementById('cobManObra') && !!document.getElementById('cobManCli') };
+    const al = window.alert; let avisou = ''; window.alert = m => { avisou = m; };
+    [...document.querySelectorAll('#cobBody .cob-man button')][0].click(); await esp(30);
+    o.semNome = { avisou, n: S.comprasObras.length }; window.alert = al;
+    document.getElementById('cobManObra').value = 'Galpão Exemplo Antigo'; document.getElementById('cobManCli').value = 'Cliente Fictício Ltda';
+    [...document.querySelectorAll('#cobBody .cob-man button')][0].click(); await esp(80);
+    const reg = S.comprasObras[0];
+    o.criou = reg && { manual: reg.manual, obra: reg.obra, cliente: reg.cliente, sel: COB_SEL === reg.id, linhas: reg.linhas.map(l => l.grupo + ':' + l.nome) };
+    o.lista = [...document.querySelectorAll('#cobBody .cob-ob b')].map(x => x.textContent);
+    // orçado digitado na linha e compra lançada contam como nas outras obras
+    const met = reg.linhas.find(l => l.grupo === 'met').lid;
+    const inp = (lid, campo) => document.querySelector('#cobBody [onchange*="\'' + lid + '\',\'' + campo + '\'"]');
+    const muda = (el, v) => { el.value = v; el.dispatchEvent(new Event('change', { bubbles: true })); };
+    muda(inp(met, 'orcado'), '100.000,00'); muda(inp(met, 'comprado'), '95.000,00'); muda(inp(met, 'forn'), 'Fornecedor Exemplo'); await esp(60);
+    o.contas = cobContas(reg);
+    // nome e cliente se corrigem no cabeçalho
+    const cab = document.querySelector('#cobBody .cob-man-cab input'); muda(cab, 'Galpão Exemplo Antigo II'); await esp(60);
+    o.renomeou = reg.obra;
+    o.badge = (document.getElementById('orcNCob') || {}).textContent;
+    return o;
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  t.ok('sem orçamento salvo, a aba já oferece "Obra sem orçamento no sistema"', !r.erro && r.form, J);
+  t.ok('sem nome não cria (e avisa)', !r.erro && /nome da obra/i.test(r.semNome.avisou) && r.semNome.n === 0, J);
+  t.ok('cria a obra com nome, cliente e as linhas de sempre (metálica, telhas, frete, montagem)', !r.erro && r.criou && r.criou.manual && r.criou.obra === 'Galpão Exemplo Antigo' && r.criou.cliente === 'Cliente Fictício Ltda' && r.criou.sel
+    && r.criou.linhas.join() === 'met:Estrutura metálica,tel:Telha de cobertura,tel:Telha de fechamento,srv:Frete,srv:Montagem' && r.lista.includes('Galpão Exemplo Antigo'), J);
+  t.ok('orçado digitado na linha e compra lançada entram nas contas', !r.erro && r.contas.orcado === 100000 && r.contas.comprado === 95000 && r.contas.nComprados === 1, J);
+  t.ok('nome da obra se corrige no cabeçalho; selo conta a obra pendente', !r.erro && r.renomeou === 'Galpão Exemplo Antigo II' && r.badge === '1', J);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
 teste('orcamento-salvos-perda-e-validade', async (b, t) => {
   // Perdido sem motivo não ensina nada: ao marcar Perdido, pergunta por quê
   // (o campo "Motivo" ficava escondido em "Mais campos"). E orçamento com a
