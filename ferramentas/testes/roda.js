@@ -1812,6 +1812,43 @@ teste('leitor-prancha-montagem-pdf', async (b, t) => {
   await ctx.close();
 });
 
+teste('leitor-prancha-cota-verticais', async (b, t) => {
+  // "Nos trechos onde o sistema divide em partes a tesoura - coloque o desenho
+  // das verticais e a distância que fica uma da outra com tamanho,
+  // identificação. Na completa não precisa. Pode colocar uma cota entre cada
+  // vertical para o montador se achar."
+  if (!fs.existsSync(path.join(FIX_LEITOR, 'caso4.dxf')) || !fs.existsSync(path.join(RAIZ, 'leitor_dwg'))) return;
+  const { ctx, pg, erros } = await leitorImporta(b, path.join(FIX_LEITOR, 'caso4.dxf'), { viewport: { width: 1400, height: 900 } });
+  const le = async (cm) => pg.evaluate(async (cm) => {
+    window.rmDesktop = { salvarPDF: async () => ({ ok: true }) }; window.confirm = () => true;
+    document.getElementById('detalhar').click();
+    const u = document.getElementById('dtUnid');
+    if (cm === /cm/.test(u.textContent)) u.click();
+    await new Promise(x => setTimeout(x, 300));
+    document.getElementById('dtPrancha').click(); await new Promise(x => setTimeout(x, 900));
+    return [...document.querySelectorAll('#dtPranchas .prancha')].map(pr => {
+      const tx = [...pr.querySelectorAll('svg text[fill="#1d4f91"]')].map(x => x.textContent);
+      const ver = [...pr.querySelectorAll('svg text[fill="#D53309"]')].map(x => x.textContent).filter(x => /-V-/.test(x)).map(x => x.split('-')[1]);
+      return { tit: pr.querySelector('svg > text').textContent, ps: tx.filter(x => /^P\d+$/.test(x)), cotas: tx.filter(x => /^[\d.,]+$/.test(x)), inicio: tx.filter(x => /início/.test(x)), ver };
+    });
+  }, cm).catch(e => [{ erro: e.message }]);
+  const mm = await le(false), J = JSON.stringify(mm).slice(0, 1800) + ' ' + erros.join(' | ');
+  const trechos = mm.filter(x => /TRECHO/.test(x.tit || '')), completas = mm.filter(x => /COMPLETA/.test(x.tit || ''));
+  t.ok('folha completa sem cota das verticais', completas.length > 0 && completas.every(x => !x.ps.length && !x.cotas.length), J);
+  t.ok('cada trecho: um P por vertical desenhada e uma cota entre cada duas', trechos.length >= 2 && trechos.every(x => x.ps.length >= 2 &&
+    [...new Set(x.ver)].every(p => x.ps.includes(p)) && x.cotas.length === x.ps.length - 1), J);
+  t.ok('o trecho que não começa na ponta diz onde está a primeira vertical', trechos.filter(x => !/TRECHO 1\//.test(x.tit)).every(x => x.inicio.length === 1 && /^P\d+ a [\d.]+ mm do início da tesoura$/.test(x.inicio[0])), J);
+  const cm = await le(true), J2 = JSON.stringify(cm.map(x => x.cotas)).slice(0, 800);
+  const nmm = v => +v.replace(/\./g, ''), ncm = v => parseFloat(v.replace(/\./g, '').replace(',', '.'));
+  // em cm a letra é mais larga e a tesoura pode partir em outro número de
+  // trechos: confere cada cota em cm contra as medidas que existem em mm
+  const todasMM = mm.flatMap(x => x.cotas.map(nmm));
+  t.ok('"Ver em cm" muda a cota também', cm.some(x => x.cotas.length) && cm.every(x => x.cotas.every(c => /,\d$/.test(c) &&
+    todasMM.some(v => Math.abs(ncm(c) * 10 - v) < 0.51))), J2);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
 teste('leitor-conferir-igual-detalhamento', async (b, t) => {
   // o "Conferir" tinha a sua própria regra de o que é peça e contava a linha
   // duplicada (e antes o suporte) que o detalhamento já tirava. Agora ele
