@@ -2293,6 +2293,38 @@ teste('leitor-comparativo-preco-da-obra', async (b, t) => {
   await ctx.close();
 });
 
+teste('leitor-comparativo-chapas-sem-banzos', async (b, t) => {
+  // "Na comparativo, crie uma opção de tirar da soma os banzos da chapa+serviço"
+  if (!fs.existsSync(path.join(RAIZ, 'leitor_dwg'))) return;
+  const { ctx, pg, erros } = await leitorImporta(b, trelicaTeste('comparativo_semb'));
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    const L = window.__leitorTeste;
+    localStorage.setItem(L.cuKey, JSON.stringify({ barra: 300 }));
+    L.chapasCfg({ sheetRkg: 7.5, serviceRkg: 4 });
+    document.querySelector('[data-dsub="comp"]').click(); await esp(400);
+    const cb = () => document.querySelector('#detComp [data-cmp-semb]');
+    const o = { tem: !!cb(), antes: L.comparativo().valores };
+    const p = document.querySelector('#detComp [data-cmp-preco="barra"]'); p.value = '5'; p.dispatchEvent(new Event('change', { bubbles: true })); await esp(200);
+    o.com = L.comparativo();
+    cb().click(); await esp(200);
+    o.sem = L.comparativo();
+    o.texto = document.querySelectorAll('#detComp .cmp-card')[2].innerText.replace(/\s+/g, ' ');
+    o.marcado = cb().checked;
+    cb().click(); await esp(200);
+    o.volta = L.comparativo().valores;
+    return o;
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r).slice(0, 1200) + ' ' + erros.join(' | ');
+  const q = (a, b) => Math.abs(a - b) < 0.02;
+  t.ok('o card de chapas + serviço tem a opção', !r.erro && r.tem, J);
+  t.ok('marcada: tira só os banzos do caminho das chapas', !r.erro && r.com.ov.banzo > 0 && q(r.sem.valores[2], r.com.valores[2] - r.com.ov.banzo) &&
+    q(r.sem.valores[0], r.com.valores[0]) && q(r.sem.valores[1], r.com.valores[1]) && /fora da soma/.test(r.texto) && r.marcado, J);
+  t.ok('desmarcada: volta a somar', !r.erro && JSON.stringify(r.volta) === JSON.stringify(r.com.valores), J);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
 teste('leitor-comparativo-custo', async (b, t) => {
   // "Gostaria de uma aba onde consigo ver a comparação de valor entre barras
   // de 6 metros, detalhado e chapas+serviços -- hoje só pelo botão
