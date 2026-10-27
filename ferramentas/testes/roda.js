@@ -1847,8 +1847,10 @@ teste('leitor-prancha-cota-verticais', async (b, t) => {
     m0.lados.every(l => l.marcas.filter(q => q.pos).every(q => Math.abs(q.x - (l.lado < 0 ? q.mn : q.mx)) < 0.01)), JM);
   const mm = await leitorPranchasCotas(pg, false), J = JSON.stringify(mm).slice(0, 1800) + ' ' + erros.join(' | ');
   const trechos = mm.filter(x => /TRECHO/.test(x.tit || '')), completas = mm.filter(x => /COMPLETA/.test(x.tit || ''));
-  t.ok('folha completa: comprimento total e banzo superior, sem a corrente das verticais', completas.length > 0 &&
-    completas.every(x => !x.ps.length && x.gerais.some(g => /comprimento total/.test(g)) && x.gerais.some(g => /banzo superior/.test(g)) && x.alturas >= 2), J);
+  // "deveria aparecer a cota azul da distância de vão na folha inteira":
+  // a folha da tesoura completa leva as medidas gerais E a corrente toda
+  t.ok('folha completa: comprimento total, banzo superior e a corrente das verticais inteira', completas.length > 0 &&
+    completas.every(x => x.ps.length >= 10 && x.inicio > 0 && !x.ref.length && x.gerais.some(g => /comprimento total/.test(g)) && x.gerais.some(g => /banzo superior/.test(g)) && x.alturas >= 2), J);
   t.ok('cada trecho: P das verticais e uma cota entre cada duas, sem medidas gerais', trechos.length >= 2 &&
     trechos.every(x => x.ps.length >= 2 && x.cotas.length >= x.ps.length - 1 && !x.gerais.length), J);
   t.ok('o trecho sem a cumeeira diz a que distância dela começa; o da cumeeira marca o início', trechos.filter(x => !x.inicio).every(x => x.ref.length >= 1 &&
