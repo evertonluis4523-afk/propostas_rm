@@ -1253,6 +1253,48 @@ teste('orcamento-compras-da-obra', async (b, t) => {
   await ctx.close();
 });
 
+teste('orcamento-compras-obra-segue-o-orcamento', async (b, t) => {
+  // "no orçamento original não tem telhas, pois excluí, depois importei para
+  // o compra da obra e aparece telhas": a lista só crescia. E "na estrutura
+  // metálica deixe com todos os itens": parte da metálica se compra num
+  // fornecedor e parte noutro.
+  if (!fs.existsSync(path.join(RAIZ, 'orcamento-rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'orcamento-rm' });
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    const P = (S.perfis || []).slice(0, 2), T = (S.telhas || [])[0];
+    if (P.length < 2 || !T) return { semCadastro: true };
+    S.orcamentosSalvos = []; S.comprasObras = [];
+    S.linhasPerfil = [{ lid: 'p1', perfilId: P[0].id, qtd: 10 }, { lid: 'p2', perfilId: P[1].id, qtd: 5 }];
+    S.linhasTelha = [{ lid: 't1', telhaId: T.id, comp: 6000, qtd: 10, obs: 'COBERTURA' }]; S.linhasCat = [];
+    S.cliente = 'Cliente Fictício Ltda'; S.obra = 'Galpão Exemplo A'; renderLines(); recompute(); salvaNovo(); await esp(30);
+    const A = S.orcamentosSalvos[0];
+    // lista lançada numa versão antiga, com a metálica numa linha só
+    S.comprasObras = [{ id: A.id, obra: A.obra, cliente: A.cliente, lancadaEm: rmDiaISO(), editadoEm: 1,
+      linhas: [{ lid: 'velha', chave: 'met|perfis', grupo: 'met', nome: 'Estrutura metálica (perfis)', det: '', orcado: 999, faz: true, comprado: 0, forn: '', dataCompra: '', entregas: [] }] }];
+    cobLancar(A.id); await esp(60);
+    const reg = () => S.comprasObras.find(x => x.id === A.id);
+    const o = { met: reg().linhas.filter(l => l.grupo === 'met').map(l => l.nome), velha: reg().linhas.some(l => l.lid === 'velha'),
+      telha: reg().linhas.some(l => l.grupo === 'tel'), fonte: /Linhas do orçamento salvo/.test(document.getElementById('cobBody').textContent) };
+    // compra registrada num perfil; depois o orçamento salvo perde a telha e esse perfil
+    const m1 = reg().linhas.filter(l => l.grupo === 'met')[0]; m1.comprado = 500; m1.forn = 'Fornecedor Exemplo';
+    A.quote.linhasTelha = []; A.quote.linhasPerfil = A.quote.linhasPerfil.filter(l => l.perfilId !== P[0].id);
+    cobRender(); await esp(30);
+    o.depois = { telha: reg().linhas.some(l => l.grupo === 'tel'), met: reg().linhas.filter(l => l.grupo === 'met').map(l => l.nome + (l.saiu ? ' [saiu]' : '')),
+      aviso: /não está mais no orçamento salvo/.test(document.getElementById('cobBody').textContent) };
+    return o;
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  if (r.semCadastro) { t.ok('cadastro de teste sem perfis/telhas', true); await ctx.close(); return; }
+  t.ok('metálica perfil por perfil (um fornecedor para cada parte, se for o caso)', !r.erro && r.met.length === 2 && !r.met.some(n => /Estrutura metálica \(perfis\)/.test(n)), J);
+  t.ok('a linha única antiga da metálica, sem nada lançado, sai', !r.erro && !r.velha, J);
+  t.ok('o cabeçalho diz que as linhas vêm do orçamento SALVO', !r.erro && r.fonte, J);
+  t.ok('telha excluída do orçamento salvo sai da lista', !r.erro && r.telha && !r.depois.telha, J);
+  t.ok('perfil excluído mas já comprado fica, marcado "não está mais no orçamento"', !r.erro && r.depois.met.length === 2 && r.depois.met.filter(n => /\[saiu\]/.test(n)).length === 1 && r.depois.aviso, J);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
 teste('orcamento-compras-obra-sem-orcamento', async (b, t) => {
   // obra antiga, em andamento, que nunca passou pelo sistema: "a forma que
   // construiu me limita a usar apenas as feitas no sistema". Entra à mão,
