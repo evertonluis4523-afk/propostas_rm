@@ -521,6 +521,13 @@ Tudo que imprime segue a mesma papelaria:
   também instala. Versão = os dois primeiros números do `package.json` + o
   número da montagem (1.5.101, 1.5.102...). Segredo `RM_INSTALADOR_TOKEN` no
   `central_rm`. O `atualizar.bat` continua funcionando (monta sem publicar).
+- Atalho "RM Central" na área de trabalho e no menu Iniciar: antes só a
+  primeira instalação criava, e um PC ficou sem o ícone. Agora o instalador
+  recria os atalhos ao ser rodado de novo (`createDesktopShortcut: "always"`
+  no `package.json`), e o `build/installer.nsh` recria o da área de trabalho
+  também nas atualizações automáticas, se tiver sumido. O atalho vai para o
+  usuário do Windows que instalou: instale logado no usuário de quem vai usar
+  (teste `instalador-atalho-sempre`).
 
 ## 9. Sistema novo — checklist
 

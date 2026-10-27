@@ -14057,6 +14057,23 @@ teste('central-troca-de-conta-fecha-abas', async (b, t) => {
   await ctx.close();
 });
 
+teste('instalador-atalho-sempre', async (b, t) => {
+  // no PC de uma usuária a Central foi instalada e o ícone não apareceu na
+  // área de trabalho: o instalador só criava o atalho na primeira instalação,
+  // e atualização não o recriava. Agora recria em toda instalação/atualização.
+  const arq = path.join(RAIZ, 'central_rm', 'package.json');
+  if (!fs.existsSync(arq)) return;
+  const n = (JSON.parse(fs.readFileSync(arq, 'utf8')).build || {}).nsis || {};
+  t.ok('rodar o instalador de novo recria o atalho da área de trabalho, mesmo apagado', n.createDesktopShortcut === 'always', JSON.stringify(n));
+  t.ok('atalho no menu Iniciar, com o nome RM Central', n.createStartMenuShortcut !== false && n.shortcutName === 'RM Central', JSON.stringify(n));
+  t.ok('o instalador continua perguntando onde instalar (não é o de um clique)', n.oneClick === false, JSON.stringify(n));
+  // o "always" só vale ao rodar o instalador de novo; a atualização automática
+  // passa pelo customInstall, que recria o atalho se ele sumiu
+  const nshArq = path.join(RAIZ, 'central_rm', 'build', 'installer.nsh'), nsh = fs.existsSync(nshArq) ? fs.readFileSync(nshArq, 'utf8') : '';
+  const ci = (/!macro customInstall([\s\S]*?)!macroend/.exec(nsh) || [])[1] || '';
+  t.ok('atualização automática recria o atalho da área de trabalho se sumiu', /IfFileExists "\$DESKTOP\\RM Central\.lnk"[\s\S]*CreateShortCut "\$DESKTOP\\RM Central\.lnk" "\$INSTDIR\\RM Central\.exe"/.test(ci), ci.slice(-300));
+});
+
 teste('site-unico-montagem', async (b, t) => {
   // a fila do GitHub Pages parou por mais de uma hora (19/10/2026) e
   // ninguém recebia a versão nova. O site único (rm-sistemas, no Cloudflare)
