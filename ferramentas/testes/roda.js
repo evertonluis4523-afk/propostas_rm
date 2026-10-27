@@ -1940,6 +1940,42 @@ teste('leitor-prancha-cota-suporte-cumeeira', async (b, t) => {
   await ctx.close();
 });
 
+teste('leitor-pedido-fabricante-sem-folha-branca-e-banzos', async (b, t) => {
+  // "O pedido para o fabricante está gerando espaçamento em branco" e "coloque
+  // uma opção de incluir os perfil banzos (superior e inferior)". Cada família
+  // era um bloco flex de várias tabelas, que o navegador não parte: quando não
+  // cabia no resto da folha, pulava inteira e deixava a folha em branco.
+  if (!fs.existsSync(path.join(FIX_LEITOR, 'caso1.dxf')) || !fs.existsSync(path.join(RAIZ, 'leitor_dwg'))) return;
+  const { ctx, pg, erros } = await leitorImporta(b, path.join(FIX_LEITOR, 'caso1.dxf'), { viewport: { width: 1400, height: 900 } });
+  const gera = bz => pg.evaluate(async (bz) => {
+    let h = null; window.rmDesktop = { salvarPDF: async (x) => { h = x; return { ok: true }; } }; window.confirm = () => true;
+    document.getElementById('detalhar').click(); await new Promise(x => setTimeout(x, 300));
+    document.getElementById('listaForn').click(); await new Promise(x => setTimeout(x, 500));
+    const cb = document.getElementById('lfBanzos'); if (!cb) return { erro: 'sem a opção dos banzos' };
+    if (cb.checked !== bz) cb.click(); await new Promise(x => setTimeout(x, 300));
+    const famh = [...document.querySelectorAll('#printArea .lf-famh')].map(x => x.firstChild.textContent.trim());
+    const tabs = [...document.querySelectorAll('#printArea .lf-cols')].map(c => c.querySelectorAll('table').length);
+    const banzoP = [...document.querySelectorAll('#printArea .lf-cod')].filter(x => /banzo/.test(x.textContent)).length;
+    document.getElementById('lfPrint').click(); await new Promise(x => setTimeout(x, 900));
+    return { h, famh, tabs, banzoP, guardou: localStorage.getItem('rm_lf_banzos') };
+  }, bz).catch(e => ({ erro: e.message }));
+  const paginas = async h => { const p = await ctx.newPage(); await p.setContent((h || '').replace('</head>', '<style>#printArea .lf-desenhos{display:none!important}</style></head>'));
+    const pdf = await p.pdf({ preferCSSPageSize: true, printBackground: true }).catch(() => null); await p.close();
+    return pdf ? (pdf.toString('latin1').match(/\/Type\s*\/Page[^s]/g) || []).length : 0; };
+  const sem = await gera(false); sem.paginas = await paginas(sem.h); delete sem.h;
+  const J = JSON.stringify(sem) + ' ' + erros.join(' | ');
+  t.ok('cada família é uma tabela só (parte entre páginas linha a linha)', !sem.erro && sem.tabs.length > 0 && sem.tabs.every(n => n === 1), J);
+  t.ok('as tabelas do pedido cabem em 4 folhas (antes 6, com folhas em branco)', !sem.erro && sem.paginas > 0 && sem.paginas <= 4, J);
+  t.ok('sem a opção: nenhum banzo no pedido', !sem.erro && !sem.famh.some(f => /banzo/i.test(f)) && sem.banzoP === 0, J);
+  const com = await gera(true); com.paginas = await paginas(com.h); delete com.h;
+  const J2 = JSON.stringify(com);
+  t.ok('com a opção: famílias Banzo superior e Banzo inferior, com a linha de banzo na coluna P', !com.erro &&
+    com.famh.some(f => /^Banzo superior$/i.test(f)) && com.famh.some(f => /^Banzo inferior$/i.test(f)) && com.banzoP > 0 && com.guardou === '1', J2);
+  t.ok('com banzos também sem folha em branco (cabe em 6)', !com.erro && com.paginas > 0 && com.paginas <= 6, J2);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
 teste('leitor-conferir-igual-detalhamento', async (b, t) => {
   // o "Conferir" tinha a sua própria regra de o que é peça e contava a linha
   // duplicada (e antes o suporte) que o detalhamento já tirava. Agora ele
