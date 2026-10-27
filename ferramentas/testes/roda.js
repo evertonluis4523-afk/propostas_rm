@@ -1957,8 +1957,9 @@ teste('leitor-pedido-fabricante-sem-folha-branca-e-banzos', async (b, t) => {
     const tabs = [...document.querySelectorAll('#printArea .lf-cols')].map(c => c.querySelectorAll('table').length);
     const banzoP = [...document.querySelectorAll('#printArea .lf-cod')].filter(x => /banzo/.test(x.textContent)).length;
     const desenhos = document.querySelectorAll('#printArea .prancha, #printArea .lf-desenhos').length;
+    const notas = /Comprimentos em milímetro inteiro|Cada peça deve chegar marcada|Peso estimado pelo kg\/m/.test(document.getElementById('printArea').textContent);
     document.getElementById('lfPrint').click(); await new Promise(x => setTimeout(x, 900));
-    return { h, famh, tabs, banzoP, desenhos, guardou: localStorage.getItem('rm_lf_banzos') };
+    return { h, famh, tabs, banzoP, desenhos, notas, guardou: localStorage.getItem('rm_lf_banzos') };
   }, bz).catch(e => ({ erro: e.message }));
   const paginas = async h => { const p = await ctx.newPage(); await p.setContent((h || '').replace('</head>', '<style>#printArea .lf-desenhos{display:none!important}</style></head>'));
     const pdf = await p.pdf({ preferCSSPageSize: true, printBackground: true }).catch(() => null); await p.close();
@@ -1970,6 +1971,8 @@ teste('leitor-pedido-fabricante-sem-folha-branca-e-banzos', async (b, t) => {
   t.ok('sem a opção: nenhum banzo no pedido', !sem.erro && !sem.famh.some(f => /banzo/i.test(f)) && sem.banzoP === 0, J);
   // "só preciso que saia a lista de compras, não precisa sair a montagem e o desenho separado"
   t.ok('o pedido leva só a lista: sem prancha de montagem nem folha por grupo', !sem.erro && sem.desenhos === 0, J);
+  // "Essa informação não precisa sair no pedido para o fornecedor": sem o quadro de notas de oficina
+  t.ok('o pedido sai sem o quadro de notas (milímetro, folga, marcação, peso estimado)', !sem.erro && sem.notas === false, J);
   const com = await gera(true); com.paginas = await paginas(com.h); delete com.h;
   const J2 = JSON.stringify(com);
   t.ok('com a opção: famílias Banzo superior e Banzo inferior, com a linha de banzo na coluna P', !com.erro &&
