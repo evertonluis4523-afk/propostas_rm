@@ -1989,8 +1989,11 @@ teste('leitor-prancha-emenda-banzo', async (b, t) => {
     window.rmDesktop = { salvarPDF: async () => ({ ok: true }) }; window.confirm = () => true;
     document.getElementById('detalhar').click(); await new Promise(x => setTimeout(x, 300));
     document.getElementById('dtPrancha').click(); await new Promise(x => setTimeout(x, 900));
-    const folhas = [...document.querySelectorAll('#dtPranchas .prancha')].map(pr => ({ tit: pr.querySelector('svg > text').textContent,
-      pedacos: [...pr.querySelectorAll('svg text[fill="#7b3fb5"]')].map(x => x.textContent), marcas: pr.querySelectorAll('svg line[stroke="#7b3fb5"]').length }));
+    const folhas = [...document.querySelectorAll('#dtPranchas .prancha')].map(pr => {
+      const tx = [...pr.querySelectorAll('svg text[fill="#7b3fb5"]')];
+      return { tit: pr.querySelector('svg > text').textContent, pedacos: tx.map(x => x.textContent), ys: tx.map(x => +x.getAttribute('y')).map(Math.round),
+        setas: pr.querySelectorAll('svg path[fill="#7b3fb5"]').length, marcas: pr.querySelectorAll('svg line[stroke="#7b3fb5"]').length };
+    });
     // o mesmo plano do pedido: os pedaços de banzo da lista do fornecedor
     document.getElementById('listaForn').click(); await new Promise(x => setTimeout(x, 400));
     const cb = document.getElementById('lfBanzos'); if (cb && !cb.checked) cb.click(); await new Promise(x => setTimeout(x, 300));
@@ -2001,12 +2004,18 @@ teste('leitor-prancha-emenda-banzo', async (b, t) => {
   }).catch(e => ({ erro: e.message }));
   const J = JSON.stringify(r).slice(0, 1500) + ' ' + erros.join(' | ');
   const comp = (r.folhas || []).find(f => /COMPLETA/.test(f.tit)) || {};
-  const bs = (comp.pedacos || []).filter(x => /^BS /.test(x)), bi = (comp.pedacos || []).filter(x => /^BI /.test(x));
-  const soma = l => l.reduce((a, x) => a + +x.split('· ')[1].replace(/\./g, ''), 0);
-  t.ok('a folha completa numera os pedaços dos banzos (BS e BI) e marca as emendas', bs.length >= 2 && bi.length >= 2 && comp.marcas >= 2 &&
-    (comp.pedacos || []).every(x => /^B[SI] \d+\/\d+ · [\d.]+$/.test(x)), J);
-  t.ok('os pedaços de cada banzo superior somam o comprimento dele (8.685)', Math.abs(soma(bs) - 2 * 8685) <= 4, J);
-  t.ok('os mesmos comprimentos estão no pedido com banzos', (comp.pedacos || []).every(x => (r.pedido || []).includes(x.split('· ')[1])), J);
+  // "A informação do recorte dos banzos está deslocada, organize de forma
+  // alinhada e com setas direcionando": uma etiqueta por emenda, numa fileira
+  // (mesma altura no papel para o superior, outra para o inferior), com seta
+  const re = /^EMENDA (B[SI]) · (\d+)\/(\d+) ([\d.]+)  \|  (\d+)\/(\d+) ([\d.]+)$/;
+  const et = (comp.pedacos || []).map(x => x.match(re));
+  const bs = (comp.pedacos || []).map((x, i) => [x, comp.ys[i]]).filter(([x]) => /^EMENDA BS/.test(x)), bi = (comp.pedacos || []).map((x, i) => [x, comp.ys[i]]).filter(([x]) => /^EMENDA BI/.test(x));
+  t.ok('uma etiqueta por emenda, com seta e marca no banzo', et.length >= 2 && et.every(Boolean) && comp.setas === et.length && comp.marcas >= et.length, J);
+  t.ok('etiquetas alinhadas: todas do superior numa altura, todas do inferior em outra', bs.length >= 1 && bi.length >= 1 &&
+    new Set(bs.map(x => x[1])).size === 1 && new Set(bi.map(x => x[1])).size === 1 && bs[0][1] !== bi[0][1], J);
+  // cada banzo superior de 8.685 sai em 6.000 + 2.685 (o plano da barra de 6 m)
+  t.ok('os pedaços de cada emenda somam o banzo (8.685) e estão no pedido com banzos', et.filter(m => m && m[1] === 'BS').every(m => Math.abs(+m[4].replace(/\./g, '') + +m[7].replace(/\./g, '') - 8685) <= 2) &&
+    et.every(m => m && (r.pedido || []).includes(m[4]) && (r.pedido || []).includes(m[7])), J);
   t.ok('sem erro na página', !erros.length, erros.join(' | '));
   await ctx.close();
 });
@@ -2193,6 +2202,49 @@ teste('leitor-chapas-retalhos', async (b, t) => {
   t.ok('retalho não invade peça', !r.erro && !r.sobre, J);
   t.ok('DXF: camada RETALHO só quando pedida', !r.erro && r.dxfCom && !r.dxfSem, J);
   t.ok('sem erro na página', !erros.length, J);
+  await ctx.close();
+});
+
+teste('leitor-comparativo-preco-da-obra', async (b, t) => {
+  // "precisa ter um campo onde digito o valor do preço kg para os 3, barras
+  // inteiras (inclusive os banzos sem dividir), detalhado no tamanho, e
+  // chapas + parceiro com valor fixo por kg" -- por obra, por cima do banco.
+  if (!fs.existsSync(path.join(RAIZ, 'leitor_dwg'))) return;
+  const { ctx, pg, erros } = await leitorImporta(b, trelicaTeste('comparativo_preco'));
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    const L = window.__leitorTeste;
+    localStorage.setItem(L.cuKey, JSON.stringify({ barra: 300 }));
+    L.chapasCfg({ sheetRkg: 7.5, serviceRkg: 4 });
+    document.querySelector('[data-dsub="comp"]').click(); await esp(400);
+    const base = L.comparativo().valores;
+    const poe = async (k, v) => { const i = document.querySelector('#detComp [data-cmp-preco="' + k + '"]'); if (!i) return false;
+      i.value = v; i.dispatchEvent(new Event('change', { bubbles: true })); await esp(200); return true; };
+    const o = { campos: document.querySelectorAll('#detComp [data-cmp-preco]').length, base };
+    await poe('barra', '5'); await poe('det', '4'); await poe('chapa', '3');
+    o.c5 = L.comparativo();
+    await poe('barra', '10');
+    o.c10 = L.comparativo();
+    await poe('det', '8'); o.d8 = L.comparativo(); await poe('det', '4');
+    o.cards = [...document.querySelectorAll('#detComp .cmp-card .cmp-val')].map(x => x.textContent.trim());
+    o.guardou = JSON.parse(localStorage.getItem('rm_leitor_cmp_preco_obra') || '{}');
+    await poe('barra', ''); await poe('det', ''); await poe('chapa', '');
+    o.volta = L.comparativo().valores;
+    return o;
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r).slice(0, 1500) + ' ' + erros.join(' | ');
+  const q = (a, b) => Math.abs(a - b) < 0.02;
+  const ov5 = r.c5 && r.c5.ov, v5 = r.c5 && r.c5.valores, v10 = r.c10 && r.c10.valores;
+  t.ok('três campos de R$/kg no comparativo', !r.erro && r.campos === 3, J);
+  t.ok('barras inteiras: banzos e internas pelo peso das barras × o preço digitado', !r.erro && ov5 && ov5.kgBanzo > 0 && ov5.kgInterno > 0 &&
+    q(v10[0] - v5[0], (ov5.kgBanzo + ov5.kgInterno) * 5) && q(v10[1] - v5[1], ov5.kgBanzo * 5) && q(v10[2] - v5[2], ov5.kgBanzo * 5), J);
+  // dobrar o R$/kg do detalhado dobra o custo das internas detalhadas, e só ele
+  t.ok('detalhado no tamanho e chapas + parceiro pelo preço fixo digitado', !r.erro && ov5 && ov5.internoCom > 0 && r.d8 &&
+    q(r.d8.valores[1] - v10[1], ov5.internoCom) && q(r.d8.valores[0], v10[0]) && q(r.d8.valores[2], v10[2]) &&
+    q(v5[2], ov5.banzo + r.c5.pesoChapa * 3), J);
+  t.ok('o preço fica guardado para a obra, e vazio volta ao banco', !r.erro && Object.values(r.guardou).some(o => o.barra === '10' && o.det === '4' && o.chapa === '3') &&
+    JSON.stringify(r.volta) === JSON.stringify(r.base), J);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
   await ctx.close();
 });
 
