@@ -1812,39 +1812,83 @@ teste('leitor-prancha-montagem-pdf', async (b, t) => {
   await ctx.close();
 });
 
-teste('leitor-prancha-cota-verticais', async (b, t) => {
-  // "Nos trechos onde o sistema divide em partes a tesoura - coloque o desenho
-  // das verticais e a distância que fica uma da outra com tamanho,
-  // identificação. Na completa não precisa. Pode colocar uma cota entre cada
-  // vertical para o montador se achar."
-  if (!fs.existsSync(path.join(FIX_LEITOR, 'caso4.dxf')) || !fs.existsSync(path.join(RAIZ, 'leitor_dwg'))) return;
-  const { ctx, pg, erros } = await leitorImporta(b, path.join(FIX_LEITOR, 'caso4.dxf'), { viewport: { width: 1400, height: 900 } });
-  const le = async (cm) => pg.evaluate(async (cm) => {
-    window.rmDesktop = { salvarPDF: async () => ({ ok: true }) }; window.confirm = () => true;
+/* lê as pranchas montagem já geradas: títulos, textos azuis e laranja */
+async function leitorPranchasCotas(pg, cm) {
+  return pg.evaluate(async (cm) => {
+    window.rmDesktop = { salvarPDF: async (x) => { window.__docPrancha = x; return { ok: true }; } }; window.confirm = () => true;
     document.getElementById('detalhar').click();
     const u = document.getElementById('dtUnid');
     if (cm === /cm/.test(u.textContent)) u.click();
     await new Promise(x => setTimeout(x, 300));
     document.getElementById('dtPrancha').click(); await new Promise(x => setTimeout(x, 900));
     return [...document.querySelectorAll('#dtPranchas .prancha')].map(pr => {
-      const tx = [...pr.querySelectorAll('svg text[fill="#1d4f91"]')].map(x => x.textContent);
-      const ver = [...pr.querySelectorAll('svg text[fill="#D53309"]')].map(x => x.textContent).filter(x => /-V-/.test(x)).map(x => x.split('-')[1]);
-      return { tit: pr.querySelector('svg > text').textContent, ps: tx.filter(x => /^P\d+$/.test(x)), cotas: tx.filter(x => /^[\d.,]+$/.test(x)), inicio: tx.filter(x => /início/.test(x)), ver };
+      const az = [...pr.querySelectorAll('svg text[fill="#1d4f91"]')].map(x => x.textContent);
+      const lj = [...pr.querySelectorAll('svg text[fill="#e0601a"]')].map(x => x.textContent);
+      return { tit: pr.querySelector('svg > text').textContent, ps: az.filter(x => /^P\d+$/.test(x)), cotas: az.filter(x => /^[\d.,]+$/.test(x)),
+        ref: az.filter(x => / da /.test(x)), gerais: az.filter(x => /comprimento total|banzo superior/.test(x)), alturas: az.filter(x => /^[\d.,]+$/.test(x)).length,
+        laranja: lj, triangulos: pr.querySelectorAll('svg path[fill="#e0601a"]').length, inicio: pr.querySelectorAll('svg circle[fill="#1d4f91"]').length };
     });
   }, cm).catch(e => [{ erro: e.message }]);
-  const mm = await le(false), J = JSON.stringify(mm).slice(0, 1800) + ' ' + erros.join(' | ');
+}
+
+teste('leitor-prancha-cota-verticais', async (b, t) => {
+  // Pedido: cota entre as verticais nos trechos, na horizontal, ao longo do
+  // banzo de baixo; começa na cumeeira e vai para os dois lados, da aba
+  // interna de uma vertical até a aba interna da próxima (a face do lado da
+  // ponta baixa). Na folha completa: comprimento total, alturas das pontas e
+  // banzo superior -- e nada da corrente das verticais.
+  if (!fs.existsSync(path.join(FIX_LEITOR, 'caso4.dxf')) || !fs.existsSync(path.join(RAIZ, 'leitor_dwg'))) return;
+  const { ctx, pg, erros } = await leitorImporta(b, path.join(FIX_LEITOR, 'caso4.dxf'), { viewport: { width: 1400, height: 900 } });
+  const mv = await pg.evaluate(() => window.__leitorTeste.marcasVerticais ? window.__leitorTeste.marcasVerticais() : { erro: 'sem gancho' }).catch(e => ({ erro: e.message }));
+  const m0 = Array.isArray(mv) ? mv[0] : null, JM = JSON.stringify(mv).slice(0, 1200);
+  t.ok('a corrente começa na cumeeira e vai para os dois lados', !!m0 && m0.lados.length === 2 &&
+    m0.lados.every(l => l.marcas.every((q, i) => !i || (l.lado < 0 ? q.x < l.marcas[i - 1].x : q.x > l.marcas[i - 1].x))), JM);
+  t.ok('mede pela aba interna: face esquerda do lado esquerdo, face direita do lado direito', !!m0 &&
+    m0.lados.every(l => l.marcas.filter(q => q.pos).every(q => Math.abs(q.x - (l.lado < 0 ? q.mn : q.mx)) < 0.01)), JM);
+  const mm = await leitorPranchasCotas(pg, false), J = JSON.stringify(mm).slice(0, 1800) + ' ' + erros.join(' | ');
   const trechos = mm.filter(x => /TRECHO/.test(x.tit || '')), completas = mm.filter(x => /COMPLETA/.test(x.tit || ''));
-  t.ok('folha completa sem cota das verticais', completas.length > 0 && completas.every(x => !x.ps.length && !x.cotas.length), J);
-  t.ok('cada trecho: um P por vertical desenhada e uma cota entre cada duas', trechos.length >= 2 && trechos.every(x => x.ps.length >= 2 &&
-    [...new Set(x.ver)].every(p => x.ps.includes(p)) && x.cotas.length === x.ps.length - 1), J);
-  t.ok('o trecho que não começa na ponta diz onde está a primeira vertical', trechos.filter(x => !/TRECHO 1\//.test(x.tit)).every(x => x.inicio.length === 1 && /^P\d+ a [\d.]+ mm do início da tesoura$/.test(x.inicio[0])), J);
-  const cm = await le(true), J2 = JSON.stringify(cm.map(x => x.cotas)).slice(0, 800);
+  t.ok('folha completa: comprimento total e banzo superior, sem a corrente das verticais', completas.length > 0 &&
+    completas.every(x => !x.ps.length && x.gerais.some(g => /comprimento total/.test(g)) && x.gerais.some(g => /banzo superior/.test(g)) && x.alturas >= 2), J);
+  t.ok('cada trecho: P das verticais e uma cota entre cada duas, sem medidas gerais', trechos.length >= 2 &&
+    trechos.every(x => x.ps.length >= 2 && x.cotas.length >= x.ps.length - 1 && !x.gerais.length), J);
+  t.ok('o trecho sem a cumeeira diz a que distância dela começa; o da cumeeira marca o início', trechos.filter(x => !x.inicio).every(x => x.ref.length >= 1 &&
+    x.ref.every(r => /^P\d+ a [\d.]+ mm da P\d+ \((cumeeira|ponta alta)\)$/.test(r))) && trechos.some(x => x.inicio > 0), J);
+  t.ok('a frase antiga "do início da tesoura" saiu', mm.every(x => !(x.ref || []).some(r => /início da tesoura/.test(r))), J);
+  const cm = await leitorPranchasCotas(pg, true), J2 = JSON.stringify(cm.map(x => x.cotas)).slice(0, 800);
   const nmm = v => +v.replace(/\./g, ''), ncm = v => parseFloat(v.replace(/\./g, '').replace(',', '.'));
   // em cm a letra é mais larga e a tesoura pode partir em outro número de
   // trechos: confere cada cota em cm contra as medidas que existem em mm
   const todasMM = mm.flatMap(x => x.cotas.map(nmm));
   t.ok('"Ver em cm" muda a cota também', cm.some(x => x.cotas.length) && cm.every(x => x.cotas.every(c => /,\d$/.test(c) &&
     todasMM.some(v => Math.abs(ncm(c) * 10 - v) < 0.51))), J2);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
+teste('leitor-prancha-cota-suporte-terca', async (b, t) => {
+  // A cota da arquiteta ao longo do banzo de cima marca onde cada suporte de
+  // terça é soldado. O leitor acha essa cota pela posição (encostada e
+  // paralela ao banzo superior), sem camada especial, e põe na prancha em
+  // laranja com um triângulo em cada suporte. Uma cota no banzo de baixo e
+  // uma cota solta longe da tesoura NÃO entram.
+  const ex = path.join(RAIZ, 'leitor_dwg', 'modelo', 'RM_EXEMPLO.dxf');
+  if (!fs.existsSync(ex)) return;
+  const ysup = x => 40 + (x <= 600 ? x : 1200 - x) * 110 / 600;   // o mesmo desenho do gera_modelo.py (cm)
+  const dim = (a, b, v) => ['0', 'DIMENSION', '8', 'RM-COTA', '13', a[0], '23', a[1], '14', b[0], '24', b[1], '42', v].join('\n') + '\n';
+  let ents = '';
+  for (const [x0, x1] of [[0, 200], [200, 400], [400, 600], [600, 800], [800, 1000], [1000, 1200]])
+    ents += dim([x0, ysup(x0)], [x1, ysup(x1)], Math.hypot(x1 - x0, ysup(x1) - ysup(x0)));
+  ents += dim([0, 0], [1200, 0], 1200);            // banzo de baixo: não é suporte de terça
+  ents += dim([3000, 3000], [3200, 3036.67], 203);  // solta, longe da tesoura
+  const txt = fs.readFileSync(ex, 'latin1').replace(/(\n\s*2\s*\nENTITIES\s*\n)/, '$1' + ents);
+  const arq = path.join(require('os').tmpdir(), 'rm_exemplo_cota_terca.dxf'); fs.writeFileSync(arq, txt, 'latin1');
+  const { ctx, pg, erros } = await leitorImporta(b, arq, { viewport: { width: 1400, height: 900 } });
+  const r = await leitorPranchasCotas(pg, false), J = JSON.stringify(r).slice(0, 1500) + ' ' + erros.join(' | ');
+  if (process.env.PRANCHA_DOC) fs.writeFileSync(process.env.PRANCHA_DOC.replace(/\.html$/, '-terca.html'), await pg.evaluate(() => window.__docPrancha || ''));
+  const todas = r.flatMap(x => x.laranja || []);
+  t.ok('as seis cotas do banzo de cima saem em laranja (2.033 mm cada)', todas.filter(v => v === '2.033').length >= 6 && todas.every(v => v === '2.033'), J);
+  t.ok('um triângulo em cada suporte (sete pontos)', r.some(x => x.triangulos === 7), J);
+  t.ok('a cota do banzo de baixo e a solta ficam de fora', !todas.some(v => /12\.000|2\.030/.test(v)), J);
   t.ok('sem erro na página', !erros.length, erros.join(' | '));
   await ctx.close();
 });
