@@ -1160,6 +1160,99 @@ teste('orcamento-salvar-novo', async (b, t) => {
   await ctx.close();
 });
 
+teste('orcamento-compras-da-obra', async (b, t) => {
+  // pedido: controle das compras e serviços da obra (metálica, telha de
+  // cobertura/fechamento, itens avulsos, serviços) com valor, fornecedor,
+  // data da compra e previsão de entrega; marcar/desmarcar o que faz parte
+  // da obra fechada; avisar o que está esquecido. A obra entra por BOTÃO,
+  // não sozinha. Com entrega em partes, pedido/nota anexado e lista impressa.
+  if (!fs.existsSync(path.join(RAIZ, 'orcamento-rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'orcamento-rm' });
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    const ontem = rmDiaISO(new Date(Date.now() - 864e5));
+    S.categorias.push({ id: 'cat_par_t', nome: 'PARAFUSOS', items: [{ id: 'pa1', grupo: 'CHUMBADOR 5/8', tipo: '', unidade: 'un', valor: 100 }] });
+    S.categorias.push({ id: 'cat_srv_t', nome: 'SERVIÇOS', items: [{ id: 'sv1', grupo: 'MONTAGEM DA ESTRUTURA', tipo: '', unidade: 'vb', valor: 5000 }] });
+    S.linhasCat = [{ lid: 'c1', catId: 'cat_par_t', itemId: 'pa1', qtd: 10 }, { lid: 'c2', catId: 'cat_srv_t', itemId: 'sv1', qtd: 1 }];
+    const te = (S.telhas || [])[0];
+    S.linhasTelha = te ? [{ lid: 't1', telhaId: te.id, comp: 6000, qtd: 10, obs: 'COBERTURA' }] : [];
+    S.cliente = 'Cliente Fictício Ltda'; S.obra = 'Galpão Exemplo A';
+    renderLines(); recompute(); salvaNovo(); await esp(50);
+    const A = S.orcamentosSalvos[0]; A.status = 'aprovado';
+    // duas outras obras já lançadas, ambas com calhas -- para o "costuma entrar"
+    const outra = id => ({ id, obra: 'Obra Exemplo ' + id, cliente: 'Cliente Fictício ' + id, lancadaEm: '2026-09-01', editadoEm: Date.now() - 5e6,
+      linhas: [{ lid: 'x' + id, chave: '', grupo: 'av', nome: 'Calhas', det: '', orcado: 800, faz: true, comprado: 0, forn: '', dataCompra: '', entregas: [] }] });
+    S.comprasObras = [outra('B'), outra('C')];
+    const o = { semLancar: !S.comprasObras.some(x => x.id === A.id), botaoSalvos: /Lançar no Compras da obra/.test(salvoAcoesHTML(A)) };
+    orcAba('cob'); await esp(150);
+    o.aba = !!document.querySelector('.orc-tab[data-aba="cob"].on') && document.getElementById('panel-cob').classList.contains('on');
+    o.badge = (document.getElementById('orcNCob') || {}).textContent;
+    o.listaAntes = [...document.querySelectorAll('#cobBody .cob-ob b')].map(x => x.textContent);
+    const sel = document.getElementById('cobEscolheOrc'); o.opcao = !!sel && [...sel.options].some(x => x.value === A.id);
+    sel.value = A.id; [...document.querySelectorAll('#cobBody .cob-lanca button')][0].click(); await esp(150);
+    const reg = () => S.comprasObras.find(x => x.id === A.id);
+    const L = nome => reg().linhas.find(l => new RegExp(nome, 'i').test(l.nome));
+    o.lancou = !!reg() && COB_SEL === A.id;
+    o.linhas = reg().linhas.map(l => l.grupo + ':' + l.nome + ':' + l.orcado);
+    const inp = (lid, campo) => document.querySelector('#cobBody [onchange*="\'' + lid + '\',\'' + campo + '\'"]');
+    const muda = (el, v) => { if (el.type === 'checkbox') el.checked = v; else el.value = v; el.dispatchEvent(new Event('change', { bubbles: true })); };
+    const av = () => [...document.querySelectorAll('#cobBody .cob-av')].map(x => x.textContent.replace(/\s+/g, ' '));
+    o.av0 = av();
+    // "costuma entrar": Calhas -> Faz parte
+    const bt = [...document.querySelectorAll('#cobBody .cob-av button')].find(x => x.textContent === 'Faz parte'); if (bt) bt.click(); await esp(80);
+    o.calhas = L('calhas') ? L('calhas').faz : null; o.av1 = av();
+    // compra dos chumbadores, 10% acima do orçado, entrega prevista ontem
+    const ch = L('chumbador').lid;
+    muda(inp(ch, 'comprado'), '1.100,00'); muda(inp(ch, 'forn'), 'Fornecedor Exemplo'); muda(inp(ch, 'dataCompra'), rmDiaISO()); muda(inp(ch, 'prev'), ontem); await esp(80);
+    o.compra = { sit: cobSit(L('chumbador')), av: av(), chip: (document.querySelector('#cobBody .cob-l .cob-st-comprado') || {}).textContent };
+    const rec = [...document.querySelectorAll('#cobBody .cob-av button')].find(x => x.textContent === 'Recebido'); if (rec) rec.click(); await esp(80);
+    o.recebido = cobSit(L('chumbador'));
+    // desmarca a montagem: sai das contas, fica riscada
+    const mo = L('montagem').lid, antes = cobContas(reg()).orcado;
+    muda(document.querySelector('#cobBody .cob-l input.cob-faz[onchange*="\'' + mo + '\'"]'), false); await esp(80);
+    o.fora = { antes, depois: cobContas(reg()).orcado, sit: cobSit(L('montagem')), riscada: !!document.querySelector('#cobBody tr.cob-fora') };
+    // entrega em partes nas calhas
+    const ca = L('calhas').lid; muda(inp(ca, 'comprado'), '900'); await esp(30);
+    cobPartes(ca); await esp(30); cobNovaEnt(ca); await esp(30);
+    const ens = L('calhas').entregas; o.partes = ens.length;
+    cobRecebe(ca, ens[0].eid, true); await esp(30); o.parcial = cobSit(L('calhas'));
+    cobRecebe(ca, ens[1].eid, true); await esp(30); o.total = cobSit(L('calhas'));
+    o.resumoPartes = (document.querySelector('#cobBody .cob-partes-r') || {}).textContent;
+    // impressão
+    const pr = window.print; let area = ''; window.print = () => { area = document.getElementById('relPrintArea').textContent; };
+    cobImprimir(); window.print = pr;
+    o.impresso = /Compras da obra/.test(area) && /Galpão Exemplo A/.test(area) && /Calhas/.test(area);
+    o.botaoDepois = /Ver no Compras da obra/.test(salvoAcoesHTML(A));
+    // nuvem: a cópia velha desta obra não apaga o que está aqui; obra nova de outro aparelho entra
+    const aqui = JSON.stringify(reg());
+    fbJuntaListas({ comprasObras: [{ id: A.id, editadoEm: 1, linhas: [] }, { id: 'Z', obra: 'Obra Exemplo Z', editadoEm: Date.now(), linhas: [] }] });
+    o.nuvem = { manteve: JSON.stringify(reg()) === aqui, entrou: S.comprasObras.some(x => x.id === 'Z') };
+    // tirar do controle: marca (não apaga), e lançar de novo traz a lista de volta
+    window.confirm = () => true; COB_SEL = A.id; cobTirar(); await esp(30);
+    o.tirou = { marca: reg().removida === true, lista: cobObras().some(x => x.id === A.id) };
+    cobLancar(A.id); await esp(50);
+    o.voltou = !reg().removida && L('chumbador').comprado === 1100;
+    o.sync = LISTAS_JUNTAM.includes('comprasObras') && !fbChavesSync(cloudData()).includes('comprasObras');
+    return o;
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  t.ok('a obra NÃO entra sozinha: o orçamento salvo tem o botão "Lançar no Compras da obra"', !r.erro && r.semLancar && r.botaoSalvos, J);
+  t.ok('aba "Compras da obra" com o selo das obras com compra pendente', !r.erro && r.aba && r.badge === '2' && !r.listaAntes.includes('Galpão Exemplo A'), J);
+  t.ok('"+ Lançar obra" na aba lança o orçamento escolhido', !r.erro && r.opcao && r.lancou, J);
+  t.ok('as linhas vêm do orçamento por grupo: itens avulsos, serviços e telha de cobertura, com o valor orçado', !r.erro && r.linhas.some(x => /^av:CHUMBADOR 5\/8.*:1000$/.test(x)) && r.linhas.some(x => /^srv:MONTAGEM DA ESTRUTURA.*:5000$/.test(x)) && (r.linhas.some(x => /^tel:Telha de cobertura/.test(x)) || !r.linhas.some(x => /^tel:/.test(x))), J);
+  t.ok('avisa o que falta comprar e o que costuma entrar (calhas, em 2 das 2 outras obras); "Faz parte" põe na lista', !r.erro && r.av0.some(x => /Faltam comprar/.test(x)) && r.av0.some(x => /Calhas.*Faltou/.test(x)) && r.calhas === true && !r.av1.some(x => /Calhas.*Faltou/.test(x)), J);
+  t.ok('comprado: valor, fornecedor e data; avisa entrega atrasada e compra 10% acima do orçado', !r.erro && r.compra.sit === 'comprado' && r.compra.av.some(x => /prevista para .* não foi marcada como recebida/.test(x)) && r.compra.av.some(x => /10,0% acima do orçado/.test(x)), J);
+  t.ok('"Recebido" no aviso marca a entrega e a situação vira Entregue', !r.erro && r.recebido === 'entregue', J);
+  t.ok('desmarcar "na obra": sai das contas e fica riscada, como Fora da obra', !r.erro && Math.abs(r.fora.antes - r.fora.depois - 5000) < 0.01 && r.fora.sit === 'fora' && r.fora.riscada, J);
+  t.ok('entrega em partes: Comprado até a última parte chegar, aí Entregue', !r.erro && r.partes === 2 && r.parcial === 'comprado' && r.total === 'entregue', J);
+  t.ok('imprime a lista no papel da RM', !r.erro && r.impresso, J);
+  t.ok('lançada: o botão no salvo vira "Ver no Compras da obra"', !r.erro && r.botaoDepois, J);
+  t.ok('nuvem: cópia velha não apaga a obra daqui; obra de outro aparelho entra', !r.erro && r.nuvem.manteve && r.nuvem.entrou && r.sync, J);
+  t.ok('tirar do controle só marca; lançar de novo traz a lista como estava', !r.erro && r.tirou.marca && !r.tirou.lista && r.voltou, J);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
 teste('orcamento-salvos-perda-e-validade', async (b, t) => {
   // Perdido sem motivo não ensina nada: ao marcar Perdido, pergunta por quê
   // (o campo "Motivo" ficava escondido em "Mais campos"). E orçamento com a
