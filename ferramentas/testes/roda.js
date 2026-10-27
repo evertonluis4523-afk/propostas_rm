@@ -2052,9 +2052,10 @@ teste('leitor-prancha-emenda-banzo', async (b, t) => {
   // "A informação do recorte dos banzos está deslocada, organize de forma
   // alinhada e com setas direcionando": uma etiqueta por emenda, numa fileira
   // (mesma altura no papel para o superior, outra para o inferior), com seta
-  const re = /^EMENDA (B[SI]) · (\d+)\/(\d+) ([\d.]+)  \|  (\d+)\/(\d+) ([\d.]+)$/;
+  // (a emenda ganhou número: "E1 · EMENDA BS · ...", o mesmo do quadro da folha longa)
+  const re = /^E\d+ · EMENDA (B[SI]) · (\d+)\/(\d+) ([\d.]+)  \|  (\d+)\/(\d+) ([\d.]+)$/;
   const et = (comp.pedacos || []).map(x => x.match(re));
-  const bs = (comp.pedacos || []).map((x, i) => [x, comp.ys[i]]).filter(([x]) => /^EMENDA BS/.test(x)), bi = (comp.pedacos || []).map((x, i) => [x, comp.ys[i]]).filter(([x]) => /^EMENDA BI/.test(x));
+  const bs = (comp.pedacos || []).map((x, i) => [x, comp.ys[i]]).filter(([x]) => /^E\d+ · EMENDA BS/.test(x)), bi = (comp.pedacos || []).map((x, i) => [x, comp.ys[i]]).filter(([x]) => /^E\d+ · EMENDA BI/.test(x));
   t.ok('uma etiqueta por emenda, com seta e marca no banzo', et.length >= 2 && et.every(Boolean) && comp.setas === et.length && comp.marcas >= et.length, J);
   t.ok('etiquetas alinhadas: todas do superior numa altura, todas do inferior em outra', bs.length >= 1 && bi.length >= 1 &&
     new Set(bs.map(x => x[1])).size === 1 && new Set(bi.map(x => x[1])).size === 1 && bs[0][1] !== bi[0][1], J);
@@ -2063,6 +2064,361 @@ teste('leitor-prancha-emenda-banzo', async (b, t) => {
     et.every(m => m && (r.pedido || []).includes(m[4]) && (r.pedido || []).includes(m[7])), J);
   t.ok('sem erro na página', !erros.length, erros.join(' | '));
   await ctx.close();
+});
+
+/* ---- Auditoria da aba Detalhamento do Leitor DWG ----
+   "Análise o leitor dwg - aba detalhamento / PDF gerados ... encontre erros,
+   proponha melhorias" -> "pode aplicar tudo, pedaço curto na ponta baixa;
+   o parceiro cobra pelo peso da peça pronta; A3 automático: sim". */
+const LEITOR_EXEMPLO = () => path.join(RAIZ, 'leitor_dwg', 'modelo', 'RM_EXEMPLO.dxf');
+/* PDF de um documento de impressão capturado: páginas e tamanho de cada uma */
+async function leitorPdfInfo(ctx, h) {
+  const p = await ctx.newPage();
+  await p.setContent(h || '<p>sem documento</p>');
+  const pdf = await p.pdf({ preferCSSPageSize: true, printBackground: true }).catch(() => null);
+  await p.close();
+  if (!pdf) return { n: 0, tam: [] };
+  const s = pdf.toString('latin1');
+  const tam = [...s.matchAll(/\/MediaBox\s*\[\s*0 0 ([\d.]+) ([\d.]+)\s*\]/g)].map(m => Math.round(+m[1]) + 'x' + Math.round(+m[2]));
+  return { n: (s.match(/\/Type\s*\/Page[^s]/g) || []).length, tam };
+}
+/* clica no botão da aba Detalhamento e devolve o HTML mandado para o PDF */
+const leitorCapturaPdf = (pg, botao, cm) => pg.evaluate(async ({ botao, cm }) => {
+  const esp = ms => new Promise(x => setTimeout(x, ms));
+  let h = null; window.rmDesktop = { salvarPDF: async x => { h = x; return { ok: true }; } }; window.confirm = () => true;
+  if (!document.getElementById(botao)) { document.getElementById('detalhar').click(); await esp(400); }
+  if (cm && /cm/.test(document.getElementById('dtUnid').textContent)) { document.getElementById('dtUnid').click(); await esp(300); }
+  document.getElementById(botao).click(); await esp(1500);
+  const folhas = [...document.querySelectorAll('#dtPranchas .prancha')].map(pr => ({
+    folha: pr.dataset.folha || '', tit: (pr.querySelector('svg > text') || {}).textContent || '',
+    txt: [...pr.querySelectorAll('svg text')].map(x => ({ t: x.textContent, x: +x.getAttribute('x'), y: +x.getAttribute('y'),
+      f: x.getAttribute('fill'), fs: +x.getAttribute('font-size'), a: x.getAttribute('text-anchor') })) }));
+  return { h, folhas };
+}, { botao, cm: !!cm }).catch(e => ({ erro: e.message }));
+
+teste('leitor-emenda-ponta-baixa', async (b, t) => {
+  // Auditoria: as duas águas da tesoura de 12 m eram cortadas ao contrário
+  // (o pedaço curto na cumeeira numa e na ponta baixa na outra) e a emenda do
+  // banzo de baixo caía no nó da cumeeira sem nenhum destaque. Regra do
+  // Everton: "pedaço curto na ponta baixa".
+  if (!fs.existsSync(LEITOR_EXEMPLO())) return;
+  const { ctx, pg, erros } = await leitorImporta(b, LEITOR_EXEMPLO(), { viewport: { width: 1400, height: 900 } });
+  const r = await leitorCapturaPdf(pg, 'dtPrancha');
+  const f = (r.folhas || [])[0] || { txt: [] };
+  const em = f.txt.filter(x => /EMENDA/.test(x.t)).sort((p, q) => p.x - q.x);
+  const bs = em.filter(x => /EMENDA BS/.test(x.t)), bi = em.filter(x => /EMENDA BI/.test(x.t));
+  const pedacos = x => (x.t.match(/(\d+)\/\d+ ([\d.]+)/g) || []).map(s => +s.split(' ')[1].replace(/\./g, ''));
+  const rel = await pg.evaluate(async () => { document.getElementById('dtPrint').click(); await new Promise(x => setTimeout(x, 300));
+    return [...document.querySelectorAll('#printArea .rc-t')].filter(tb => /Pedaços \(emenda\)/.test(tb.innerText))
+      .map(tb => tb.innerText.replace(/\s+/g, ' ')).join(' || '); }).catch(e => 'erro ' + e.message);
+  const J = JSON.stringify({ erro: r.erro, em: em.map(x => [x.t, x.f, Math.round(x.x)]), rel: String(rel).slice(0, 500) }) + ' ' + erros.join(' | ');
+  t.ok('as duas águas cortam igual: o pedaço curto (500) fica na ponta baixa de cada lado', !r.erro && bs.length === 2 &&
+    pedacos(bs[0])[0] === 500 && pedacos(bs[0])[1] === 5600 && pedacos(bs[1])[0] === 5600 && pedacos(bs[1])[1] === 500, J);
+  t.ok('emendas numeradas da esquerda para a direita (E1 à esquerda, E2 à direita)', bs.length === 2 && /^E1 · /.test(bs[0].t) && /^E2 · /.test(bs[1].t), J);
+  t.ok('a emenda do banzo de baixo em cima do nó sai em vermelho, escrito SOBRE NÓ', bi.length === 1 && bi[0].f === '#c0262d' && /SOBRE NÓ/.test(bi[0].t), J);
+  t.ok('no relatório as duas águas viram uma linha só (mesmo plano), e o nó diz de que ponta', /Superior[^|]*?2[^|]*?5\.600 mm \+ 500 mm/.test(rel) && /emenda sobre nó a [\d.]+ mm da ponta/.test(rel), J);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
+teste('leitor-trelica-corrente-p1', async (b, t) => {
+  // Auditoria: na treliça de banzos paralelos não existe ponta alta, e a
+  // corrente azul começava numa ponta qualquer ("P21 a 49.985 mm da P121
+  // (ponta alta)"). Banzo de cima deitado começa na ponta esquerda, em P1.
+  if (!fs.existsSync(path.join(RAIZ, 'leitor_dwg'))) return;
+  const L = [];
+  const ln = (x1, y1, x2, y2, cor, lay) => L.push([x1, y1, x2, y2, cor, lay || '0']);
+  ln(0, 0, 1200, 0, 2); ln(1200, 80, 0, 80, 2);                 // o banzo de cima desenhado da direita para a esquerda
+  for (const x of [0, 200, 400, 600, 800, 1000, 1200]) ln(x, 0, x, 80, 1);
+  for (let x = 0; x < 1200; x += 200) ln(x, 80, x + 200, 0, 1);
+  [[-50, -60], [1250, -60], [1250, 200], [-50, 200]].forEach((q, i, a) => ln(q[0], q[1], a[(i + 1) % 4][0], a[(i + 1) % 4][1], 3, 'QUADRO'));
+  const arq = dxfTeste('trelica_p1', L, [['TRELIÇA 01\\PU 40x100x40 #2,00\\PU 30x93x30 #2,00\\PQTD: 2', 100, 160]]);
+  const { ctx, pg, erros } = await leitorImporta(b, arq);
+  const r = await pg.evaluate(() => (window.__leitorTeste.marcasVerticais() || [])[0]).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  t.ok('a corrente começa em P1, na ponta esquerda', r && !r.erro && r.inicio === 'P1' && r.lados.length === 1 && r.lados[0].lado === 1 && r.lados[0].marcas[0].pos === 'P1', J);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
+teste('leitor-prancha-completa-legivel', async (b, t) => {
+  // Auditoria: a folha da tesoura de 41 m numa A4 saía com letra de 1,7 mm,
+  // as etiquetas das emendas uma em cima da outra e os números da corrente
+  // azul encavalados nas pontas. "A3 automático: sim".
+  if (!fs.existsSync(path.join(FIX_LEITOR, 'caso1.dxf')) || !fs.existsSync(path.join(RAIZ, 'leitor_dwg'))) return;
+  const { ctx, pg, erros } = await leitorImporta(b, path.join(FIX_LEITOR, 'caso1.dxf'), { viewport: { width: 1400, height: 900 } });
+  const r = await leitorCapturaPdf(pg, 'dtPrancha');
+  const pdf = r.h ? await leitorPdfInfo(ctx, r.h) : { n: 0, tam: [] };
+  const comp = (r.folhas || []).find(f => /Estrutura A/.test(f.tit) && /COMPLETA/.test(f.tit)) || { txt: [] };
+  const letra = +((comp.txt.find(x => /letra [\d,]+ mm/.test(x.t)) || { t: '' }).t.match(/letra ([\d,]+) mm/) || [0, '0'])[1].replace(',', '.');
+  const roxo = comp.txt.filter(x => x.f === '#7b3fb5' || x.f === '#c0262d');
+  const marcas = roxo.filter(x => /^E\d+$/.test(x.t)), quadro = comp.txt.filter(x => /^E\d+ · EMENDA B[SI]/.test(x.t));
+  // números da corrente azul (sem negrito, "1.346"): na mesma fileira, nenhum encosta no vizinho
+  const az = comp.txt.filter(x => x.f === '#1d4f91' && /^[\d.]+$/.test(x.t) && x.a === 'middle');
+  const filas = {}; az.forEach(x => (filas[Math.round(x.y * 10)] = filas[Math.round(x.y * 10)] || []).push(x));
+  let encosta = 0;
+  Object.values(filas).forEach(l => { l.sort((p, q) => p.x - q.x); for (let i = 1; i < l.length; i++)
+    if (l[i].x - l[i - 1].x < (l[i].t.length + l[i - 1].t.length) * l[i].fs * .6 / 2) encosta++; });
+  const J = JSON.stringify({ erro: r.erro, folha: comp.folha, letra, pdf, marcas: marcas.length, quadro: quadro.length, encosta, filas: Object.keys(filas).length }) + ' ' + erros.join(' | ');
+  t.ok('a folha da tesoura completa longa sai em A3, com letra acima de 2,2 mm', !r.erro && comp.folha === 'A3' && letra >= 2.2, J);
+  t.ok('o PDF vai todo em A3 e sem folha em branco (uma página por prancha)', pdf.n === (r.folhas || []).length && pdf.tam.length === pdf.n && pdf.tam.every(x => x === '1191x842'), J);
+  t.ok('as emendas viram E1, E2... no desenho e o quadro no pé da folha diz cada uma', marcas.length >= 6 && quadro.length === marcas.length, J);
+  t.ok('os números da corrente azul não se encavalam (os apertados sobem um andar)', az.length > 20 && encosta === 0 && Object.keys(filas).length >= 2, J);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
+teste('leitor-grupos-sem-folha-branca', async (b, t) => {
+  // Auditoria: o PDF "Peças por grupo" sempre começava com uma folha em
+  // branco -- a fileira de botões ficava no fluxo do papel com altura zero.
+  if (!fs.existsSync(LEITOR_EXEMPLO())) return;
+  const { ctx, pg, erros } = await leitorImporta(b, LEITOR_EXEMPLO(), { viewport: { width: 1400, height: 900 } });
+  await leitorCapturaPdf(pg, 'dtPrancha');            // o caminho de quem usa: a prancha, depois os grupos
+  const r = await leitorCapturaPdf(pg, 'dtGrupos');
+  const pdf = r.h ? await leitorPdfInfo(ctx, r.h) : { n: 0 };
+  const J = JSON.stringify({ erro: r.erro, n: (r.folhas || []).length, pdf }) + ' ' + erros.join(' | ');
+  t.ok('uma página por estrutura, sem folha em branco', !r.erro && (r.folhas || []).length === 1 && pdf.n === 1, J);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
+teste('leitor-dxf-montagem-cotas', async (b, t) => {
+  // Auditoria: o DXF da montagem não dizia a unidade (num desenho em cm
+  // entrava 10 vezes maior) e não tinha nenhuma das cotas novas da prancha.
+  if (!fs.existsSync(LEITOR_EXEMPLO())) return;
+  const { ctx, pg, erros } = await leitorImporta(b, LEITOR_EXEMPLO(), { viewport: { width: 1400, height: 900 } });
+  const dxf = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms)); window.confirm = () => true;
+    let txt = ''; const oc = URL.createObjectURL; URL.createObjectURL = bl => { bl.text().then(x => { txt = x; }); return oc.call(URL, bl); };
+    document.getElementById('detalhar').click(); await esp(400);
+    document.getElementById('dtDxf').click(); await esp(800);
+    return txt; }).catch(e => 'erro ' + e.message);
+  const camada = n => new RegExp('\\n8\\n' + n + '\\n').test(dxf);
+  const J = String(dxf).slice(0, 300) + ' ' + erros.join(' | ');
+  t.ok('o arquivo declara milímetro ($INSUNITS = 4)', /\$INSUNITS\n70\n4\n/.test(dxf), J);
+  t.ok('leva a corrente azul, o comprimento total e as emendas, cada um na sua camada', camada('RM-COTA-VAO') && camada('RM-EMENDA') && camada('RM-EMENDA-NO') &&
+    /12\.000 comprimento total/.test(dxf) && /E1 \\U\+00B7 EMENDA BS/.test(dxf) && /SOBRE N\\U\+00D3/.test(dxf), J);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
+teste('leitor-banzo-exato-no-detalhado', async (b, t) => {
+  // Auditoria: no caminho detalhado o banzo continuava com 10% de quebra,
+  // embora o plano de emenda já diga quantas barras se compram -- o mesmo
+  // número da lista de compra. A quebra fica só no "tudo em barras".
+  if (!fs.existsSync(path.join(RAIZ, 'leitor_dwg'))) return;
+  const { ctx, pg, erros } = await leitorImporta(b, trelicaTeste('banzo_exato'));
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms)), L = window.__leitorTeste;
+    localStorage.setItem(L.cuKey, JSON.stringify({ barra: 300 })); L.chapasCfg({ sheetRkg: 7.5, serviceRkg: 4 });
+    document.querySelector('[data-dsub="comp"]').click(); await esp(400);
+    const cards = [...document.querySelectorAll('#detComp .cmp-card')].map(c => c.innerText.replace(/\s+/g, ' '));
+    const lista = L.estado().LASTROWS.filter(x => /40X100X40/i.test(x.name.replace(/\s/g, ''))).map(x => x.bars);
+    document.getElementById('cutReport').click(); await esp(500);
+    return { cards, lista, rel: document.getElementById('printArea').innerText.replace(/\s+/g, ' ') };
+  }).catch(e => ({ erro: e.message }));
+  const n = c => +((String(c).match(/(\d+) barras de 6 m · (?:com quebra|plano de emenda)/) || [])[1]);
+  const J = JSON.stringify({ erro: r.erro, cards: (r.cards || []).map(c => c.slice(0, 260)), lista: r.lista }) + ' ' + erros.join(' | ');
+  t.ok('tudo em barras: banzo com a quebra; detalhado e chapas: barras do plano de emenda', !r.erro && /barras de 6 m · com quebra/.test(r.cards[0]) &&
+    /barras de 6 m · plano de emenda/.test(r.cards[1]) && /barras de 6 m · plano de emenda/.test(r.cards[2]) && n(r.cards[0]) > 0, J);
+  t.ok('o banzo do detalhado é o mesmo número da lista de compra', !r.erro && r.lista.length === 1 && n(r.cards[1]) === r.lista[0], J);
+  t.ok('o relatório de corte diz "plano de emenda, sem quebra"', !r.erro && /plano de emenda, sem quebra/.test(r.rel), J);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
+teste('leitor-preco-obra-em-todas-as-telas', async (b, t) => {
+  // Auditoria: o preço por kg digitado para a obra só valia nos cartões do
+  // Comparativo; o relatório de corte e a tela de chapas seguiam com o banco
+  // -- o mesmo caminho com dois valores.
+  if (!fs.existsSync(path.join(RAIZ, 'leitor_dwg'))) return;
+  const { ctx, pg, erros } = await leitorImporta(b, trelicaTeste('preco_telas'));
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms)), L = window.__leitorTeste;
+    localStorage.setItem(L.cuKey, JSON.stringify({ barra: 300 })); L.chapasCfg({ sheetRkg: 7.5, serviceRkg: 4 });
+    document.querySelector('[data-dsub="comp"]').click(); await esp(400);
+    const poe = async (k, v) => { const i = document.querySelector('#detComp [data-cmp-preco="' + k + '"]');
+      i.value = v; i.dispatchEvent(new Event('change', { bubbles: true })); await esp(200); };
+    await poe('barra', '5'); await poe('det', '4'); await poe('chapa', '3');
+    const cards = L.comparativo().textos;
+    document.getElementById('cutReport').click(); await esp(600);
+    const rel = document.getElementById('printArea').innerText.replace(/\s+/g, ' ');
+    await poe('barra', ''); await poe('det', ''); await poe('chapa', '');
+    return { cards, rel };
+  }).catch(e => ({ erro: e.message }));
+  const nr = s => String(s || '').replace(/\s+/g, ' ');
+  const sem = (nr(r.rel).match(/Custo: tudo em barras de 6 m (R\$ [\d.,]+)/) || [])[1];
+  const ch = (nr(r.rel).match(/Chapas \+ parceiro \+ banzos (R\$ [\d.,]+)/) || [])[1];
+  const J = JSON.stringify({ erro: r.erro, cards: r.cards, sem, ch, rel: nr(r.rel).slice(0, 200) }) + ' ' + erros.join(' | ');
+  t.ok('relatório de corte: "tudo em barras" com o preço da obra, igual ao cartão', !r.erro && sem && nr(sem) === nr(r.cards[0]), J);
+  t.ok('chapas + parceiro com o preço fixo da obra, igual ao cartão, e a linha que diz isso', !r.erro && ch && nr(ch) === nr(r.cards[2]) && /Preço desta obra: chapas \+ parceiro/.test(r.rel), J);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
+teste('leitor-parceiro-peso-peca-pronta', async (b, t) => {
+  // "cobra pelo peso da peça pronta, diferente da Perfitec ou outro
+  // fornecedor que cobra o aproveitamento (188,8 é cobrado 200 mm)": o
+  // serviço do parceiro usava o kg/m do aproveitamento da bobina.
+  if (!fs.existsSync(path.join(RAIZ, 'leitor_dwg'))) return;
+  const { ctx, pg, erros } = await leitorImporta(b, trelicaTeste('peso_pronta'));
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms)), L = window.__leitorTeste;
+    localStorage.setItem(L.cuKey, JSON.stringify({ barra: 300 })); L.chapasCfg({ sheetRkg: 7.5, serviceRkg: 4 });
+    document.querySelector('[data-dsub="comp"]').click(); await esp(400);
+    const s = (L.secoes().secoes || [])[0], sh = L.chapaPerfil('U 30X93X30 #2,00', 2, 'carbono');
+    return { peso: L.comparativo().pesoChapa, mm: s.tot, flat: sh.flat,
+      card: document.querySelectorAll('#detComp .cmp-card')[2].innerText.replace(/\s+/g, ' ') };
+  }).catch(e => ({ erro: e.message }));
+  const esperado = r.mm / 1000 * r.flat * 2 * 8000 / 1e6;
+  const J = JSON.stringify({ ...r, esperado }) + ' ' + erros.join(' | ');
+  t.ok('peso do serviço = comprimento das peças × largura aberta da tira × espessura × densidade', !r.erro && r.flat > 140 && r.flat < 150 && Math.abs(r.peso - esperado) < esperado * 0.005, J);
+  t.ok('o cartão diz que é o peso das peças prontas', !r.erro && /kg das peças prontas/.test(r.card), J);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
+teste('leitor-codigo-unico-e-unidade', async (b, t) => {
+  // Auditoria: em "Ver em cm" a prancha mudava os códigos, mas o relatório
+  // e o localizador continuavam com o código do laser em mm ("Comp. (mm)") --
+  // a mesma peça com dois nomes.
+  if (!fs.existsSync(LEITOR_EXEMPLO())) return;
+  const { ctx, pg, erros } = await leitorImporta(b, LEITOR_EXEMPLO(), { viewport: { width: 1400, height: 900 } });
+  const r = await leitorCapturaPdf(pg, 'dtPrancha', true);
+  const prancha = ((r.folhas || [])[0] || { txt: [] }).txt.filter(x => x.f === '#D53309' && /-P\d+-/.test(x.t)).map(x => x.t);
+  const o = await pg.evaluate(async () => {
+    document.body.classList.remove('so-prancha');
+    document.getElementById('dtPrint').click(); await new Promise(x => setTimeout(x, 400));
+    const rel = [...document.querySelectorAll('#printArea .rc-pos tbody tr')].map(tr => tr.lastElementChild.innerText.trim());
+    const loc = document.querySelector('#printArea [aria-label="Posições do mapa de localização"] thead');
+    return { rel, loc: loc ? loc.innerText : '', aviso: (document.getElementById('dxfAviso') || {}).innerText || '' };
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify({ erro: r.erro || o.erro, prancha: prancha.slice(0, 4), rel: (o.rel || []).slice(0, 4), loc: o.loc, aviso: String(o.aviso).slice(0, 160) }) + ' ' + erros.join(' | ');
+  t.ok('em cm, a identificação do relatório é o mesmo código da prancha', !r.erro && prancha.length > 5 && (o.rel || []).length === prancha.length &&
+    o.rel.every(x => prancha.includes(x)) && o.rel.every(x => /CM$/.test(x)), J);
+  t.ok('o aviso das pranchas fala em cm', /comprimento de corte em cm/.test(o.aviso), J);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
+teste('leitor-relatorio-enxuto', async (b, t) => {
+  // Auditoria: a coluna Perfil repetia o mesmo perfil em toda linha e
+  // quebrava em duas; "Medidas em mm" ocupava uma caixa do cabeçalho; as
+  // barras de banzo da obra (somadas por perfil) não diziam que eram da obra.
+  if (!fs.existsSync(path.join(FIX_LEITOR, 'caso4.dxf')) || !fs.existsSync(path.join(RAIZ, 'leitor_dwg'))) return;
+  const { ctx, pg, erros } = await leitorImporta(b, path.join(FIX_LEITOR, 'caso4.dxf'), { viewport: { width: 1400, height: 900 } });
+  const r = await pg.evaluate(async () => {
+    document.getElementById('detalhar').click(); await new Promise(x => setTimeout(x, 400));
+    const pa = document.getElementById('printArea');
+    const tabs = [...pa.querySelectorAll('.rc-ct')].filter(x => /Peças a cortar/.test(x.innerText));
+    return { cab: [...pa.querySelectorAll('.rc-res > div span')].map(x => x.innerText), tag: (pa.querySelector('.doc-tag') || {}).innerText || '',
+      tit: tabs.map(x => x.innerText), ths: tabs.map(x => [...x.nextElementSibling.querySelectorAll('th')].map(th => th.innerText)) };
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r).slice(0, 900) + ' ' + erros.join(' | ');
+  t.ok('o perfil vai no título da tabela, sem a coluna repetida', !r.erro && r.tit.length >= 2 && r.tit.every(x => /perfil U /.test(x)) && r.ths.every(h => !h.includes('Perfil')), J);
+  t.ok('"medidas em mm" no subtítulo, e o banzo do topo diz que é da obra toda', !r.erro && /medidas em mm/i.test(r.tag) && !r.cab.some(x => /^Medidas em/i.test(x)) && r.cab.some(x => /Barras de banzo .* obra toda/i.test(x)), J);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
+teste('leitor-botoes-sem-repeticao', async (b, t) => {
+  // Auditoria: "Imprimir / PDF" e "Fechar" apareciam duas vezes na folha do
+  // detalhamento (na barra do alto e no pé).
+  if (!fs.existsSync(path.join(RAIZ, 'leitor_dwg'))) return;
+  const { ctx, pg, erros } = await leitorImporta(b, trelicaTeste('botoes'));
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms)), vis = e => !!(e.offsetWidth || e.offsetHeight);
+    const conta = () => { const bs = [...document.querySelectorAll('#printArea button')].filter(vis).map(x => x.textContent.trim());
+      return { imp: bs.filter(x => /^Imprimir/.test(x)).length, fe: bs.filter(x => /^Fechar/.test(x)).length }; };
+    document.getElementById('detalhar').click(); await esp(400);
+    const det = conta();
+    document.querySelector('#printArea .pa-topo [data-pa="fechar"]').click(); await esp(300);
+    const fechou = document.getElementById('printArea').classList.contains('hide');
+    document.getElementById('cutReport').click(); await esp(500);
+    return { det, cut: conta(), fechou };
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  t.ok('um "Imprimir / PDF" e um "Fechar" no detalhamento e no relatório de corte', !r.erro && r.det.imp === 1 && r.det.fe === 1 && r.cut.imp === 1 && r.cut.fe === 1, J);
+  t.ok('o Fechar do alto continua fechando', !r.erro && r.fechou, J);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
+teste('leitor-chapas-tela-enxuta', async (b, t) => {
+  // Auditoria: a tela Chapas + parceiro abria com parágrafos inteiros de
+  // explicação antes dos números; agora ficam atrás de um "? Como funciona".
+  if (!fs.existsSync(path.join(FIX_LEITOR, 'caso4.dxf')) || !fs.existsSync(path.join(RAIZ, 'leitor_dwg'))) return;
+  const { ctx, pg, erros } = await leitorImporta(b, path.join(FIX_LEITOR, 'caso4.dxf'), { viewport: { width: 1400, height: 900 } });
+  const r = await pg.evaluate(async () => { const esp = ms => new Promise(x => setTimeout(x, ms));
+    document.getElementById('chapasParceiro').click(); await esp(2500);
+    const p = [...document.querySelectorAll('#cpResults p')].find(x => /Cada chapa abaixo do limite/.test(x.textContent));
+    const d = p && p.closest('details.cp-mais');
+    return { tem: !!p, fechado: !!d && !d.open, n: document.querySelectorAll('#cpResults details.cp-mais').length };
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  t.ok('as explicações longas ficam fechadas, a um clique', !r.erro && r.tem && r.fechado && r.n >= 3, J);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
+teste('leitor-3d-marcas-e-nomes', async (b, t) => {
+  // Auditoria do 3D: "Banzo" três vezes sem dizer qual, comprimentos sem
+  // unidade, abria de frente (parecia a prancha), e não mostrava emendas,
+  // suportes de terça nem o código da peça.
+  if (!fs.existsSync(LEITOR_EXEMPLO())) return;
+  const { ctx, pg, erros } = await leitorImporta(b, LEITOR_EXEMPLO(), { viewport: { width: 1400, height: 900 } });
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    document.getElementById('detalhar').click(); await esp(400);
+    document.getElementById('dt3d').click(); await esp(800);
+    const itens = [...document.querySelectorAll('#d3lista div[data-i]')];
+    const lista = itens.map(x => x.innerText.replace(/\s+/g, ' '));
+    const v = itens.find(x => /Vertical/.test(x.innerText)); if (v) v.click(); await esp(300);
+    let exp = ''; const oc = URL.createObjectURL; URL.createObjectURL = bl => { bl.text().then(x => { exp = x; }); return oc.call(URL, bl); };
+    document.getElementById('d3exp').click(); await esp(800);
+    return { lista, iso: (document.querySelector('#d3bar [data-v="iso"]') || {}).className || '', em: !!document.querySelector('#d3em.on'),
+      sel: document.getElementById('d3sel').innerText, emendas: (exp.match(/"emendas":\[\{[^\]]*\]/) || [''])[0].slice(0, 200) };
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r).slice(0, 900) + ' ' + erros.join(' | ');
+  t.ok('a lista diz banzo superior e inferior, com a unidade', !r.erro && r.lista.some(x => /Banzo superior/.test(x)) && r.lista.some(x => /Banzo inferior/.test(x)) &&
+    r.lista.every(x => / mm$/.test(x)), J);
+  t.ok('abre na vista 3D, com emendas e suportes ligados', !r.erro && /\bon\b/.test(r.iso) && r.em, J);
+  t.ok('a peça selecionada mostra o código da prancha', !r.erro && /A-P\d+-V-\d+MM/.test(r.sel), J);
+  t.ok('o 3D enviado leva as emendas (E1, E2...)', !r.erro && /"n":1/.test(r.emendas), J);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
+teste('leitor-detalhes-texto', async (b, t) => {
+  // Auditoria, pequenos: "99.1%" com ponto, "1 perfil(is)", o subtítulo do
+  // comparativo começando com "· " sem obra, a regra do 1/2 e 2/2 na
+  // planificada sem peça dividida, e "banzo superior" na folha do pilar.
+  if (!fs.existsSync(path.join(RAIZ, 'leitor_dwg'))) return;
+  const { ctx, pg, erros } = await leitorImporta(b, trelicaTeste('textos'));
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms)), L = window.__leitorTeste;
+    localStorage.setItem(L.cuKey, JSON.stringify({ barra: 300 }));
+    document.getElementById('obra').value = '';
+    document.querySelector('[data-dsub="comp"]').click(); await esp(400);
+    const sub = (document.querySelector('#detComp .cmp-head p') || {}).innerText || '';
+    document.getElementById('cutReport').click(); await esp(500);
+    const rel = document.getElementById('printArea').innerText.replace(/\s+/g, ' ');
+    let h = null; window.rmDesktop = { salvarPDF: async x => { h = x; return { ok: true }; } }; window.confirm = () => true;
+    document.getElementById('detalhar').click(); await esp(400);
+    document.getElementById('dtPranchaDiv').click(); await esp(900);
+    const regra = [...document.querySelectorAll('#dtPranchas .prancha svg > text')].map(x => x.textContent).join(' | ');
+    return { sub, aprov: (rel.match(/Aproveitamento\s+([\d.,]+%)/i) || [])[1], perfis: /perfil\(is\)/.test(rel), regra };
+  }).catch(e => ({ erro: e.message }));
+  const p = await leitorImporta(b, trelicaTeste('textos_pilar', { emPe: true }));
+  const pil = await leitorCapturaPdf(p.pg, 'dtPrancha');
+  const txPil = ((pil.folhas || [])[0] || { txt: [] }).txt.map(x => x.t).join(' | ');
+  const J = JSON.stringify({ ...r, pilar: txPil.slice(0, 300) }) + ' ' + erros.join(' | ') + ' ' + p.erros.join(' | ');
+  t.ok('aproveitamento com vírgula e sem "perfil(is)"', !r.erro && /^\d+,\d%$/.test(r.aprov) && !r.perfis, J);
+  t.ok('sem obra, o subtítulo do comparativo não começa com "· "', !r.erro && r.sub && !/^·/.test(r.sub.trim()), J);
+  t.ok('planificada sem peça dividida não fala em 1/2 e 2/2', !r.erro && /PLANIFICADAS/.test(r.regra) && !/1\/2 E 2\/2/.test(r.regra), J);
+  t.ok('na folha do pilar o banzo não é "superior"', !pil.erro && /banzo/.test(txPil) && !/banzo superior/.test(txPil), J);
+  t.ok('sem erro na página', !erros.length && !p.erros.length, erros.join(' | ') + p.erros.join(' | '));
+  await ctx.close(); await p.ctx.close();
 });
 
 teste('leitor-conferir-igual-detalhamento', async (b, t) => {
@@ -2281,12 +2637,14 @@ teste('leitor-comparativo-preco-da-obra', async (b, t) => {
   const q = (a, b) => Math.abs(a - b) < 0.02;
   const ov5 = r.c5 && r.c5.ov, v5 = r.c5 && r.c5.valores, v10 = r.c10 && r.c10.valores;
   t.ok('três campos de R$/kg no comparativo', !r.erro && r.campos === 3, J);
-  t.ok('barras inteiras: banzos e internas pelo peso das barras × o preço digitado', !r.erro && ov5 && ov5.kgBanzo > 0 && ov5.kgInterno > 0 &&
-    q(v10[0] - v5[0], (ov5.kgBanzo + ov5.kgInterno) * 5) && q(v10[1] - v5[1], ov5.kgBanzo * 5) && q(v10[2] - v5[2], ov5.kgBanzo * 5), J);
+  // (os banzos dos caminhos detalhados são as barras do plano de emenda, sem
+  // a quebra: kgBanzoCom -- teste leitor-banzo-exato-no-detalhado)
+  t.ok('barras inteiras: banzos e internas pelo peso das barras × o preço digitado', !r.erro && ov5 && ov5.kgBanzo > 0 && ov5.kgInterno > 0 && ov5.kgBanzoCom > 0 &&
+    q(v10[0] - v5[0], (ov5.kgBanzo + ov5.kgInterno) * 5) && q(v10[1] - v5[1], ov5.kgBanzoCom * 5) && q(v10[2] - v5[2], ov5.kgBanzoCom * 5), J);
   // dobrar o R$/kg do detalhado dobra o custo das internas detalhadas, e só ele
   t.ok('detalhado no tamanho e chapas + parceiro pelo preço fixo digitado', !r.erro && ov5 && ov5.internoCom > 0 && r.d8 &&
     q(r.d8.valores[1] - v10[1], ov5.internoCom) && q(r.d8.valores[0], v10[0]) && q(r.d8.valores[2], v10[2]) &&
-    q(v5[2], ov5.banzo + r.c5.pesoChapa * 3), J);
+    q(v5[2], ov5.banzoCom + r.c5.pesoChapa * 3), J);
   t.ok('o preço fica guardado para a obra, e vazio volta ao banco', !r.erro && Object.values(r.guardou).some(o => o.barra === '10' && o.det === '4' && o.chapa === '3') &&
     JSON.stringify(r.volta) === JSON.stringify(r.base), J);
   t.ok('sem erro na página', !erros.length, erros.join(' | '));
@@ -2318,8 +2676,12 @@ teste('leitor-comparativo-chapas-sem-banzos', async (b, t) => {
   const J = JSON.stringify(r).slice(0, 1200) + ' ' + erros.join(' | ');
   const q = (a, b) => Math.abs(a - b) < 0.02;
   t.ok('o card de chapas + serviço tem a opção', !r.erro && r.tem, J);
-  t.ok('marcada: tira só os banzos do caminho das chapas', !r.erro && r.com.ov.banzo > 0 && q(r.sem.valores[2], r.com.valores[2] - r.com.ov.banzo) &&
-    q(r.sem.valores[0], r.com.valores[0]) && q(r.sem.valores[1], r.com.valores[1]) && /fora da soma/.test(r.texto) && r.marcado, J);
+  // Auditoria: tirar os banzos só do caminho das chapas dava "mais barato" a
+  // ele comparando internas contra internas + banzos. Marcada, a comparação
+  // passa a ser só das internas nos TRÊS caminhos.
+  t.ok('marcada: tira os banzos dos três caminhos (compara só as internas)', !r.erro && r.com.ov.banzo > 0 && r.com.ov.banzoCom > 0 &&
+    q(r.sem.valores[0], r.com.valores[0] - r.com.ov.banzo) && q(r.sem.valores[1], r.com.valores[1] - r.com.ov.banzoCom) &&
+    q(r.sem.valores[2], r.com.valores[2] - r.com.ov.banzoCom) && /fora da soma/.test(r.texto) && r.marcado, J);
   t.ok('desmarcada: volta a somar', !r.erro && JSON.stringify(r.volta) === JSON.stringify(r.com.valores), J);
   t.ok('sem erro na página', !erros.length, erros.join(' | '));
   await ctx.close();
