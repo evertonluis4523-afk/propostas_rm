@@ -13649,7 +13649,8 @@ teste('orcamento-salvos-previa', async (b, t) => {
   t.ok('escolher na lista mostra o orçamento inteiro ao lado (cabeçalho, itens, total)', !r.erro && r.a.sel && /Cliente Fictício A/.test(r.a.txt) && /Galpão Exemplo/.test(r.a.txt)
     && /Validade 15 dias/.test(r.a.txt) && r.a.linhas === 2 && r.a.txt.includes(String(r.a.total).replace(/\s+/g, ' ')) && /Perfis 2/.test(r.a.txt), J);
   t.ok('ver não troca o orçamento aberto nem sai da aba', !r.erro && r.intacto && r.aba === 'salvos', J);
-  t.ok('botões Editar orçamento e Revisar', !r.erro && JSON.stringify(r.a.botoes) === '["Editar orçamento","Revisar"]', J);
+  // + "Lançar no Compras da obra" (teste orcamento-compras-da-obra)
+  t.ok('botões Editar orçamento, Revisar e Lançar no Compras da obra', !r.erro && JSON.stringify(r.a.botoes) === '["Editar orçamento","Revisar","Lançar no Compras da obra"]', J);
   t.ok('Editar orçamento abre na tela principal', !r.erro && r.editar.aberto && r.editar.cliente === 'Cliente Fictício A' && r.editar.aba === 'orc' && r.editar.n === 2, J);
   t.ok('Revisar abre como nova revisão e guarda a anterior', !r.erro && r.revisar.numero === r.revisar.base + ' R1' && r.revisar.revDe && r.revisar.subst && r.revisar.cliente === 'Cliente Fictício B' && r.revisar.n === 3, J);
   t.ok('sem erro na página', !erros.length, erros.join(' | '));
