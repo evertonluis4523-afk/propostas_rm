@@ -1762,6 +1762,56 @@ async function leitorConfere(b, arq, antes) {
   await ctx.close(); return { r, erros };
 }
 
+teste('leitor-prancha-montagem-pdf', async (b, t) => {
+  // "PDF gerado pela prancha montagem gerando folha em branco / Em uma das
+  // folhas precisa ter o desenho da tesoura completa para o montador ver ela
+  // toda com os códigos / Ao clicar em ver em mm ou ver em cm também precisa
+  // alterar no desenho". O PDF saía branco, TRECHO 1/2, branco, TRECHO 2/2,
+  // branco: a prancha de 100% de largura ficava mais alta que a folha menos
+  // o pé da papelaria e cada uma pulava para a página seguinte.
+  if (!fs.existsSync(path.join(FIX_LEITOR, 'caso4.dxf')) || !fs.existsSync(path.join(RAIZ, 'leitor_dwg'))) return;
+  const { ctx, pg, erros } = await leitorImporta(b, path.join(FIX_LEITOR, 'caso4.dxf'), { viewport: { width: 1400, height: 900 } });
+  const gera = async (cm) => pg.evaluate(async (cm) => {
+    let h = null; window.rmDesktop = { salvarPDF: async (x) => { h = x; return { ok: true }; } };
+    window.confirm = () => true;
+    document.getElementById('detalhar').click();
+    if (cm && /cm/.test(document.getElementById('dtUnid').textContent)) document.getElementById('dtUnid').click();
+    await new Promise(x => setTimeout(x, 300));
+    document.getElementById('dtPrancha').click(); await new Promise(x => setTimeout(x, 900));
+    const tit = [...document.querySelectorAll('#dtPranchas .prancha svg > text:first-of-type')].map(x => x.textContent);
+    const cods = [...document.querySelectorAll('#dtPranchas .prancha svg text[fill="#D53309"]')].map(x => x.textContent).filter(x => /-P\d/.test(x));
+    return { h, tit, cods };
+  }, cm).catch(e => ({ erro: e.message }));
+  const conta = async (h) => {
+    const p = await ctx.newPage();
+    await p.setContent(h || '<p>sem documento</p>');
+    const pdf = await p.pdf({ preferCSSPageSize: true, printBackground: true }).catch(() => null);
+    await p.close();
+    return pdf ? (pdf.toString('latin1').match(/\/Type\s*\/Page[^s]/g) || []).length : 0;
+  };
+  const mm = await gera(false);
+  if (process.env.PRANCHA_DOC) fs.writeFileSync(process.env.PRANCHA_DOC, mm.h || '');
+  mm.paginas = await conta(mm.h); delete mm.h;
+  const J = JSON.stringify({ paginas: mm.paginas, erro: mm.erro, tit: mm.tit, cods: (mm.cods || []).slice(0, 6) }) + ' ' + erros.join(' | ');
+  t.ok('uma página por prancha, sem folha em branco', !mm.erro && mm.tit.length > 1 && mm.paginas === mm.tit.length, J);
+  const inteira = mm.tit.filter(x => !/TRECHO/.test(x)), trechos = mm.tit.filter(x => /TRECHO/.test(x));
+  // cada estrutura: a completa primeiro, depois os seus trechos
+  const porEst = {}; mm.tit.forEach(x => { const e = (x.match(/Estrutura (\w+)/) || [])[1]; (porEst[e] = porEst[e] || []).push(x); });
+  t.ok('com a tesoura em trechos, uma folha traz a tesoura completa antes deles', trechos.length >= 2 && Object.values(porEst).every(l => l.length === 1 ||
+    (/TESOURA COMPLETA/.test(l[0]) && l.slice(1).every(x => /TRECHO/.test(x)) && inteira.filter(x => l.includes(x)).length === 1)), J);
+  t.ok('códigos em mm na prancha', mm.cods.length > 0 && mm.cods.every(x => /\d+MM$/.test(x)), J);
+  const cm = await gera(true);
+  if (process.env.PRANCHA_DOC) fs.writeFileSync(process.env.PRANCHA_DOC.replace(/\.html$/, '-cm.html'), cm.h || '');
+  cm.paginas = await conta(cm.h); delete cm.h;
+  const J2 = JSON.stringify({ paginas: cm.paginas, erro: cm.erro, n: [(cm.cods || []).length, mm.cods.length], cods: (cm.cods || []).slice(0, 6) });
+  const emMM = {}; mm.cods.forEach(x => { emMM[x.replace(/-\d+MM$/, '')] = +x.match(/(\d+)MM$/)[1]; });
+  t.ok('"Ver em cm": os códigos da prancha saem em cm, mesma peça e mesma medida', !cm.erro && cm.cods.length === mm.cods.length && cm.cods.every(x => /\d+,\dCM$/.test(x) &&
+    Math.abs(parseFloat(x.match(/([\d,]+)CM$/)[1].replace(',', '.')) * 10 - emMM[x.replace(/-[\d,]+CM$/, '')]) < 0.51), J2);
+  t.ok('em cm também uma página por prancha', cm.paginas === (cm.tit || []).length, J2 + ' ' + (cm.tit || []).length);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
 teste('leitor-conferir-igual-detalhamento', async (b, t) => {
   // o "Conferir" tinha a sua própria regra de o que é peça e contava a linha
   // duplicada (e antes o suporte) que o detalhamento já tirava. Agora ele
