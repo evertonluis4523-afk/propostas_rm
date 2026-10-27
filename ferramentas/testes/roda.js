@@ -11718,6 +11718,48 @@ teste('central-docs-acesso', async (b, t) => {
   await ctx.close();
 });
 
+teste('central-etiquetas-limpar-sem-bloquear', async (b, t) => {
+  // "ao usar a opção limpar lista ela bloqueia e não consigo mais escrever":
+  // o confirm() nativo, no programa instalado, devolve a tela sem o foco do
+  // teclado. A pergunta passa a ser na própria página e o cursor volta para o
+  // nome da linha nova.
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'central_rm' });
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    CURRENT_EMAIL = 'engenharia@rmestruturas.com.br';
+    try { localStorage.removeItem(prefKey('rm_central_etiquetas')); } catch (e) {}
+    if (window.__etqTeste) window.__etqTeste.ajustarVisibilidade();
+    if (typeof showEtiquetas !== 'function') return { erro: 'sem showEtiquetas' };
+    showEtiquetas(); await esp(50);
+    let nativo = 0; window.confirm = () => { nativo++; return true; };
+    const linhas = () => [...document.querySelectorAll('#etq-linhas tr')];
+    const poe = (tr, v) => { const i = tr.querySelector('[data-k="nome"]'); i.value = v; i.dispatchEvent(new Event('input', { bubbles: true })); };
+    poe(linhas()[0], 'Item A'); document.getElementById('etq-nova').click(); await esp(30); poe(linhas()[1], 'Item B');
+    const o = {};
+    document.getElementById('etq-limpar').click(); await esp(30);
+    o.dlg = !!document.querySelector('.dlg-fundo');
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); await esp(30);
+    o.cancelaMantem = !document.querySelector('.dlg-fundo') && linhas().length === 2;
+    document.getElementById('etq-limpar').click(); await esp(30);
+    document.querySelector('.dlg-fundo [data-ok]').click(); await esp(60);
+    o.nativo = nativo; o.linhas = linhas().length;
+    const nm = linhas()[0] && linhas()[0].querySelector('[data-k="nome"]');
+    o.vazia = !!nm && nm.value === '';
+    o.foco = document.activeElement === nm;
+    return o;
+  }).catch(e => ({ erro: e.message }));
+  // e dá para escrever logo em seguida, pelo teclado
+  if (!r.erro) await pg.keyboard.type('Item C');
+  const v = await pg.evaluate(() => { const i = document.querySelector('#etq-linhas tr [data-k="nome"]'); return i ? i.value : null; }).catch(() => null);
+  const J = JSON.stringify(r) + ' ' + v + ' ' + erros.join(' | ');
+  t.ok('pergunta na própria página, sem a janela nativa', !r.erro && r.dlg && r.nativo === 0, J);
+  t.ok('Esc cancela e mantém as linhas', !r.erro && r.cancelaMantem, J);
+  t.ok('limpa para uma linha vazia, com o cursor no nome', !r.erro && r.linhas === 1 && r.vazia && r.foco, J);
+  t.ok('dá para escrever em seguida', v === 'Item C', J);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
 teste('central-etiquetas', async (b, t) => {
   // etiquetas de identificação de itens: cada linha é uma etiqueta (nome,
   // largura e altura em cm, cópias), com a prévia ao lado; imprime todas
