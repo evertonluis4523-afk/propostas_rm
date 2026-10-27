@@ -1887,16 +1887,12 @@ teste('leitor-prancha-cota-suporte-terca', async (b, t) => {
   const r = await leitorPranchasCotas(pg, false), J = JSON.stringify(r).slice(0, 1500) + ' ' + erros.join(' | ');
   if (process.env.PRANCHA_DOC) fs.writeFileSync(process.env.PRANCHA_DOC.replace(/\.html$/, '-terca.html'), await pg.evaluate(() => window.__docPrancha || ''));
   const todas = r.flatMap(x => x.laranja || []);
-  t.ok('as seis cotas do banzo de cima saem em laranja', r.some(x => (x.laranja || []).length === 6) && todas.every(v => /^\d\.\d{3}$/.test(v)), J);
+  t.ok('as seis cotas do banzo de cima saem em laranja, com o número do DWG (2.033 mm)', r.some(x => (x.laranja || []).length === 6) && todas.every(v => v === '2.033'), J);
   const ct = await pg.evaluate(() => window.__leitorTeste.cotaTerca ? window.__leitorTeste.cotaTerca() : { erro: 'sem gancho' }).catch(e => ({ erro: e.message }));
   const xs = Array.isArray(ct) && ct[0] ? ct[0].map(q => Math.round(q.x)) : [];
-  // "A seta continua na posição errada": o suporte é soldado em cima da
-  // vertical, no eixo do perfil. A vertical da ponta fica encostada na ponta,
-  // então o eixo dela cai meia largura para dentro da linha da arquiteta.
-  const mv = await pg.evaluate(() => window.__leitorTeste.marcasVerticais()).catch(e => ({ erro: e.message }));
-  const eixos = Array.isArray(mv) && mv[0] ? [...new Set(mv[0].lados.flatMap(l => l.marcas.filter(q => q.pos).map(q => Math.round((q.mn + q.mx) / 2))))] : [];
-  t.ok('cada ▲ no eixo da vertical em que a cota bate; nas pontas, para dentro da linha da arquiteta', xs.length === 7 &&
-    xs.every(x => eixos.some(e => Math.abs(e - x) <= 1)) && xs[0] > 0 && xs[6] < 12000 && xs.includes(6000), JSON.stringify({ xs, eixos }));
+  // duas águas: a vertical da cumeeira está centrada no meio -- todo ▲ fica
+  // onde a arquiteta pôs, inclusive nas pontas baixas
+  t.ok('cada ▲ no ponto do DWG (0, 2.000 ... 12.000 mm)', JSON.stringify(xs) === JSON.stringify([0, 2000, 4000, 6000, 8000, 10000, 12000]), JSON.stringify(ct));
   t.ok('um triângulo em cada suporte (sete pontos)', r.some(x => x.triangulos === 7), J);
   t.ok('a cota do banzo de baixo e a solta ficam de fora', !todas.some(v => /12\.000|2\.030/.test(v)), J);
   // "coloca a cota azul também na folha única": a tesoura que não foi partida
@@ -1904,6 +1900,40 @@ teste('leitor-prancha-cota-suporte-terca', async (b, t) => {
   const unica = r.find(x => !/TRECHO|COMPLETA/.test(x.tit || ''));
   t.ok('folha única: corrente azul das verticais (as 7) com o início na cumeeira, mais o comprimento total', !!unica && unica.ps.length === 7 &&
     unica.inicio > 0 && unica.gerais.some(g => /comprimento total/.test(g)), JSON.stringify(unica));
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
+teste('leitor-prancha-cota-suporte-cumeeira', async (b, t) => {
+  // Meia tesoura: a cumeeira é a ponta alta. A arquiteta cota até a linha da
+  // ponta, mas a vertical da cumeeira vira um perfil encostado na ponta e o
+  // suporte é soldado no eixo dele: só esse ▲ vai para dentro. O NÚMERO
+  // continua o dela ("1,33 não está no dwg e nem 1,47").
+  if (!fs.existsSync(path.join(RAIZ, 'leitor_dwg'))) return;
+  const ysup = x => 20 + 150 * x / 1200, L = [];
+  const ln = (x1, y1, x2, y2, cor, lay) => L.push([x1, y1, x2, y2, cor, lay || '0']);
+  ln(0, 0, 1200, 0, 2); ln(0, 20, 1200, 170, 2);
+  const xs0 = [0, 200, 400, 600, 800, 1000, 1200];
+  xs0.forEach(x => ln(x, 0, x, ysup(x), 1));
+  for (let k = 0; k < 6; k++) ln(xs0[k], ysup(xs0[k]), xs0[k + 1], 0, 1);
+  [[-50, -60, 1250, -60], [1250, -60, 1250, 260], [1250, 260, -50, 260], [-50, 260, -50, -60]].forEach(q => L.push([...q, 3, 'QUADRO']));
+  const f = dxfTeste('meia_tesoura_cota', L, [['TESOURA 01\\PU 40x100x40 #2,00\\PU 30x93x30 #2,00\\PQTD: 2', 100, 240]]);
+  const dim = (a, c, v) => ['0', 'DIMENSION', '8', 'COTA', '13', a[0], '23', a[1], '14', c[0], '24', c[1], '42', v].join('\n') + '\n';
+  let ents = '';
+  for (let k = 0; k < 6; k++) ents += dim([xs0[k], ysup(xs0[k])], [xs0[k + 1], ysup(xs0[k + 1])], Math.hypot(200, ysup(xs0[k + 1]) - ysup(xs0[k])));
+  fs.writeFileSync(f, fs.readFileSync(f, 'latin1').replace(/(\n2\nENTITIES\n)/, '$1' + ents), 'latin1');
+  const { ctx, pg, erros } = await leitorImporta(b, f, { viewport: { width: 1400, height: 900 } });
+  const r = await leitorPranchasCotas(pg, false), J = JSON.stringify(r).slice(0, 1200) + ' ' + erros.join(' | ');
+  if (process.env.PRANCHA_DOC) fs.writeFileSync(process.env.PRANCHA_DOC.replace(/\.html$/, '-meia.html'), await pg.evaluate(() => window.__docPrancha || ''));
+  const todas = r.flatMap(x => x.laranja || []);
+  t.ok('os números são os do DWG (2.015 mm cada), sem 1,33 nem 1,47', todas.length >= 6 && todas.every(v => v === '2.015'), J);
+  const ct = await pg.evaluate(() => window.__leitorTeste.cotaTerca()).catch(e => ({ erro: e.message }));
+  const mv = await pg.evaluate(() => window.__leitorTeste.marcasVerticais()).catch(e => ({ erro: e.message }));
+  const pts = Array.isArray(ct) && ct[0] ? ct[0] : [], ult = pts[pts.length - 1] || {};
+  const vC = Array.isArray(mv) && mv[0] ? mv[0].lados.flatMap(l => l.marcas).find(q => q.pos && q.mx >= 11999) : null;
+  t.ok('só o ▲ da cumeeira vai para o eixo da vertical dela; os outros ficam no ponto do DWG', pts.length === 7 && !!vC &&
+    Math.abs(ult.x - (vC.mn + vC.mx) / 2) < 0.5 && ult.x < 12000 && Math.round(ult.xDwg) === 12000 &&
+    pts.slice(0, 6).every((q, k) => Math.round(q.x) === xs0[k] * 10), JSON.stringify({ pts, vC }));
   t.ok('sem erro na página', !erros.length, erros.join(' | '));
   await ctx.close();
 });
