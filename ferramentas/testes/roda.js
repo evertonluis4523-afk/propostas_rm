@@ -1956,8 +1956,9 @@ teste('leitor-pedido-fabricante-sem-folha-branca-e-banzos', async (b, t) => {
     const famh = [...document.querySelectorAll('#printArea .lf-famh')].map(x => x.firstChild.textContent.trim());
     const tabs = [...document.querySelectorAll('#printArea .lf-cols')].map(c => c.querySelectorAll('table').length);
     const banzoP = [...document.querySelectorAll('#printArea .lf-cod')].filter(x => /banzo/.test(x.textContent)).length;
+    const desenhos = document.querySelectorAll('#printArea .prancha, #printArea .lf-desenhos').length;
     document.getElementById('lfPrint').click(); await new Promise(x => setTimeout(x, 900));
-    return { h, famh, tabs, banzoP, guardou: localStorage.getItem('rm_lf_banzos') };
+    return { h, famh, tabs, banzoP, desenhos, guardou: localStorage.getItem('rm_lf_banzos') };
   }, bz).catch(e => ({ erro: e.message }));
   const paginas = async h => { const p = await ctx.newPage(); await p.setContent((h || '').replace('</head>', '<style>#printArea .lf-desenhos{display:none!important}</style></head>'));
     const pdf = await p.pdf({ preferCSSPageSize: true, printBackground: true }).catch(() => null); await p.close();
@@ -1967,11 +1968,45 @@ teste('leitor-pedido-fabricante-sem-folha-branca-e-banzos', async (b, t) => {
   t.ok('cada família é uma tabela só (parte entre páginas linha a linha)', !sem.erro && sem.tabs.length > 0 && sem.tabs.every(n => n === 1), J);
   t.ok('as tabelas do pedido cabem em 4 folhas (antes 6, com folhas em branco)', !sem.erro && sem.paginas > 0 && sem.paginas <= 4, J);
   t.ok('sem a opção: nenhum banzo no pedido', !sem.erro && !sem.famh.some(f => /banzo/i.test(f)) && sem.banzoP === 0, J);
+  // "só preciso que saia a lista de compras, não precisa sair a montagem e o desenho separado"
+  t.ok('o pedido leva só a lista: sem prancha de montagem nem folha por grupo', !sem.erro && sem.desenhos === 0, J);
   const com = await gera(true); com.paginas = await paginas(com.h); delete com.h;
   const J2 = JSON.stringify(com);
   t.ok('com a opção: famílias Banzo superior e Banzo inferior, com a linha de banzo na coluna P', !com.erro &&
     com.famh.some(f => /^Banzo superior$/i.test(f)) && com.famh.some(f => /^Banzo inferior$/i.test(f)) && com.banzoP > 0 && com.guardou === '1', J2);
   t.ok('com banzos também sem folha em branco (cabe em 6)', !com.erro && com.paginas > 0 && com.paginas <= 6, J2);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
+teste('leitor-prancha-emenda-banzo', async (b, t) => {
+  // "Nos banzo ao definir junto preciso ver como o sistema está dividindo,
+  // precisa estar na lista do montador": a prancha marca cada emenda no
+  // banzo e numera os pedaços (BS 1/2 · 6.000), os mesmos do pedido.
+  if (!fs.existsSync(path.join(FIX_LEITOR, 'caso4.dxf')) || !fs.existsSync(path.join(RAIZ, 'leitor_dwg'))) return;
+  const { ctx, pg, erros } = await leitorImporta(b, path.join(FIX_LEITOR, 'caso4.dxf'), { viewport: { width: 1400, height: 900 } });
+  const r = await pg.evaluate(async () => {
+    window.rmDesktop = { salvarPDF: async () => ({ ok: true }) }; window.confirm = () => true;
+    document.getElementById('detalhar').click(); await new Promise(x => setTimeout(x, 300));
+    document.getElementById('dtPrancha').click(); await new Promise(x => setTimeout(x, 900));
+    const folhas = [...document.querySelectorAll('#dtPranchas .prancha')].map(pr => ({ tit: pr.querySelector('svg > text').textContent,
+      pedacos: [...pr.querySelectorAll('svg text[fill="#7b3fb5"]')].map(x => x.textContent), marcas: pr.querySelectorAll('svg line[stroke="#7b3fb5"]').length }));
+    // o mesmo plano do pedido: os pedaços de banzo da lista do fornecedor
+    document.getElementById('listaForn').click(); await new Promise(x => setTimeout(x, 400));
+    const cb = document.getElementById('lfBanzos'); if (cb && !cb.checked) cb.click(); await new Promise(x => setTimeout(x, 300));
+    const pedido = [...document.querySelectorAll('#printArea .lf-fam')].filter(f => /banzo/i.test(f.querySelector('.lf-famh').textContent))
+      .flatMap(f => [...f.querySelectorAll('.lf-len')].map(x => x.textContent));
+    if (cb && cb.checked) cb.click();
+    return { folhas, pedido };
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r).slice(0, 1500) + ' ' + erros.join(' | ');
+  const comp = (r.folhas || []).find(f => /COMPLETA/.test(f.tit)) || {};
+  const bs = (comp.pedacos || []).filter(x => /^BS /.test(x)), bi = (comp.pedacos || []).filter(x => /^BI /.test(x));
+  const soma = l => l.reduce((a, x) => a + +x.split('· ')[1].replace(/\./g, ''), 0);
+  t.ok('a folha completa numera os pedaços dos banzos (BS e BI) e marca as emendas', bs.length >= 2 && bi.length >= 2 && comp.marcas >= 2 &&
+    (comp.pedacos || []).every(x => /^B[SI] \d+\/\d+ · [\d.]+$/.test(x)), J);
+  t.ok('os pedaços de cada banzo superior somam o comprimento dele (8.685)', Math.abs(soma(bs) - 2 * 8685) <= 4, J);
+  t.ok('os mesmos comprimentos estão no pedido com banzos', (comp.pedacos || []).every(x => (r.pedido || []).includes(x.split('· ')[1])), J);
   t.ok('sem erro na página', !erros.length, erros.join(' | '));
   await ctx.close();
 });
@@ -11214,9 +11249,13 @@ teste('central-aviso-programa-antigo', async (b, t) => {
       const av = document.getElementById('aviso-central');
       if (av) av.click();
       await new Promise(x => setTimeout(x, 200));
-      return { aviso: av ? av.textContent : '', abriu: window.__abriu, rodape: (document.getElementById('footer-info') || {}).textContent || '' };
+      // a pergunta é feita na tela (rmPergunta), não mais no confirm nativo
+      const dlg = document.querySelector('.dlg-fundo'), txt = dlg ? dlg.textContent : '';
+      const ok = dlg && dlg.querySelector('.docs-bt.pri'); if (ok) ok.click();
+      await new Promise(x => setTimeout(x, 100));
+      return { aviso: av ? av.textContent : '', abriu: window.__abriu, dlg: txt, rodape: (document.getElementById('footer-info') || {}).textContent || '' };
     }).catch(e => ({ erro: e.message }));
-    r.dialogo = dialogo; r.erros = erros;
+    r.dialogo = dialogo || r.dlg; r.nativo = dialogo; r.erros = erros;
     await ctx.close();
     return r;
   };
@@ -11225,6 +11264,7 @@ teste('central-aviso-programa-antigo', async (b, t) => {
   const J = JSON.stringify({ velho, novo }).slice(0, 1500);
   t.ok('programa antigo: aviso de atualização disponível', !velho.erro && /atualização do programa disponível/.test(velho.aviso), J);
   t.ok('o aviso não manda mais rodar o atualizar.bat e leva à página do instalador', !/atualizar\.bat/.test(velho.dialogo) && /se atualiza sozinho/.test(velho.dialogo) && /rm-central-instalador\/releases/.test(velho.abriu), J);
+  t.ok('a pergunta do instalador é feita na tela, sem a janela nativa', !velho.erro && !velho.nativo && /se atualiza sozinho/.test(velho.dlg || ''), J);
   t.ok('programa que se atualiza sozinho: sem o aviso antigo e com a versão no rodapé', !novo.erro && !novo.aviso && /programa 1\.5\.103/.test(novo.rodape), J);
 });
 
@@ -11718,6 +11758,40 @@ teste('central-docs-acesso', async (b, t) => {
   await ctx.close();
 });
 
+teste('central-perguntas-na-tela', async (b, t) => {
+  // "Pode trocar todas": nenhuma pergunta da Central usa mais o confirm()
+  // nativo, e o alert() vira aviso na tela -- no programa instalado os dois
+  // devolviam a tela sem o foco do teclado.
+  const src = fs.readFileSync(path.join(RAIZ, 'central_rm', 'index.html'), 'utf8');
+  const semComent = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  const nativos = (semComent.match(/[^.\w]confirm\(/g) || []).length;
+  t.ok('nenhum confirm() nativo no código da Central', nativos === 0, 'achados: ' + nativos);
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'central_rm' });
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    const o = { temPergunta: typeof rmPergunta === 'function', alertTela: window.alert === window.rmAvisoTela };
+    const cx = document.createElement('input'); cx.id = 'cxTeste'; document.body.appendChild(cx); cx.focus();
+    alert('Informe o telefone com DDD.'); await esp(30);
+    o.aviso = !!document.querySelector('.dlg-fundo') && /telefone com DDD/.test(document.querySelector('.dlg-fundo').textContent);
+    document.querySelector('.dlg-fundo .docs-bt.pri').click(); await esp(30);
+    o.focoVolta = document.activeElement === cx;
+    let feito = 0;
+    rmPergunta({ titulo: 'Excluir?', ok: 'Excluir', aoOk: () => feito++ }); await esp(20);
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); await esp(20);
+    rmPergunta({ titulo: 'Excluir?', ok: 'Excluir', aoOk: () => feito++ }); await esp(20);
+    document.querySelector('.dlg-fundo .docs-bt.pri').click(); await esp(20);
+    o.feito = feito; o.sobrou = document.querySelectorAll('.dlg-fundo').length;
+    return o;
+  }).catch(e => ({ erro: e.message }));
+  if (!r.erro) await pg.keyboard.type('51 99999');
+  const v = await pg.evaluate(() => document.getElementById('cxTeste').value).catch(() => null);
+  const J = JSON.stringify(r) + ' ' + v + ' ' + erros.join(' | ');
+  t.ok('alert vira aviso na tela e o cursor volta ao campo', !r.erro && r.temPergunta && r.alertTela && r.aviso && r.focoVolta && v === '51 99999', J);
+  t.ok('rmPergunta: Esc cancela, o botão confirma, e a janela some', !r.erro && r.feito === 1 && r.sobrou === 0, J);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
 teste('central-etiquetas-limpar-sem-bloquear', async (b, t) => {
   // "ao usar a opção limpar lista ela bloqueia e não consigo mais escrever":
   // o confirm() nativo, no programa instalado, devolve a tela sem o foco do
@@ -11741,7 +11815,7 @@ teste('central-etiquetas-limpar-sem-bloquear', async (b, t) => {
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); await esp(30);
     o.cancelaMantem = !document.querySelector('.dlg-fundo') && linhas().length === 2;
     document.getElementById('etq-limpar').click(); await esp(30);
-    document.querySelector('.dlg-fundo [data-ok]').click(); await esp(60);
+    document.querySelector('.dlg-fundo .docs-bt.pri').click(); await esp(60);
     o.nativo = nativo; o.linhas = linhas().length;
     const nm = linhas()[0] && linhas()[0].querySelector('[data-k="nome"]');
     o.vazia = !!nm && nm.value === '';
