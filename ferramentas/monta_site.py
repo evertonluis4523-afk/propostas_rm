@@ -25,7 +25,8 @@ from datetime import datetime, timezone
 
 DESCARTADOS = {'controle_faltas', 'calculo_telha-t-rmica', 'rm-sistemas', 'minhas-contas'}
 # pastas e arquivos da raiz de cada repositório que não são o site
-FORA_PASTAS = {'.git', '.github', 'ferramentas', 'node_modules', 'electron', 'build', 'scripts', 'dist', 'comum'}
+# .claude e .impeccable: skills e notas de design do Claude não são o site
+FORA_PASTAS = {'.git', '.github', '.claude', '.impeccable', 'ferramentas', 'node_modules', 'electron', 'build', 'scripts', 'dist', 'comum'}
 FORA_ARQUIVOS = {'atualizar.bat', 'package.json', 'package-lock.json', '.gitignore', 'sync-info.js'}
 
 

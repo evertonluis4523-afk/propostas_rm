@@ -323,11 +323,16 @@ Tudo que imprime segue a mesma papelaria:
 - A cada publicação: sobe `APP_VER` e o `CACHE`, confere com o verificador
   (0 erro) e com os testes (0 falha), commit, PR e merge no `main` (o GitHub
   Pages publica do `main`).
+- O passo a passo de um pedido (entender, implementar, teste que falha na
+  versão antiga, versão, prévia com dados fictícios, verificador, bateria e
+  publicação até o Cloudflare) está na skill `rm-nova-funcao`, em
+  `central_rm/.claude/skills/`, com os scripts de cada etapa.
 - **Dois endereços, o mesmo conteúdo.** Principal: Cloudflare Pages,
   `https://rm-estruturas.pages.dev` -- o repositório `rm-sistemas`, montado
   por `ferramentas/monta_site.py` (todos os sistemas, cada um na sua pasta,
-  sem ferramentas/testes/programa/documentação) e enviado logo depois do
-  merge, em toda publicação. Reserva: o GitHub Pages de cada repositório.
+  sem ferramentas/testes/programa/documentação nem as pastas `.claude` e `.impeccable`) e
+  enviado logo depois do merge, em toda publicação. Reserva: o GitHub Pages
+  de cada repositório.
   Motivo: em 19/10/2026 a fila do GitHub Pages parou por mais de uma hora e
   ninguém recebia a versão nova. Não se edita o `rm-sistemas` à mão.
   - A Central abre os sistemas pelo endereço em que ela foi aberta (`SITE`);

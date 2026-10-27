@@ -13934,7 +13934,8 @@ teste('site-unico-montagem', async (b, t) => {
   const sis = repos().filter(r => r !== 'rm-sistemas' && r !== 'minhas-contas');
   const faltam = sis.filter(r => !fs.existsSync(path.join(dest, r, 'index.html')));
   const sujos = [];
-  sis.forEach(r => ['ferramentas', 'electron', 'build', 'scripts', 'PADRAO_RM.md', 'CLAUDE.md', 'package.json'].forEach(x => { if (fs.existsSync(path.join(dest, r, x))) sujos.push(r + '/' + x); }));
+  // .claude/.impeccable: skills e notas de design iam para o site público
+  sis.forEach(r => ['ferramentas', 'electron', 'build', 'scripts', '.claude', '.impeccable', 'PADRAO_RM.md', 'CLAUDE.md', 'package.json'].forEach(x => { if (fs.existsSync(path.join(dest, r, x))) sujos.push(r + '/' + x); }));
   const vers = JSON.parse(fs.readFileSync(path.join(dest, 'versoes.json'), 'utf8'));
   const versoesOk = sis.every(r => { const h = fs.readFileSync(path.join(RAIZ, r, 'index.html'), 'utf8'); const m = /const APP_VER='(v\d+)'/.exec(h); return !m || (vers[r] && vers[r].versao === m[1]); });
   const raizIdx = fs.readFileSync(path.join(dest, 'index.html'), 'utf8');
