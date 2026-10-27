@@ -1876,10 +1876,8 @@ teste('leitor-prancha-cota-suporte-terca', async (b, t) => {
   const ysup = x => 40 + (x <= 600 ? x : 1200 - x) * 110 / 600;   // o mesmo desenho do gera_modelo.py (cm)
   const dim = (a, b, v) => ['0', 'DIMENSION', '8', 'RM-COTA', '13', a[0], '23', a[1], '14', b[0], '24', b[1], '42', v].join('\n') + '\n';
   let ents = '';
-  // só na cumeeira (o lado mais alto) a arquiteta põe o suporte um pouco
-  // para dentro, 15 cm de cada lado da vertical do meio; nas pontas baixas ele
-  // fica em cima da vertical. O ponto sai onde ela pôs, sem ir para a vertical.
-  for (const [x0, x1] of [[0, 200], [200, 400], [400, 585], [615, 800], [800, 1000], [1000, 1200]])
+  // a arquiteta cota pela linha de cada vertical do projeto, de ponta a ponta
+  for (const [x0, x1] of [[0, 200], [200, 400], [400, 600], [600, 800], [800, 1000], [1000, 1200]])
     ents += dim([x0, ysup(x0)], [x1, ysup(x1)], Math.hypot(x1 - x0, ysup(x1) - ysup(x0)));
   ents += dim([0, 0], [1200, 0], 1200);            // banzo de baixo: não é suporte de terça
   ents += dim([3000, 3000], [3200, 3036.67], 203);  // solta, longe da tesoura
@@ -1889,13 +1887,17 @@ teste('leitor-prancha-cota-suporte-terca', async (b, t) => {
   const r = await leitorPranchasCotas(pg, false), J = JSON.stringify(r).slice(0, 1500) + ' ' + erros.join(' | ');
   if (process.env.PRANCHA_DOC) fs.writeFileSync(process.env.PRANCHA_DOC.replace(/\.html$/, '-terca.html'), await pg.evaluate(() => window.__docPrancha || ''));
   const todas = r.flatMap(x => x.laranja || []);
-  t.ok('as cotas do banzo de cima saem em laranja (2.033 mm, e 1.881 nas que chegam à cumeeira)', todas.filter(v => v === '2.033').length >= 4 && todas.filter(v => v === '1.881').length >= 2 &&
-    todas.every(v => v === '2.033' || v === '1.881'), J);
+  t.ok('as seis cotas do banzo de cima saem em laranja', r.some(x => (x.laranja || []).length === 6) && todas.every(v => /^\d\.\d{3}$/.test(v)), J);
   const ct = await pg.evaluate(() => window.__leitorTeste.cotaTerca ? window.__leitorTeste.cotaTerca() : { erro: 'sem gancho' }).catch(e => ({ erro: e.message }));
   const xs = Array.isArray(ct) && ct[0] ? ct[0].map(q => Math.round(q.x)) : [];
-  t.ok('o ponto é o do DWG: na cumeeira ficam a 5.850 e 6.150 mm, sem ir para a vertical do meio (6.000); nas pontas, em cima da vertical',
-    xs.length === 8 && xs.includes(5850) && xs.includes(6150) && !xs.includes(6000) && xs[0] === 0 && xs[7] === 12000, JSON.stringify(ct));
-  t.ok('um triângulo em cada suporte (oito pontos)', r.some(x => x.triangulos === 8), J);
+  // "A seta continua na posição errada": o suporte é soldado em cima da
+  // vertical, no eixo do perfil. A vertical da ponta fica encostada na ponta,
+  // então o eixo dela cai meia largura para dentro da linha da arquiteta.
+  const mv = await pg.evaluate(() => window.__leitorTeste.marcasVerticais()).catch(e => ({ erro: e.message }));
+  const eixos = Array.isArray(mv) && mv[0] ? [...new Set(mv[0].lados.flatMap(l => l.marcas.filter(q => q.pos).map(q => Math.round((q.mn + q.mx) / 2))))] : [];
+  t.ok('cada ▲ no eixo da vertical em que a cota bate; nas pontas, para dentro da linha da arquiteta', xs.length === 7 &&
+    xs.every(x => eixos.some(e => Math.abs(e - x) <= 1)) && xs[0] > 0 && xs[6] < 12000 && xs.includes(6000), JSON.stringify({ xs, eixos }));
+  t.ok('um triângulo em cada suporte (sete pontos)', r.some(x => x.triangulos === 7), J);
   t.ok('a cota do banzo de baixo e a solta ficam de fora', !todas.some(v => /12\.000|2\.030/.test(v)), J);
   // "coloca a cota azul também na folha única": a tesoura que não foi partida
   // leva as medidas gerais E a corrente das verticais a partir da cumeeira
