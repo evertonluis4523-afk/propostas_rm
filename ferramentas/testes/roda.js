@@ -1940,6 +1940,48 @@ teste('leitor-prancha-cota-suporte-cumeeira', async (b, t) => {
   await ctx.close();
 });
 
+teste('leitor-tres-pedidos', async (b, t) => {
+  // "Cada campo desses deveria ter um botão próprio: Compra - pedido de barras
+  // de 6 metros; Detalhamento - pedido todo detalhado; Chapas + parceiros -
+  // pedido detalhado com os códigos, porém com quantas chapas de cada largura".
+  if (!fs.existsSync(path.join(FIX_LEITOR, 'caso4.dxf')) || !fs.existsSync(path.join(RAIZ, 'leitor_dwg'))) return;
+  const { ctx, pg, erros } = await leitorImporta(b, path.join(FIX_LEITOR, 'caso4.dxf'), { viewport: { width: 1400, height: 900 } });
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    window.confirm = () => true;
+    const grupo = id => { const bt = document.getElementById(id); const g = bt && bt.closest('.saida'); return g ? g.querySelector('.saida-t').textContent : null; };
+    const o = { grupos: { barras: grupo('lfBarras'), det: grupo('listaForn'), chapas: grupo('lfChapas') } };
+    const pa = () => document.getElementById('printArea');
+    document.getElementById('lfBarras').click(); await esp(400);
+    o.barras = { tag: (pa().querySelector('.tb2-tipo') || {}).textContent, linhas: [...pa().querySelectorAll('table.lf-barras tbody tr')].map(tr => [...tr.cells].map(c => c.textContent.trim())),
+      opc: !!document.getElementById('lfBanzos') };
+    document.getElementById('lfClose').click();
+    document.getElementById('detalhar').click(); await esp(300);
+    document.getElementById('listaForn').click(); await esp(400);
+    o.det = { tag: (pa().querySelector('.tb2-tipo') || {}).textContent, fam: pa().querySelectorAll('.lf-fam').length, chapas: !!pa().querySelector('.lf-chapas') };
+    document.getElementById('lfClose').click();
+    document.getElementById('lfChapas').click(); await esp(600);
+    const ch = pa().querySelector('.lf-chapas');
+    o.chapas = { tag: (pa().querySelector('.tb2-tipo') || {}).textContent, fam: pa().querySelectorAll('.lf-fam').length,
+      linhas: ch ? [...ch.querySelectorAll('tbody tr')].map(tr => [...tr.cells].map(c => c.textContent.trim())) : null };
+    const L = window.__leitorTeste; o.plano = L.chapas().sheets.map(x => x.w);
+    o.compraBarras = null;
+    return o;
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r).slice(0, 1800) + ' ' + erros.join(' | ');
+  const n = v => +String(v).replace(/\./g, '');
+  t.ok('um botão em cada grupo: Compra (barras), Fábrica (detalhado), Laser (chapas)', !r.erro && /Compra/i.test(r.grupos.barras) && /Fábrica/i.test(r.grupos.det) && /Laser/i.test(r.grupos.chapas), J);
+  t.ok('pedido de barras: perfil, uso, barras e metros, sem a opção de banzos (já vão inteiros)', !r.erro && /Barras de 6\.000 mm/.test(r.barras.tag) && r.barras.linhas.length > 0 &&
+    r.barras.linhas.some(l => /Banzo/.test(l[1])) && r.barras.linhas.every(l => n(l[2]) > 0 && Math.abs(n(l[3]) - n(l[2]) * 6) <= 1) && !r.barras.opc, J);
+  t.ok('pedido detalhado: as famílias peça a peça, sem a tabela de chapas', !r.erro && /Peças cortadas/.test(r.det.tag) && r.det.fam > 0 && !r.det.chapas, J);
+  const tot = (r.chapas && r.chapas.linhas || []).reduce((s, l) => s + n(l[3]), 0);
+  const porW = {}; (r.plano || []).forEach(w => porW[w] = (porW[w] || 0) + 1);
+  t.ok('pedido chapas + parceiro: o detalhado mais quantas chapas de cada largura (igual ao plano)', !r.erro && /Chapas \+ parceiro/.test(r.chapas.tag) && r.chapas.fam === r.det.fam &&
+    tot === (r.plano || []).length && Object.entries(porW).every(([w, q]) => r.chapas.linhas.some(l => n(l[2].split(' × ')[0]) === +w && n(l[3]) >= 1)), J);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
 teste('leitor-pedido-fabricante-sem-folha-branca-e-banzos', async (b, t) => {
   // "O pedido para o fabricante está gerando espaçamento em branco" e "coloque
   // uma opção de incluir os perfil banzos (superior e inferior)". Cada família
