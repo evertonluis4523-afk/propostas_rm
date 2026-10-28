@@ -15599,6 +15599,37 @@ teste('tema-escuro-nitido', async (b, t) => {
   }
 });
 
+teste('central-jarvis-faixa-opcional', async (b, t) => {
+  // "A faixa de luz sempre passando na Central: deixar como opção e não o
+  // tempo todo". A faixa que desce a tela e o fio que corre na barra do alto
+  // só aparecem com a opção ligada (Aparência), desligada de início; a
+  // escolha fica guardada. O reator e as cores continuam.
+  const antes = () => { try { if (!sessionStorage.getItem('__jvl')) { sessionStorage.setItem('__jvl', '1'); localStorage.setItem('rm_tema', 'escuro'); localStorage.setItem('rm_tom', 'jarvis'); localStorage.removeItem('rm_jv_luz'); } } catch (e) {} };
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'central_rm' }, 'index.html', { antes, espera: 300 });
+  const le = () => pg.evaluate(() => {
+    document.querySelectorAll('.jv-boot').forEach(x => x.remove());
+    const sc = document.querySelector('.jv-scan'), tb = document.querySelector('.topbar');
+    return { faixa: sc ? getComputedStyle(sc, '::after').display : 'sem', barra: tb ? getComputedStyle(tb, '::after').display : 'sem',
+      reator: !!document.querySelector('.content-watermark .jv-reator'),
+      opcao: getComputedStyle(document.getElementById('jv-luz-sec') || document.body).display,
+      ativo: (document.querySelector('#seg-jvluz .seg-btn.active') || {}).textContent || '' };
+  }).catch(e => ({ erro: e.message }));
+  const ini = await le();
+  t.ok('de início a faixa e o fio da barra não passam; o reator continua', !ini.erro && ini.faixa === 'none' && ini.barra === 'none' && ini.reator && /Desligada/.test(ini.ativo), JSON.stringify(ini));
+  t.ok('a opção aparece em Aparência com o Jarvis ligado', ini.opcao !== 'none', JSON.stringify(ini));
+  await pg.evaluate(() => document.querySelector('#seg-jvluz [data-jvluz="on"]').click());
+  const lig = await le();
+  t.ok('ligando a opção, a faixa e o fio voltam', lig.faixa !== 'none' && lig.barra !== 'none' && /Ligada/.test(lig.ativo), JSON.stringify(lig));
+  await pg.reload({ waitUntil: 'domcontentloaded' }); await pg.waitForTimeout(400);
+  const vol = await le();
+  t.ok('a escolha fica guardada ao abrir de novo', vol.faixa !== 'none', JSON.stringify(vol));
+  await pg.evaluate(() => window.setTheme('escuro')); await pg.waitForTimeout(100);
+  const fora = await le();
+  t.ok('fora do Jarvis a opção some de Aparência', fora.opcao === 'none', JSON.stringify(fora));
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
 teste('central-tema-jarvis', async (b, t) => {
   // "uma opção na Central como um tema estilo Jarvis, com movimentos": o 5º
   // item da Aparência (ciano com a marca laranja). Abre com a inicialização
