@@ -2099,6 +2099,54 @@ const leitorCapturaPdf = (pg, botao, cm) => pg.evaluate(async ({ botao, cm }) =>
   return { h, folhas };
 }, { botao, cm: !!cm }).catch(e => ({ erro: e.message }));
 
+teste('leitor-grupos-banzos', async (b, t) => {
+  // "Na opção peças por grupo não aparecem os banzos e seus tamanhos com as
+  // divisões, sendo que o sistema detalhou" -- e "não adianta linha de corte,
+  // elas vêm cortadas: precisa aparecer peças separadas". Cada medida de
+  // pedaço é uma peça desenhada à parte (de qual banzo, em que ordem, quantas),
+  // com as mesmas medidas do plano de emenda da prancha. A tesoura longa
+  // continua em folhas seguintes, sem página em branco e sem cortar desenho.
+  if (!fs.existsSync(path.join(FIX_LEITOR, 'caso4.dxf')) || !fs.existsSync(path.join(FIX_LEITOR, 'caso1.dxf'))) return;
+  const le = async arq => {
+    const { ctx, pg, erros } = await leitorImporta(b, arq, { viewport: { width: 1400, height: 900 } });
+    const pr = await leitorCapturaPdf(pg, 'dtPrancha');
+    const r = await leitorCapturaPdf(pg, 'dtGrupos');
+    const det = await pg.evaluate(() => [...document.querySelectorAll('#dtPranchas .prancha')].map(p => {
+      const sv = p.querySelector('svg'), vb = sv.getAttribute('viewBox').split(' ').map(Number);
+      return { tit: (sv.querySelector('text') || {}).textContent, alt: vb[3], larg: vb[2],
+        linhas: [...sv.querySelectorAll('text.bz-nome')].map(n => n.textContent),
+        pecas: [...sv.querySelectorAll('rect.bz-pedaco')].map(x => ({ mm: +x.getAttribute('data-mm'), qtd: +x.getAttribute('data-qtd') })),
+        usos: [...sv.querySelectorAll('text.bz-uso')].map(x => x.textContent),
+        cortes: sv.querySelectorAll('line[stroke="#7b3fb5"],line[stroke="#c0262d"]').length };
+    })).catch(e => [{ erro: e.message }]);
+    const pdf = r.h ? await leitorPdfInfo(ctx, r.h) : { n: 0 };
+    await ctx.close();
+    return { det, pdf, erros, emPrancha: [...new Set((pr.folhas || []).flatMap(f => f.txt.map(x => x.t)).filter(x => /^E\d+ · EMENDA B[SI]/.test(x)))] };
+  };
+  const c4 = await le(path.join(FIX_LEITOR, 'caso4.dxf'));
+  const f = (c4.det || []).filter(x => x.linhas && x.linhas.length);
+  const J = x => JSON.stringify(x).slice(0, 900);
+  t.ok('a folha por grupo traz os banzos (superior e inferior) com a composição de cada um', f.length >= 1 &&
+    f[0].linhas.some(l => /^Banzo superior/.test(l)) && f[0].linhas.some(l => /^Banzo inferior/.test(l)) && f[0].linhas.every(l => / = /.test(l)), J(c4.det));
+  t.ok('cada pedaço é uma peça separada, sem linha de corte em cima de uma barra', f.every(x => x.pecas.length >= 2 && !x.cortes &&
+    new Set(x.pecas.map(p => p.mm)).size === x.pecas.length), J(f.map(x => x.pecas)));
+  t.ok('cada peça diz de qual banzo e em que ordem (BS esq. 2/4...)', f.every(x => x.usos.length >= x.pecas.length && x.usos.every(u => /^(B[SI]( esq\.| dir\.| \d+)?) (\d+\/\d+|inteiro)/.test(u))), J(f.map(x => x.usos)));
+  // as medidas e as quantidades fecham com o plano de emenda
+  const medPr = c4.emPrancha.flatMap(x => [...x.matchAll(/\d+\/\d+ ([\d.]+)/g)].map(m => +m[1].replace(/\./g, '')));
+  const pedGr = f.flatMap(x => x.pecas.map(p => p.mm));
+  t.ok('as medidas das peças são as do plano de emenda da prancha', medPr.length > 0 && medPr.every(m => pedGr.includes(m)), J({ medPr, pedGr }));
+  const fecha = f.every(x => { const q = +((x.tit.match(/· (\d+)×/) || [])[1] || 1);
+    const segs = x.linhas.reduce((s, l) => s + (l.split(' = ')[1] || '').split(' + ').length, 0);
+    return x.pecas.reduce((s, p) => s + p.qtd, 0) === segs * q; });
+  t.ok('a quantidade de peças fecha com os pedaços de todos os banzos × estruturas', fecha, J(f.map(x => [x.tit, x.linhas, x.pecas])));
+  // tesoura longa: continua em folhas seguintes, cada página do tamanho do papel, sem folha em branco
+  const c1 = await le(path.join(FIX_LEITOR, 'caso1.dxf'));
+  const cabe = (c1.det || []).every(x => x.alt <= x.larg * 172 / 281 + 1);
+  t.ok('tesoura longa: continua em "folha 1/n, 2/n...", cada uma na altura do papel e sem página em branco',
+    (c1.det || []).some(x => /folha 1\/\d/.test(x.tit || '')) && cabe && c1.pdf.n === (c1.det || []).length, J({ n: c1.pdf.n, folhas: (c1.det || []).map(x => [x.tit.slice(0, 50), Math.round(x.alt)]) }));
+  t.ok('sem erro na página', !c4.erros.length && !c1.erros.length, c4.erros.concat(c1.erros).join(' | '));
+});
+
 teste('leitor-emenda-ponta-baixa', async (b, t) => {
   // Auditoria: as duas águas da tesoura de 12 m eram cortadas ao contrário
   // (o pedaço curto na cumeeira numa e na ponta baixa na outra) e a emenda do
