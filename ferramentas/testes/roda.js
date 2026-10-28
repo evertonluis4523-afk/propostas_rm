@@ -2226,7 +2226,7 @@ teste('leitor-numero-na-peca', async (b, t) => {
           return { n: g.textContent.trim(), x: +c.getAttribute('cx'), y: +c.getAttribute('cy'), r: +c.getAttribute('r') }; });
         const etiq = [...sv.querySelectorAll('text')].map(x => x.textContent).filter(x => /^[A-Z]+-P\d+-/.test(x));
         const negrito = [...sv.querySelectorAll('tspan[font-weight="800"]')].map(x => x.textContent);
-        return { bal, etiq, negrito, linhas: sv.querySelectorAll('line[stroke="#78838e"]').length,
+        return { bal, etiq, negrito, linhas: sv.querySelectorAll('line.cham').length,
           regra: [...sv.querySelectorAll('text')].map(x => x.textContent).find(x => /POSIÇÃO P/.test(x)) || '' };
       }).concat([{ dxf: txt }]);
     }).catch(e => [{ erro: e.message }]);
@@ -2252,6 +2252,60 @@ teste('leitor-numero-na-peca', async (b, t) => {
   t.ok('todas as folhas levam etiqueta, seta e número, sem número em cima de outro', folhas.length >= 3 && folhas.every(x => x.etiq.length && x.linhas && x.bal.length && !sobrepoe(x.bal)),
     JSON.stringify(folhas.map(x => [x.etiq.length, x.bal.length])));
   t.ok('sem erro na página', !ex.erros.length && !lg.erros.length, ex.erros.concat(lg.erros).join(' | '));
+});
+
+teste('leitor-chamada-pelo-tipo', async (b, t) => {
+  // "Linhas pontilhadas para diferenciar diagonais de verticais, e outro tipo
+  // de linha para diagonais inferiores e superiores": a linha da chamada diz
+  // o tipo da peça -- cheia (V), pontilhada (D), tracejada (DS), traço-ponto
+  // (DI) --, com legenda no pé da folha e o mesmo tipo de linha no DXF. E
+  // "a variação de cor na linha e a descrição seguindo a mesma cor": cada tipo
+  // tem uma cor, a mesma na linha, na etiqueta e no número da peça.
+  if (!fs.existsSync(LEITOR_EXEMPLO())) return;
+  const { ctx, pg, erros } = await leitorImporta(b, path.join(FIX_LEITOR, 'caso1.dxf'), { viewport: { width: 1400, height: 900 } });
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    let h = '', txt = ''; window.rmDesktop = { salvarPDF: async x => { h = x; return { ok: true }; } }; window.confirm = () => true;
+    const oc = URL.createObjectURL; URL.createObjectURL = bl => { bl.text().then(x => { txt = x; }); return oc.call(URL, bl); };
+    document.getElementById('detalhar').click(); await esp(400);
+    document.getElementById('dtPrancha').click(); await esp(1500);
+    document.body.classList.remove('so-prancha');
+    document.getElementById('detalhar').click(); await esp(400);
+    document.getElementById('dtDxf').click(); await esp(800);
+    const d = new DOMParser().parseFromString(h, 'text/html');
+    const estilo = l => { const da = l.getAttribute('stroke-dasharray'); return !da ? 'cheia' : /^0 /.test(da) ? 'ponto' : da.split(' ').length === 4 ? 'tracoponto' : 'traco'; };
+    const folhas = [...d.querySelectorAll('.prancha svg')].map(sv => ({
+      cores: [...sv.querySelectorAll('line.cham')].map(l => [l.getAttribute('data-tipo'), 'linha', l.getAttribute('stroke')])
+        .concat([...sv.querySelectorAll('text.etq')].map(x => [x.getAttribute('data-tipo'), 'etiqueta', x.getAttribute('fill')]))
+        .concat([...sv.querySelectorAll('line.leg-cham')].map(l => [l.getAttribute('data-tipo'), 'legenda', l.getAttribute('stroke')])),
+      cham: [...sv.querySelectorAll('line.cham')].map(l => [l.getAttribute('data-tipo'), estilo(l)]),
+      leg: [...sv.querySelectorAll('line.leg-cham')].map(l => [l.getAttribute('data-tipo'), estilo(l)]) }));
+    return { folhas, dxf: txt };
+  }).catch(e => ({ erro: e.message }));
+  const ESPERA = { V: 'cheia', D: 'ponto', DS: 'traco', DI: 'tracoponto' };
+  const fl = r.folhas || [];
+  const errados = fl.flatMap(f => f.cham.filter(([tp, es]) => ESPERA[tp] && ESPERA[tp] !== es));
+  const tipos = new Set(fl.flatMap(f => f.cham.map(c => c[0])));
+  t.ok('cada chamada tem a linha do seu tipo (V cheia, D pontilhada, DS tracejada)', fl.length > 2 && !errados.length && tipos.has('V') && tipos.has('D') && tipos.has('DS'),
+    (r.erro || '') + ' ' + JSON.stringify(errados.slice(0, 5)) + ' ' + [...tipos].join(','));
+  t.ok('a legenda mostra os tipos que a folha usa, com a mesma linha', fl.every(f => {
+    const usados = [...new Set(f.cham.map(c => c[0]))].filter(x => ESPERA[x]).sort().join(',');
+    return f.leg.map(l => l[0]).sort().join(',') === usados && f.leg.every(([tp, es]) => ESPERA[tp] === es); }), JSON.stringify(fl.map(f => f.leg)));
+  const corDe = {}; let misturou = [];
+  fl.forEach(f => f.cores.forEach(([tp, onde, cor]) => { if (corDe[tp] && corDe[tp] !== cor) misturou.push(tp + ' ' + onde + ' ' + cor + '≠' + corDe[tp]); corDe[tp] = corDe[tp] || cor; }));
+  t.ok('linha, etiqueta e legenda na cor do tipo, uma cor por tipo', !misturou.length && Object.keys(corDe).length >= 3 && new Set(Object.values(corDe)).size === Object.keys(corDe).length,
+    misturou.slice(0, 4).join(' | ') + ' ' + JSON.stringify(corDe));
+  const dxf = r.dxf || '';
+  t.ok('o DXF define o pontilhado e o traço-ponto', /\n2\nDOT\n/.test(dxf) && /\n2\nDASHDOT\n/.test(dxf) && /\n2\nDASHED\n/.test(dxf), '');
+  // o tipo de linha vai na parte da entidade (antes do AcDbLine), com escala
+  const lt = dxf.match(/\n0\nLINE\n(?:[^\n]*\n)*?100\nAcDbLine\n/g) || [];
+  const ponto = lt.filter(x => /\n8\nRM-CHAMADA\n6\nDOT\n48\n[\d.]+\n62\n3\n100\nAcDbLine\n$/.test(x)).length;
+  const traco = lt.filter(x => /\n8\nRM-CHAMADA\n6\nDASHED\n48\n[\d.]+\n62\n4\n100\nAcDbLine\n$/.test(x)).length;
+  t.ok('no DXF as chamadas das diagonais saem pontilhadas e verdes, as das superiores tracejadas e azuis', ponto > 20 && traco > 10, 'DOT ' + ponto + ' · DASHED ' + traco);
+  const verdes = (dxf.match(/\n0\nTEXT\n(?:[^\n]*\n)*?8\nRM-CODIGO\n62\n3\n100\nAcDbText\n(?:[^\n]*\n)*?1\n[A-Z]+-P\d+-D-/g) || []).length;
+  t.ok('no DXF a etiqueta da diagonal sai na cor dela', verdes > 20, 'etiquetas D verdes: ' + verdes);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
 });
 
 teste('leitor-banzo-exato-no-detalhado', async (b, t) => {
@@ -2308,6 +2362,32 @@ teste('leitor-preco-obra-em-todas-as-telas', async (b, t) => {
   await ctx.close();
 });
 
+teste('leitor-chapas-banzo-explicado', async (b, t) => {
+  // "Por que no chapa + serviço, mesmo com R$ 7,80/kg, os banzos ficam a
+  // R$ 6,40/kg?" -- o parceiro faz só as internas; o banzo continua barra
+  // comprada, ao preço da barra da obra. A conta estava certa, a linha é que
+  // não dizia: agora diz.
+  if (!fs.existsSync(path.join(RAIZ, 'leitor_dwg'))) return;
+  const { ctx, pg, erros } = await leitorImporta(b, trelicaTeste('chapas_banzo_txt'));
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms)), L = window.__leitorTeste;
+    localStorage.setItem(L.cuKey, JSON.stringify({ barra: 300 })); L.chapasCfg({ sheetRkg: 7.5, serviceRkg: 4 });
+    document.querySelector('[data-dsub="comp"]').click(); await esp(400);
+    const poe = async (k, v) => { const i = document.querySelector('#detComp [data-cmp-preco="' + k + '"]');
+      i.value = v; i.dispatchEvent(new Event('change', { bubbles: true })); await esp(200); };
+    await poe('barra', '6,40'); await poe('chapa', '7,80');
+    const cards = [...document.querySelectorAll('#detComp .cmp-card')].map(c => c.innerText.replace(/\s+/g, ' '));
+    await poe('barra', ''); await poe('chapa', '');
+    return { cards };
+  }).catch(e => ({ erro: e.message }));
+  const c = r.cards || [], J = JSON.stringify({ erro: r.erro, ch: c[2], det: c[1] }).slice(0, 600) + ' ' + erros.join(' | ');
+  t.ok('no caminho das chapas, a linha diz que o banzo é barra comprada ao preço da barra', !r.erro &&
+    /Banzos em barra comprada/.test(c[2] || '') && /R\$ 6,40\/kg \(preço da barra desta obra; o parceiro faz só as internas\)/.test(c[2] || ''), J);
+  t.ok('nos outros caminhos a linha continua só "Banzos"', !r.erro && !/barra comprada/.test((c[0] || '') + (c[1] || '')) && /Banzos/.test(c[1] || ''), J);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
 teste('leitor-parceiro-peso-peca-pronta', async (b, t) => {
   // "cobra pelo peso da peça pronta, diferente da Perfitec ou outro
   // fornecedor que cobra o aproveitamento (188,8 é cobrado 200 mm)": o
@@ -2337,7 +2417,8 @@ teste('leitor-codigo-unico-e-unidade', async (b, t) => {
   if (!fs.existsSync(LEITOR_EXEMPLO())) return;
   const { ctx, pg, erros } = await leitorImporta(b, LEITOR_EXEMPLO(), { viewport: { width: 1400, height: 900 } });
   const r = await leitorCapturaPdf(pg, 'dtPrancha', true);
-  const prancha = ((r.folhas || [])[0] || { txt: [] }).txt.filter(x => x.f === '#D53309' && /-P\d+-/.test(x.t)).map(x => x.t);
+  // a etiqueta sai na cor do tipo da peça (V, D, DS, DI): vale pelo formato, não pela cor
+  const prancha = ((r.folhas || [])[0] || { txt: [] }).txt.filter(x => /^[A-Z]+-P\d+-/.test(x.t)).map(x => x.t);
   const o = await pg.evaluate(async () => {
     document.body.classList.remove('so-prancha');
     document.getElementById('dtPrint').click(); await new Promise(x => setTimeout(x, 400));
