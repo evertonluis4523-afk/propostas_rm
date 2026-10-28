@@ -128,6 +128,54 @@ const esp = ms => new Promise(r => setTimeout(r, ms));
   confere('versão nova do programa: aviso "Reiniciar e atualizar"', /1\.5\.103/.test(avisoNovo) && /Reiniciar e atualizar/.test(avisoNovo) && est && est.automatico === false, JSON.stringify({ est, avisoNovo }));
   await pg.evaluate(() => { const d = document.getElementById('aviso-programa-novo'); if (d) d.remove(); });
 
+  // 6b) "Essa barra superior não é possível se adaptar ao tema?": a faixa do
+  // Windows saiu, a barra da Central é o alto da janela (arrasta por ela) e
+  // os botões da janela pegam a cor do tema -- no Jarvis, o azul-petróleo
+  await app.evaluate(({ BrowserWindow }) => { const w = BrowserWindow.getAllWindows()[0]; global.__barra = [];
+    const orig = w.setTitleBarOverlay.bind(w); w.setTitleBarOverlay = o => { global.__barra.push(o); return orig(o); }; });
+  const jan = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms)), tb = document.querySelector('.topbar');
+    const r = { classe: document.documentElement.classList.contains('rm-janela'), arrasta: getComputedStyle(tb).webkitAppRegion || getComputedStyle(tb).getPropertyValue('-webkit-app-region'),
+      botao: getComputedStyle(tb.querySelector('[onclick]')).getPropertyValue('-webkit-app-region'), folga: parseFloat(getComputedStyle(tb).paddingRight) };
+    window.setTheme('jarvis'); await esp(2200);
+    r.jarvis = getComputedStyle(tb).backgroundColor;
+    window.setTheme('claro'); await esp(2200);
+    return r;
+  });
+  const cores = await app.evaluate(() => global.__barra.map(o => o.color));
+  const azul = c => { const v = parseInt(c.slice(1), 16), R = v >> 16, B = v & 255; return B > R + 8 && B < 90; };
+  const claro = c => parseInt(c.slice(1, 3), 16) > 200;
+  confere('a barra da Central é o alto da janela: arrasta por ela, os botões continuam clicáveis e o canto fica para os botões da janela',
+    jan.classe && /drag/.test(jan.arrasta) && /no-drag/.test(jan.botao) && jan.folga > 100, JSON.stringify(jan));
+  confere('os botões da janela pegam a cor do tema (Jarvis azul-petróleo, claro claro)', cores.some(azul) && claro(cores[cores.length - 1] || '#000000'), JSON.stringify(cores));
+  const semFaixa = await app.evaluate(({ BrowserWindow }) => { const w = BrowserWindow.getAllWindows()[0]; return w.getBounds().height - w.getContentBounds().height; });
+  confere('a faixa do Windows saiu (a página ocupa a janela inteira)', semFaixa < 8, 'diferença ' + semFaixa + ' px');
+
+  // 6c) revisão do programa: anexo .exe não roda, só site/e-mail/telefone
+  // vão ao Windows, arquivo solto não toma a janela, Preferências mostram a
+  // situação da atualização
+  await app.evaluate(({ shell }) => { global.__fora = []; shell.openExternal = async u => { global.__fora.push(u); }; shell.openPath = async () => ''; });
+  const rRev = await pg.evaluate(() => window.rmDesktop.abrirDocumento({ nome: 'Orçamento rev.2', tipo: 'application/pdf', dados: 'data:application/pdf;base64,JVBERi0xLjQK' })).catch(e => ({ erro: e.message }));
+  confere('documento "Orçamento rev.2" (PDF) abre como .pdf', rRev && rRev.ok === true && /rev\.2\.pdf$/.test(rRev.caminho || ''), JSON.stringify(rRev));
+  const rExe = await pg.evaluate(() => window.rmDesktop.abrirDocumento({ nome: 'nota.exe', tipo: '', dados: 'data:application/octet-stream;base64,TVqQAAMAAAAEAAAA' })).catch(e => ({ erro: e.message }));
+  const exeNoTemp = fs.existsSync(path.join(os.tmpdir(), 'rm-central-docs', 'nota.exe'));
+  confere('anexo "nota.exe" não é aberto (nem gravado)', rExe && rExe.ok === false && /seguran/.test(rExe.erro || '') && !exeNoTemp, JSON.stringify({ rExe, exeNoTemp }));
+  const urlAntes = pg.url();
+  await pg.evaluate(() => { window.open('search-ms:query=x'); window.open('file:///C:/Windows/System32/calc.exe'); window.open('https://example.com/rm'); window.open('mailto:rm@example.com'); });
+  await pg.evaluate(() => { location.href = 'file:///tmp/solto-na-janela.pdf'; }).catch(() => {});
+  await esp(1200);
+  const fora = await app.evaluate(() => global.__fora);
+  const urlDepois = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.getURL());
+  confere('links: só site e e-mail vão ao Windows (search-ms e file barrados)', fora.length === 2 && fora[0] === 'https://example.com/rm' && fora[1] === 'mailto:rm@example.com', JSON.stringify(fora));
+  confere('arquivo solto não toma o lugar da Central', urlDepois.split('#')[0] === urlAntes.split('#')[0], JSON.stringify({ urlAntes, urlDepois }));
+  /* localização: negada = código 1 (sem permissão); liberada daria outro código */
+  const perm = await pg.evaluate(() => new Promise(r => { const t = setTimeout(() => r('sem resposta'), 8000);
+    navigator.geolocation.getCurrentPosition(() => { clearTimeout(t); r('liberou'); }, e => { clearTimeout(t); r('codigo ' + e.code); }); }));
+  confere('localização (e câmera, microfone...) negada sem perguntar', perm === 'codigo 1', perm);
+  const pref = await pg.evaluate(async () => { window.openSettings(); await new Promise(r => setTimeout(r, 400));
+    const s = document.getElementById('sec-programa'), t = s && !s.hidden ? s.textContent : ''; window.closeSettings && window.closeSettings(); return t; });
+  confere('Preferências mostram o programa e a atualização', /Programa do computador/.test(pref) && /Versão \d/.test(pref), pref.slice(0, 160));
+
   // 7) a tela cai: o programa recarrega sozinho e avisa
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.forcefullyCrashRenderer());
   await esp(5000);
