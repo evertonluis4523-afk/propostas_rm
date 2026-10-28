@@ -1797,8 +1797,10 @@ teste('leitor-prancha-montagem-pdf', async (b, t) => {
   const inteira = mm.tit.filter(x => !/TRECHO/.test(x)), trechos = mm.tit.filter(x => /TRECHO/.test(x));
   // cada estrutura: a completa primeiro, depois os seus trechos
   const porEst = {}; mm.tit.forEach(x => { const e = (x.match(/Estrutura (\w+)/) || [])[1]; (porEst[e] = porEst[e] || []).push(x); });
-  t.ok('com a tesoura em trechos, uma folha traz a tesoura completa antes deles', trechos.length >= 2 && Object.values(porEst).every(l => l.length === 1 ||
-    (/TESOURA COMPLETA/.test(l[0]) && l.slice(1).every(x => /TRECHO/.test(x)) && inteira.filter(x => l.includes(x)).length === 1)), J);
+  // cada estrutura abre com a folha de peças e a de medidas (a tesoura
+  // inteira), e os trechos vêm depois
+  t.ok('cada estrutura: folha de peças, folha de medidas e depois os trechos', trechos.length >= 2 && inteira.length >= 2 && Object.values(porEst).every(l =>
+    /FOLHA DE PEÇAS/.test(l[0]) && /FOLHA DE MEDIDAS/.test(l[1]) && l.slice(2).every(x => /TRECHO/.test(x))), J);
   t.ok('códigos em mm na prancha', mm.cods.length > 0 && mm.cods.every(x => /\d+MM$/.test(x)), J);
   const cm = await gera(true);
   if (process.env.PRANCHA_DOC) fs.writeFileSync(process.env.PRANCHA_DOC.replace(/\.html$/, '-cm.html'), cm.h || '');
@@ -1846,15 +1848,16 @@ teste('leitor-prancha-cota-verticais', async (b, t) => {
   t.ok('mede pela aba interna: face esquerda do lado esquerdo, face direita do lado direito', !!m0 &&
     m0.lados.every(l => l.marcas.filter(q => q.pos).every(q => Math.abs(q.x - (l.lado < 0 ? q.mn : q.mx)) < 0.01)), JM);
   const mm = await leitorPranchasCotas(pg, false), J = JSON.stringify(mm).slice(0, 1800) + ' ' + erros.join(' | ');
-  const trechos = mm.filter(x => /TRECHO/.test(x.tit || '')), completas = mm.filter(x => /COMPLETA/.test(x.tit || ''));
-  // "deveria aparecer a cota azul da distância de vão na folha inteira":
-  // a folha da tesoura completa leva as medidas gerais E a corrente toda
-  t.ok('folha completa: comprimento total, banzo superior e a corrente das verticais inteira', completas.length > 0 &&
+  const trechos = mm.filter(x => /TRECHO/.test(x.tit || '')), completas = mm.filter(x => /FOLHA DE MEDIDAS/.test(x.tit || ''));
+  // "deveria aparecer a cota azul da distância de vão na folha inteira": a
+  // folha de MEDIDAS leva as medidas gerais E a corrente toda, desde a
+  // cumeeira (teste leitor-pranchas-pecas-e-medidas)
+  t.ok('folha de medidas: comprimento total, banzo superior e a corrente das verticais inteira', completas.length > 0 &&
     completas.every(x => x.ps.length >= 10 && x.inicio > 0 && !x.ref.length && x.gerais.some(g => /comprimento total/.test(g)) && x.gerais.some(g => /banzo superior/.test(g)) && x.alturas >= 2), J);
-  t.ok('cada trecho: P das verticais e uma cota entre cada duas, sem medidas gerais', trechos.length >= 2 &&
-    trechos.every(x => x.ps.length >= 2 && x.cotas.length >= x.ps.length - 1 && !x.gerais.length), J);
-  t.ok('o trecho sem a cumeeira diz a que distância dela começa; o da cumeeira marca o início', trechos.filter(x => !x.inicio).every(x => x.ref.length >= 1 &&
-    x.ref.every(r => /^P\d+ a [\d.]+ mm da P\d+ \((cumeeira|ponta alta)\)$/.test(r))) && trechos.some(x => x.inicio > 0), J);
+  // "nas demais divisões tirar a segunda lista": o trecho não repete a
+  // corrente azul, que está inteira na folha de medidas
+  t.ok('os trechos não repetem a corrente azul nem as medidas gerais', trechos.length >= 2 &&
+    trechos.every(x => !x.ps.length && !x.cotas.length && !x.ref.length && !x.gerais.length), J);
   t.ok('a frase antiga "do início da tesoura" saiu', mm.every(x => !(x.ref || []).some(r => /início da tesoura/.test(r))), J);
   const cm = await leitorPranchasCotas(pg, true), J2 = JSON.stringify(cm.map(x => x.cotas)).slice(0, 800);
   const nmm = v => +v.replace(/\./g, ''), ncm = v => parseFloat(v.replace(/\./g, '').replace(',', '.'));
@@ -1899,8 +1902,8 @@ teste('leitor-prancha-cota-suporte-terca', async (b, t) => {
   t.ok('a cota do banzo de baixo e a solta ficam de fora', !todas.some(v => /12\.000|2\.030/.test(v)), J);
   // "coloca a cota azul também na folha única": a tesoura que não foi partida
   // leva as medidas gerais E a corrente das verticais a partir da cumeeira
-  const unica = r.find(x => !/TRECHO|COMPLETA/.test(x.tit || ''));
-  t.ok('folha única: corrente azul das verticais (as 7) com o início na cumeeira, mais o comprimento total', !!unica && unica.ps.length === 7 &&
+  const unica = r.find(x => /FOLHA DE MEDIDAS/.test(x.tit || ''));
+  t.ok('folha de medidas da tesoura curta: corrente azul das verticais (as 7) com o início na cumeeira, mais o comprimento total', !!unica && unica.ps.length === 7 &&
     unica.inicio > 0 && unica.gerais.some(g => /comprimento total/.test(g)), JSON.stringify(unica));
   t.ok('sem erro na página', !erros.length, erros.join(' | '));
   await ctx.close();
@@ -2048,7 +2051,7 @@ teste('leitor-prancha-emenda-banzo', async (b, t) => {
     return { folhas, pedido };
   }).catch(e => ({ erro: e.message }));
   const J = JSON.stringify(r).slice(0, 1500) + ' ' + erros.join(' | ');
-  const comp = (r.folhas || []).find(f => /COMPLETA/.test(f.tit)) || {};
+  const comp = (r.folhas || []).find(f => /FOLHA DE PEÇAS/.test(f.tit)) || {};
   // "A informação do recorte dos banzos está deslocada, organize de forma
   // alinhada e com setas direcionando": uma etiqueta por emenda, numa fileira
   // (mesma altura no papel para o superior, outra para o inferior), com seta
@@ -2149,18 +2152,19 @@ teste('leitor-prancha-completa-legivel', async (b, t) => {
   const { ctx, pg, erros } = await leitorImporta(b, path.join(FIX_LEITOR, 'caso1.dxf'), { viewport: { width: 1400, height: 900 } });
   const r = await leitorCapturaPdf(pg, 'dtPrancha');
   const pdf = r.h ? await leitorPdfInfo(ctx, r.h) : { n: 0, tam: [] };
-  const comp = (r.folhas || []).find(f => /Estrutura A/.test(f.tit) && /COMPLETA/.test(f.tit)) || { txt: [] };
+  const comp = (r.folhas || []).find(f => /Estrutura A/.test(f.tit) && /FOLHA DE PEÇAS/.test(f.tit)) || { txt: [] };
+  const med = (r.folhas || []).find(f => /Estrutura A/.test(f.tit) && /FOLHA DE MEDIDAS/.test(f.tit)) || { txt: [] };
   const letra = +((comp.txt.find(x => /letra [\d,]+ mm/.test(x.t)) || { t: '' }).t.match(/letra ([\d,]+) mm/) || [0, '0'])[1].replace(',', '.');
   const roxo = comp.txt.filter(x => x.f === '#7b3fb5' || x.f === '#c0262d');
   const marcas = roxo.filter(x => /^E\d+$/.test(x.t)), quadro = comp.txt.filter(x => /^E\d+ · EMENDA B[SI]/.test(x.t));
   // números da corrente azul (sem negrito, "1.346"): na mesma fileira, nenhum encosta no vizinho
-  const az = comp.txt.filter(x => x.f === '#1d4f91' && /^[\d.]+$/.test(x.t) && x.a === 'middle');
+  const az = med.txt.filter(x => x.f === '#1d4f91' && /^[\d.]+$/.test(x.t) && x.a === 'middle');
   const filas = {}; az.forEach(x => (filas[Math.round(x.y * 10)] = filas[Math.round(x.y * 10)] || []).push(x));
   let encosta = 0;
   Object.values(filas).forEach(l => { l.sort((p, q) => p.x - q.x); for (let i = 1; i < l.length; i++)
     if (l[i].x - l[i - 1].x < (l[i].t.length + l[i - 1].t.length) * l[i].fs * .6 / 2) encosta++; });
   const J = JSON.stringify({ erro: r.erro, folha: comp.folha, letra, pdf, marcas: marcas.length, quadro: quadro.length, encosta, filas: Object.keys(filas).length }) + ' ' + erros.join(' | ');
-  t.ok('a folha da tesoura completa longa sai em A3, com letra acima de 2,2 mm', !r.erro && comp.folha === 'A3' && letra >= 2.2, J);
+  t.ok('a folha de peças da tesoura longa sai em A3, com letra acima de 2,2 mm', !r.erro && comp.folha === 'A3' && letra >= 2.2, J);
   t.ok('o PDF vai todo em A3 e sem folha em branco (uma página por prancha)', pdf.n === (r.folhas || []).length && pdf.tam.length === pdf.n && pdf.tam.every(x => x === '1191x842'), J);
   t.ok('as emendas viram E1, E2... no desenho e o quadro no pé da folha diz cada uma', marcas.length >= 6 && quadro.length === marcas.length, J);
   t.ok('os números da corrente azul não se encavalam (os apertados sobem um andar)', az.length > 20 && encosta === 0 && Object.keys(filas).length >= 2, J);
@@ -2227,7 +2231,7 @@ teste('leitor-numero-na-peca', async (b, t) => {
         const etiq = [...sv.querySelectorAll('text')].map(x => x.textContent).filter(x => /^[A-Z]+-P\d+-/.test(x));
         const negrito = [...sv.querySelectorAll('tspan[font-weight="800"]')].map(x => x.textContent);
         return { bal, etiq, negrito, linhas: sv.querySelectorAll('line.cham').length,
-          regra: [...sv.querySelectorAll('text')].map(x => x.textContent).find(x => /POSIÇÃO P/.test(x)) || '' };
+          regra: [...sv.querySelectorAll('text')].map(x => x.textContent).find(x => /POSIÇÃO P|MEDIDAS DE MONTAGEM/.test(x)) || '' };
       }).concat([{ dxf: txt }]);
     }).catch(e => [{ erro: e.message }]);
     await ctx.close(); return { r, erros };
@@ -2249,7 +2253,9 @@ teste('leitor-numero-na-peca', async (b, t) => {
   t.ok('na folha da tesoura completa: etiquetas, setas e números', fs0.etiq && fs0.etiq.length > 40 && fs0.linhas > 0 && fs0.bal.length > 40 && !sobrepoe(fs0.bal),
     JSON.stringify({ e: (fs0.etiq || []).length, l: fs0.linhas, n: (fs0.bal || []).length }));
   t.ok('todo número da folha completa é a posição de uma etiqueta dela', (fs0.bal || []).every(x => fs0.negrito.includes('P' + x.n)), '');
-  t.ok('todas as folhas levam etiqueta, seta e número, sem número em cima de outro', folhas.length >= 3 && folhas.every(x => x.etiq.length && x.linhas && x.bal.length && !sobrepoe(x.bal)),
+  // a folha de medidas não leva peça nenhuma (teste leitor-pranchas-pecas-e-medidas)
+  const comPecas = folhas.filter(x => !/MEDIDAS DE MONTAGEM/.test(x.regra || ''));
+  t.ok('todas as folhas de peças e trechos levam etiqueta, seta e número, sem número em cima de outro', comPecas.length >= 3 && comPecas.every(x => x.etiq.length && x.linhas && x.bal.length && !sobrepoe(x.bal)),
     JSON.stringify(folhas.map(x => [x.etiq.length, x.bal.length])));
   t.ok('sem erro na página', !ex.erros.length && !lg.erros.length, ex.erros.concat(lg.erros).join(' | '));
 });
@@ -2360,6 +2366,45 @@ teste('leitor-preco-obra-em-todas-as-telas', async (b, t) => {
   t.ok('chapas + parceiro com o preço fixo da obra, igual ao cartão, e a linha que diz isso', !r.erro && ch && nr(ch) === nr(r.cards[2]) && /Preço desta obra: chapas \+ parceiro/.test(r.rel), J);
   t.ok('sem erro na página', !erros.length, erros.join(' | '));
   await ctx.close();
+});
+
+teste('leitor-pranchas-pecas-e-medidas', async (b, t) => {
+  // Pedido do montador: "1 folha com as informações das internas e banzos, 1
+  // folha com as distâncias entre vãos, posição do suporte de terça,
+  // comprimento e cotas da tesoura completa; nas demais divisões tirar a
+  // segunda lista (as cotas azuis)". Vale para toda estrutura.
+  if (!fs.existsSync(LEITOR_EXEMPLO())) return;
+  const folhasDe = async arq => {
+    const { ctx, pg, erros } = await leitorImporta(b, arq, { viewport: { width: 1400, height: 900 } });
+    const r = await pg.evaluate(async () => {
+      const esp = ms => new Promise(x => setTimeout(x, ms));
+      let h = ''; window.rmDesktop = { salvarPDF: async x => { h = x; return { ok: true }; } }; window.confirm = () => true;
+      document.getElementById('detalhar').click(); await esp(400);
+      document.getElementById('dtPrancha').click(); await esp(1500);
+      const d = new DOMParser().parseFromString(h, 'text/html');
+      return [...d.querySelectorAll('.prancha svg')].map(sv => {
+        const txt = [...sv.querySelectorAll('text')];
+        return { tit: (txt[0] || {}).textContent || '',
+          etq: sv.querySelectorAll('text.etq').length, cham: sv.querySelectorAll('line.cham').length, num: sv.querySelectorAll('g.pos-peca').length,
+          azul: txt.filter(x => x.getAttribute('fill') === '#1d4f91').length,
+          total: txt.some(x => /comprimento total/.test(x.textContent)),
+          emenda: txt.filter(x => /^E\d+( ·|$)/.test(x.textContent.trim())).length };
+      });
+    }).catch(e => [{ erro: e.message }]);
+    await ctx.close(); return { f: r, erros };
+  };
+  const ex = await folhasDe(LEITOR_EXEMPLO()), lg = await folhasDe(path.join(FIX_LEITOR, 'caso1.dxf'));
+  const J = x => JSON.stringify(x).slice(0, 700);
+  const pecas = f => f && /FOLHA DE PEÇAS/.test(f.tit) && f.etq > 0 && f.cham > 0 && f.num > 0 && !f.azul && !f.total && f.emenda > 0;
+  const medidas = f => f && /FOLHA DE MEDIDAS/.test(f.tit) && !f.etq && !f.cham && !f.num && f.azul > 5 && f.total && !f.emenda;
+  t.ok('tesoura de folha única: folha de peças (etiquetas e emendas, sem cotas) e folha de medidas (cotas, sem etiquetas)',
+    ex.f.length === 2 && pecas(ex.f[0]) && medidas(ex.f[1]), J(ex.f));
+  t.ok('tesoura longa: abre com a folha de peças e a de medidas', pecas(lg.f[0]) && medidas(lg.f[1]), J(lg.f.slice(0, 2)));
+  const tre = lg.f.filter(f => /TRECHO \d+\/\d+/.test(f.tit));
+  t.ok('os trechos levam as peças e as emendas, sem as cotas azuis', tre.length >= 2 && tre.every(f => f.etq > 0 && f.num > 0 && !f.azul), J(tre.map(f => [f.tit.slice(0, 60), f.etq, f.azul])));
+  t.ok('cada estrutura do desenho abre com as duas folhas', lg.f.filter(f => /FOLHA DE PEÇAS/.test(f.tit)).length === lg.f.filter(f => /FOLHA DE MEDIDAS/.test(f.tit)).length &&
+    lg.f.filter(f => /FOLHA DE PEÇAS/.test(f.tit)).length >= 2, J(lg.f.map(f => f.tit.slice(0, 70))));
+  t.ok('sem erro na página', !ex.erros.length && !lg.erros.length, ex.erros.concat(lg.erros).join(' | '));
 });
 
 teste('leitor-mao-de-obra-por-pessoa', async (b, t) => {
