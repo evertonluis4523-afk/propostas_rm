@@ -15637,6 +15637,87 @@ teste('programa-casca-segura', async (b, t) => {
   t.ok('bibliotecas com versões fixas (package-lock + npm ci)', /npm ci\b/.test(wf) && !/npm install/.test(wf) && lk.packages && lk.packages['node_modules/electron'] && /integrity/.test(le('package-lock.json')));
 });
 
+teste('central-janelas-teclado', async (b, t) => {
+  // Revisão da interface (Frontend Developer): (1) iPhone dava zoom nos
+  // campos de 13px; (2) Esc não fechava as janelas, o Tab fugia e o foco não
+  // voltava; (3) Novo compromisso cortado em tela baixa; (4) selo Nuvem do
+  // claro abaixo de 4,5:1; (5) selo CENTRAL no escuro 4,3:1; (6) 404 do
+  // systems-manifest.js no site; aba recém-aberta pela metade no celular;
+  // Firebase guardado para abrir sem internet.
+  const contr = () => (sel) => {
+    const cv = document.createElement('canvas').getContext('2d');
+    const rgba = c => { cv.clearRect(0, 0, 1, 1); cv.fillStyle = '#000'; cv.fillStyle = c; cv.fillRect(0, 0, 1, 1); const d = cv.getImageData(0, 0, 1, 1).data; return [d[0], d[1], d[2], d[3] / 255]; };
+    const L = c => { const f = v => { v /= 255; return v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); }; return 0.2126 * f(c[0]) + 0.7152 * f(c[1]) + 0.0722 * f(c[2]); };
+    const e = document.querySelector(sel); if (!e) return 'sem ' + sel;
+    let pilha = []; for (let x = e; x; x = x.parentElement) { const c = rgba(getComputedStyle(x).backgroundColor); if (c[3] > 0) pilha.push(c); if (c[3] >= 0.99) break; }
+    let f = [255, 255, 255]; pilha.reverse().forEach(c => { f = f.map((v, i) => v * (1 - c[3]) + c[i] * c[3]); });
+    const lc = L(rgba(getComputedStyle(e).color)), lf = L(f);
+    return +((Math.max(lc, lf) + 0.05) / (Math.min(lc, lf) + 0.05)).toFixed(2);
+  };
+  // computador: Esc, Tab preso, foco volta
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'central_rm' }, 'index.html', { antes: () => { try { localStorage.setItem('rm_tema', 'claro'); } catch (e) {} } });
+  await pg.evaluate(() => document.querySelectorAll('#lock-screen').forEach(e => e.style.setProperty('display', 'none', 'important')));
+  for (const [abrir, ov] of [['openSettings', 'settings-overlay'], ['openAddLembrete', 'lembrete-overlay'], ['abrirContatos', 'contatos-overlay']]) {
+    const r = await pg.evaluate(async ([abrir, ov]) => {
+      const esp = ms => new Promise(x => setTimeout(x, ms));
+      const bt = document.createElement('button'); bt.id = 'zzAbre'; bt.textContent = 'abre'; document.body.appendChild(bt); bt.focus();
+      window[abrir](); await esp(150);
+      const o = document.getElementById(ov), p = o.firstElementChild;
+      const r = { abriu: o.classList.contains('open'), dentro: p.contains(document.activeElement), papel: p.getAttribute('role') + '/' + p.getAttribute('aria-modal') };
+      let fugiu = false;
+      for (let i = 0; i < 60; i++) { document.activeElement.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true }));
+        /* o navegador não move o foco num evento sintético: anda à mão, como o Tab faria */
+        const f = [...p.querySelectorAll('button,input,select,textarea,[href],[tabindex]:not([tabindex="-1"])')].filter(x => x.offsetParent !== null);
+        if (!p.contains(document.activeElement)) { fugiu = true; break; }
+        const k = f.indexOf(document.activeElement); if (k > -1 && k < f.length - 1) f[k + 1].focus(); }
+      r.fugiu = fugiu;
+      document.activeElement.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })); await esp(150);
+      r.fechou = !o.classList.contains('open'); r.voltou = document.activeElement === bt; bt.remove();
+      return r;
+    }, [abrir, ov]);
+    t.ok(ov + ': ao abrir o foco entra, o Tab não foge, Esc fecha e o foco volta', r.abriu && r.dentro && !r.fugiu && r.fechou && r.voltou && r.papel === 'dialog/true', JSON.stringify(r));
+  }
+  const nuvem = [];
+  for (const k of ['ligada', 'ligando', 'local', 'erro']) {
+    const v = await pg.evaluate(([k, f]) => { const n = document.getElementById('rm-nuvem'); if (!n) return 'sem selo'; n.setAttribute('data-estado', k); return (new Function('return (' + f + ')')())('#rm-nuvem'); }, [k, contr.toString().replace(/^\(\) => /, '')]);
+    nuvem.push(k + ' ' + v);
+  }
+  t.ok('selo da nuvem no claro: 4,5:1 ou mais em todos os estados', nuvem.every(x => +x.split(' ')[1] >= 4.5), nuvem.join(' | '));
+  const tags = [];
+  for (const tema of ['claro', 'escuro', 'suave', 'nitido', 'jarvis']) {
+    const v = await pg.evaluate(async ([tema, f]) => { window.setTheme(tema);
+      await new Promise(x => setTimeout(x, 700));   /* a troca de tema tem transição */
+      return (new Function('return (' + f + ')')())('.topbar-tag'); }, [tema, contr.toString().replace(/^\(\) => /, '')]);
+    tags.push(tema + ' ' + v);
+  }
+  t.ok('selo CENTRAL da barra: 4,5:1 ou mais nos temas', tags.every(x => +x.split(' ')[1] >= 4.5), tags.join(' | '));
+  const man = await pg.evaluate(() => !!document.querySelector('script[src="systems-manifest.js"]'));
+  t.ok('no site não pede o systems-manifest.js (só existe no programa)', !man);
+  await pg.setViewportSize({ width: 760, height: 400 });
+  const baixa = await pg.evaluate(async () => { window.openAddLembrete(); await new Promise(x => setTimeout(x, 150));
+    const p = document.querySelector('#lembrete-overlay .lembrete-panel'), r = p.getBoundingClientRect();
+    const sv = [...p.querySelectorAll('button')].find(x => /Salvar/.test(x.textContent)); sv && sv.scrollIntoView();
+    const rs = sv ? sv.getBoundingClientRect() : null; window.closeAddLembrete();
+    return { topo: Math.round(r.top), base: Math.round(r.bottom), salvar: rs ? Math.round(rs.bottom) : 'sem', alt: innerHeight }; });
+  t.ok('tela baixa: Novo compromisso inteiro na tela, rolando até o Salvar', baixa.topo >= 0 && baixa.base <= baixa.alt && typeof baixa.salvar === 'number' && baixa.salvar <= baixa.alt, JSON.stringify(baixa));
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+  // celular: campos com 16px e a aba recém-aberta inteira na faixa
+  const c = await abre(b, { 'sis.local': 'central_rm' }, 'index.html', { tela: { width: 360, height: 740 } });
+  await c.pg.evaluate(() => document.querySelectorAll('#lock-screen').forEach(e => e.style.setProperty('display', 'none', 'important')));
+  const fs16 = await c.pg.evaluate(() => ['set-username', 'lb-text', 'ct-nome'].map(id => { const e = document.getElementById(id); return id + ' ' + (e ? getComputedStyle(e).fontSize : 'sem'); }));
+  t.ok('celular: campos com 16px (o iPhone não dá zoom)', fs16.every(x => / 16px$/.test(x)), fs16.join(' | '));
+  const aba = await c.pg.evaluate(async () => { CURRENT_EMAIL = 'evertonluis4523@gmail.com'; const ids = allSystems(true).map(s => s.id).slice(0, 4);
+    for (const id of ids) { openModule(id); await new Promise(x => setTimeout(x, 250)); }
+    const bar = document.getElementById('tabs-bar'), a = bar.querySelector('.tab-item.active'); if (!a) return { sem: true, ids };
+    const fb = bar.getBoundingClientRect(), ra = a.getBoundingClientRect();
+    return { rola: bar.scrollWidth > bar.clientWidth, esq: Math.round(ra.left - fb.left), dir: Math.round(fb.right - ra.right) }; });
+  t.ok('celular: a aba recém-aberta fica inteira na faixa', aba.rola && aba.esq >= 0 && aba.dir >= 0, JSON.stringify(aba));
+  await c.ctx.close();
+  const sw = fs.readFileSync(path.join(RAIZ, 'central_rm', 'sw.js'), 'utf8');
+  t.ok('o Firebase fica guardado para abrir sem internet', ['app', 'auth', 'database'].every(k => sw.includes("'https://www.gstatic.com/firebasejs/10.12.2/firebase-" + k + "-compat.js'")));
+});
+
 teste('central-jarvis-faixa-opcional', async (b, t) => {
   // "A faixa de luz sempre passando na Central: deixar como opção e não o
   // tempo todo". A faixa que desce a tela e o fio que corre na barra do alto
