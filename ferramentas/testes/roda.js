@@ -2362,6 +2362,76 @@ teste('leitor-preco-obra-em-todas-as-telas', async (b, t) => {
   await ctx.close();
 });
 
+teste('leitor-mao-de-obra-por-pessoa', async (b, t) => {
+  // "O tempo e o salário são de uma pessoa; ao pôr 2, o custo da mão de obra
+  // dobra, pois mais uma pessoa entra no processo": antes "pessoas na
+  // tarefa" só dividia o relógio e não mexia no custo.
+  if (!fs.existsSync(path.join(RAIZ, 'leitor_dwg'))) return;
+  const { ctx, pg, erros } = await leitorImporta(b, trelicaTeste('mao_pessoas'));
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms)), L = window.__leitorTeste;
+    const poe = async n => { const c = JSON.parse(localStorage.getItem(L.cuKey) || '{}');
+      Object.assign(c, { barra: 300, salario: 3000, horas: 220, encargos: 0, pessoas: n, tPos: 50, tRebarba: 38, tIdent: 15 });
+      localStorage.setItem(L.cuKey, JSON.stringify(c)); await esp(50); return L.custos(); };
+    const um = await poe(1), dois = await poe(2), tres = await poe(3);
+    const box = document.getElementById('custosBox'); if (box) box.open = true;
+    const dica = ((document.getElementById('cuPessoas') || {}).parentNode || {}).innerText || '';
+    return { um, dois, tres, dica };
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r).slice(0, 500) + ' ' + erros.join(' | ');
+  const perto = (a, b) => Math.abs(a - b) <= Math.max(0.01, Math.abs(b) * 1e-9);
+  t.ok('com 2 pessoas a mão de obra dobra; com 3, triplica', !r.erro && r.um && r.um.maoR > 0 && perto(r.dois.maoR, 2 * r.um.maoR) && perto(r.tres.maoR, 3 * r.um.maoR), J);
+  t.ok('o tempo do processo (relógio) não muda com mais gente; as horas pagas multiplicam', !r.erro && r.um && perto(r.dois.horasRelogio, r.um.horasRelogio) && perto(r.dois.horasPessoa, 2 * r.um.horasPessoa), J);
+  t.ok('o campo explica que cada pessoa soma um salário', /soma um salário/.test(r.dica || '') && !/Não multiplica/.test(r.dica || ''), r.dica);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
+teste('leitor-custos-campos-padrao', async (b, t) => {
+  // "Os campos estão fora do padrão, organizar": discos, medições e tempos
+  // cronometrados eram caixas soltas, de tamanhos diferentes e sem o
+  // acabamento dos outros campos. Agora: colunas alinhadas, título em cima,
+  // a mesma caixa do campo padrão (.fld).
+  if (!fs.existsSync(path.join(RAIZ, 'leitor_dwg'))) return;
+  const { ctx, pg, erros } = await leitorImporta(b, trelicaTeste('custos_campos'));
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms)), L = window.__leitorTeste;
+    const c = JSON.parse(localStorage.getItem(L.cuKey) || '{}');
+    Object.assign(c, { discos: [{ diam: 12, preco: 10.6 }, { diam: 14, preco: 18.99 }],
+      calib: [{ perfil: '30x93x30 #2,65', cortes: 55, diam: 12 }, { perfil: '52x139x52 #2,25', cortes: 22, diam: 12 }, { perfil: '60x180x80 #3,75', cortes: 10, diam: 14 }],
+      tempos: [{ perfil: '52x139x52 #2,25', seg: 20 }] });
+    localStorage.setItem(L.cuKey, JSON.stringify(c));
+    const box = document.getElementById('custosBox'); box.open = true;
+    document.getElementById('cuAddDisco').click(); await esp(100);
+    const d = JSON.parse(localStorage.getItem(L.cuKey)); d.discos.pop(); localStorage.setItem(L.cuKey, JSON.stringify(d));
+    document.getElementById('cuAddCalib').click(); await esp(100);
+    const ref = document.getElementById('cuSalario'), cr = getComputedStyle(ref);
+    const caixa = x => { const s = getComputedStyle(x); return [s.borderRadius, s.borderTopWidth, s.paddingLeft, s.fontFamily, s.backgroundColor].join('|'); };
+    const padrao = caixa(ref);
+    const res = {};
+    for (const id of ['cuDiscos', 'cuCalib', 'cuTempos']) {
+      const cx = document.getElementById(id), lins = [...cx.querySelectorAll('.cu-lin:not(.cu-cab)')];
+      const campos = lins.flatMap(l => [...l.querySelectorAll('input,select')]);
+      // mesma coluna = mesmo x e mesma largura em todas as linhas
+      const cols = lins.map(l => [...l.querySelectorAll('input,select')].map(x => { const b = x.getBoundingClientRect(); return Math.round(b.left) + ':' + Math.round(b.width); }).join(' '));
+      const alt = campos.map(x => Math.round(x.getBoundingClientRect().height));
+      res[id] = { n: lins.length, cab: !!cx.querySelector('.cu-cab'), foraPadrao: campos.filter(x => caixa(x) !== padrao).length,
+        alinhado: new Set(cols).size === 1, alturas: [...new Set(alt)], larguraMax: Math.max(...campos.map(x => x.getBoundingClientRect().width)) };
+    }
+    res.alturaPadrao = Math.round(ref.getBoundingClientRect().height);
+    return res;
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  for (const [id, nome] of [['cuDiscos', 'discos'], ['cuCalib', 'medições'], ['cuTempos', 'tempos cronometrados']]) {
+    const x = (r || {})[id] || {};
+    t.ok(nome + ': título das colunas, caixa do campo padrão, colunas alinhadas e mesma altura', !r.erro && x.n >= 1 && x.cab && x.foraPadrao === 0 && x.alinhado &&
+      x.alturas.length === 1 && Math.abs(x.alturas[0] - r.alturaPadrao) <= 2, J);
+  }
+  t.ok('o perfil da medição não ocupa a linha inteira sozinho', !r.erro && r.cuCalib && r.cuCalib.larguraMax < 700, J);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
 teste('leitor-chapas-banzo-explicado', async (b, t) => {
   // "Por que no chapa + serviço, mesmo com R$ 7,80/kg, os banzos ficam a
   // R$ 6,40/kg?" -- o parceiro faz só as internas; o banzo continua barra
