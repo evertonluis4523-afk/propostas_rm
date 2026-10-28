@@ -2202,6 +2202,58 @@ teste('leitor-dxf-montagem-cotas', async (b, t) => {
   await ctx.close();
 });
 
+teste('leitor-numero-na-peca', async (b, t) => {
+  // "Facilitar a orientação" das setas: o montador tinha de seguir uma linha
+  // fina até o fim, e numa tesoura longa dezenas correm lado a lado. Agora o
+  // número da posição vai na própria peça (círculo), e o P da etiqueta sai em
+  // negrito para bater com ele -- em todas as folhas, a da tesoura completa
+  // inclusive. O DXF leva o mesmo círculo, na camada RM-POSICAO.
+  if (!fs.existsSync(LEITOR_EXEMPLO())) return;
+  const prancha = async arq => {
+    const { ctx, pg, erros } = await leitorImporta(b, arq, { viewport: { width: 1400, height: 900 } });
+    const r = await pg.evaluate(async () => {
+      const esp = ms => new Promise(x => setTimeout(x, ms));
+      let h = '', txt = ''; window.rmDesktop = { salvarPDF: async x => { h = x; return { ok: true }; } }; window.confirm = () => true;
+      const oc = URL.createObjectURL; URL.createObjectURL = bl => { bl.text().then(x => { txt = x; }); return oc.call(URL, bl); };
+      document.getElementById('detalhar').click(); await esp(400);
+      document.getElementById('dtPrancha').click(); await esp(1500);
+      document.body.classList.remove('so-prancha');
+      document.getElementById('detalhar').click(); await esp(400);
+      document.getElementById('dtDxf').click(); await esp(800);
+      const d = new DOMParser().parseFromString(h, 'text/html');
+      return [...d.querySelectorAll('.prancha svg')].map(sv => {
+        const bal = [...sv.querySelectorAll('g.pos-peca')].map(g => { const c = g.querySelector('circle');
+          return { n: g.textContent.trim(), x: +c.getAttribute('cx'), y: +c.getAttribute('cy'), r: +c.getAttribute('r') }; });
+        const etiq = [...sv.querySelectorAll('text')].map(x => x.textContent).filter(x => /^[A-Z]+-P\d+-/.test(x));
+        const negrito = [...sv.querySelectorAll('tspan[font-weight="800"]')].map(x => x.textContent);
+        return { bal, etiq, negrito, linhas: sv.querySelectorAll('line[stroke="#78838e"]').length,
+          regra: [...sv.querySelectorAll('text')].map(x => x.textContent).find(x => /POSIÇÃO P/.test(x)) || '' };
+      }).concat([{ dxf: txt }]);
+    }).catch(e => [{ erro: e.message }]);
+    await ctx.close(); return { r, erros };
+  };
+  const sobrepoe = bal => bal.some((a, i) => bal.some((c, j) => j > i && Math.hypot(a.x - c.x, a.y - c.y) < a.r + c.r));
+  // uma folha só (Tesoura 01 do exemplo, 13 posições)
+  const ex = await prancha(LEITOR_EXEMPLO()), f = ex.r[0] || {}, dxf = (ex.r[ex.r.length - 1] || {}).dxf || '';
+  const nums = (f.bal || []).map(x => x.n).sort((a, c) => a - c).join(' ');
+  t.ok('cada peça tem o seu número, de 1 a 13', nums === Array.from({ length: 13 }, (_, i) => i + 1).join(' '), nums + ' ' + JSON.stringify(f).slice(0, 200));
+  t.ok('o P de cada etiqueta sai em negrito e bate com o número da peça',
+    (f.negrito || []).length === 13 && (f.negrito || []).every(p => (f.bal || []).some(x => 'P' + x.n === p)), JSON.stringify(f.negrito));
+  t.ok('as setas continuam (para conferir)', f.linhas > 0 && (f.etiq || []).length === 13, f.linhas + ' / ' + (f.etiq || []).length);
+  t.ok('nenhum número em cima de outro', f.bal && !sobrepoe(f.bal), '');
+  t.ok('o cabeçalho explica o número', /O NÚMERO NA PEÇA É A POSIÇÃO P/.test(f.regra || ''), f.regra);
+  const circ = (dxf.match(/\n0\nCIRCLE\n(?:[^\n]*\n){0,7}?8\nRM-POSICAO\n/g) || []).length;
+  t.ok('o DXF leva os 13 círculos na camada RM-POSICAO', circ === 13, 'círculos: ' + circ);
+  // tesoura longa: a folha completa e os trechos levam etiqueta, seta e número
+  const lg = await prancha(path.join(FIX_LEITOR, 'caso1.dxf')), folhas = lg.r.slice(0, -1), fs0 = folhas[0] || {};
+  t.ok('na folha da tesoura completa: etiquetas, setas e números', fs0.etiq && fs0.etiq.length > 40 && fs0.linhas > 0 && fs0.bal.length > 40 && !sobrepoe(fs0.bal),
+    JSON.stringify({ e: (fs0.etiq || []).length, l: fs0.linhas, n: (fs0.bal || []).length }));
+  t.ok('todo número da folha completa é a posição de uma etiqueta dela', (fs0.bal || []).every(x => fs0.negrito.includes('P' + x.n)), '');
+  t.ok('todas as folhas levam etiqueta, seta e número, sem número em cima de outro', folhas.length >= 3 && folhas.every(x => x.etiq.length && x.linhas && x.bal.length && !sobrepoe(x.bal)),
+    JSON.stringify(folhas.map(x => [x.etiq.length, x.bal.length])));
+  t.ok('sem erro na página', !ex.erros.length && !lg.erros.length, ex.erros.concat(lg.erros).join(' | '));
+});
+
 teste('leitor-banzo-exato-no-detalhado', async (b, t) => {
   // Auditoria: no caminho detalhado o banzo continuava com 10% de quebra,
   // embora o plano de emenda já diga quantas barras se compram -- o mesmo
