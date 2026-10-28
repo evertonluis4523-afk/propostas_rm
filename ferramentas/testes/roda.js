@@ -15599,6 +15599,44 @@ teste('tema-escuro-nitido', async (b, t) => {
   }
 });
 
+teste('programa-casca-segura', async (b, t) => {
+  // Revisão do programa do computador: (1) o "olho" dos documentos abria um
+  // anexo "nota.exe" como programa; (2) links mandavam qualquer protocolo ao
+  // Windows; (3) arquivo solto na janela tomava o lugar da Central; (4) câmera,
+  // microfone e localização liberados sem perguntar; (5) atualização que
+  // falhava ficava calada; (6) instalador oferecia "todos os usuários";
+  // (7) a montagem publicava sem conferir; (8) o token ficava no git enquanto
+  // as bibliotecas instalavam, sem versões fixas.
+  const cr = path.join(RAIZ, 'central_rm'), le = f => { try { return fs.readFileSync(path.join(cr, f), 'utf8'); } catch (e) { return ''; } };
+  const { spawnSync } = require('child_process');
+  const casca = fs.existsSync(path.join(cr, 'ferramentas/testes/casca.js'))
+    ? spawnSync(process.execPath, [path.join(cr, 'ferramentas/testes/casca.js')], { encoding: 'utf8' }) : { status: 1, stdout: 'sem casca.js' };
+  t.ok('regras de segurança (tipos, links, navegação, permissões)', casca.status === 0, (casca.stdout || '') + (casca.stderr || ''));
+  const main = le('electron/main.js'), danfe = le('electron/danfe.js'), caepi = le('electron/caepi-baixa.js');
+  const doc = (main.match(/ipcMain\.handle\('rm:abrir-documento'[\s\S]*?shell\.openPath/) || [''])[0];
+  t.ok('o olho confere o tipo antes de abrir', /regras\.podeAbrir\(/.test(doc));
+  const pdf = (main.match(/async function abrirPDFTemporario[\s\S]*?shell\.openPath/) || [''])[0];
+  t.ok('o PDF temporário termina sempre em .pdf', /\.pdf\$\/i\.test\(final\)\)\s*final \+= '\.pdf'/.test(pdf));
+  const jan = (main.match(/setWindowOpenHandler\(\(\{ url \}\) => \{[\s\S]*?\}\);/) || [''])[0];
+  t.ok('janela nova só manda site/e-mail/telefone ao Windows', /if \(regras\.linkExterno\(url\)\) shell\.openExternal/.test(jan));
+  const nav = (main.match(/on\('will-navigate'[\s\S]*?\}\);/) || [''])[0];
+  t.ok('a janela principal só navega para a própria Central', /regras\.navegacaoInterna\(url, INDEX_EMBUTIDO\)/.test(nav) && !/startsWith\('file:\/\/'\)/.test(nav));
+  t.ok('permissões da janela principal passam pelas regras', /defaultSession\.setPermissionRequestHandler\(.*regras\.permitePrincipal/.test(main));
+  t.ok('janelas do DANFE e do CAEPI negam permissões', /setPermissionRequestHandler\(\(_wc, _p, cb\) => cb\(false\)\)/.test(danfe) && /setPermissionRequestHandler\(\(_wc, _p, cb\) => cb\(false\)\)/.test(caepi));
+  t.ok('a atualização guarda a última conferência e o erro', /atualizador\.on\('error', \(e\)/.test(main) && /conferido: conferencia\.quando, erro: conferencia\.erro/.test(main));
+  const idx = le('index.html');
+  t.ok('as Preferências mostram a situação da atualização', /id="sec-programa"/.test(idx) && /function programaPrepara/.test(idx));
+  let pk = {}; try { pk = JSON.parse(le('package.json')); } catch (e) {}
+  const nsh = le('build/installer.nsh');
+  t.ok('instalador só para o usuário (sem "todos os usuários"), respeitando quem já está em todos', pk.build && pk.build.nsis && pk.build.nsis.perMachine === false
+    && /!macro customInstallMode[\s\S]*ReadRegStr \$0 HKLM "\$\{INSTALL_REGISTRY_KEY\}"[\s\S]*StrCpy \$isForceCurrentInstall "1"[\s\S]*!macroend/.test(nsh));
+  const wf = le('.github/workflows/instalador.yml');
+  t.ok('montagem confere a casca antes de publicar', /node --check/.test(wf) && /ferramentas\/testes\/casca\.js/.test(wf) && wf.indexOf('casca.js') < wf.indexOf('npm run dist-ci'));
+  t.ok('o token sai do git logo depois do sync', /--unset-all url\."https:\/\/x-access-token/.test(wf) && wf.indexOf('--unset-all') < wf.indexOf('npm ci'));
+  let lk = {}; try { lk = JSON.parse(le('package-lock.json')); } catch (e) {}
+  t.ok('bibliotecas com versões fixas (package-lock + npm ci)', /npm ci\b/.test(wf) && !/npm install/.test(wf) && lk.packages && lk.packages['node_modules/electron'] && /integrity/.test(le('package-lock.json')));
+});
+
 teste('central-jarvis-faixa-opcional', async (b, t) => {
   // "A faixa de luz sempre passando na Central: deixar como opção e não o
   // tempo todo". A faixa que desce a tela e o fio que corre na barra do alto
