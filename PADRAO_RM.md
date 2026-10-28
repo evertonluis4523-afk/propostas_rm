@@ -210,9 +210,21 @@ embutido e no de arquivo (`rm-logo.svg`), teste `logo-em-arquivo-no-escuro`.
   preto), `suave` (grafite) e `nitido` (grafite escuro, com o texto
   principal quase branco e o de apoio um degrau abaixo -- no forte os dois
   saíam quase do mesmo cinza). As chaves comuns são `rm_tema` (claro/escuro)
-  e `rm_tom` (forte/suave/nitido); o botão anda claro → suave → nítido →
-  escuro, e a Central oferece as quatro em Aparência. Regra que vale para o
-  escuro pergunta por `data-theme="escuro"` e vale nas três intensidades.
+  e `rm_tom` (forte/suave/nitido/jarvis); o botão anda claro → suave → nítido →
+  escuro → Jarvis, e a Central oferece as cinco em Aparência. Regra que vale
+  para o escuro pergunta por `data-theme="escuro"` e vale em todas as
+  intensidades.
+- **Tema Jarvis** (`data-tom="jarvis"`, um escuro): o HUD holográfico. Nos
+  sistemas é só cor e desenho -- o derivador leva o neutro para o
+  azul-marinho do painel e a folha `rm-tema-jarvis` (bloco do tema) põe as
+  cantoneiras ciano nos cartões (`.card`, `.kpi`, `.panel`), o fio da barra
+  e a grade fina. A Central leva também o movimento (`<style id="rmJarvis">`):
+  a abertura "Inicializando Central RM" toda vez que abre (um clique ou
+  qualquer tecla pula), o reator no lugar da marca d'água, a varredura e os
+  números contando. Destaque no laranja da RM, estrutura em ciano. Some com
+  "reduzir movimento", fica fora do celular e do papel, e para com um
+  sistema aberto por cima. Testes `central-tema-jarvis` e
+  `tema-jarvis-sistemas`.
 - **Fundo:** treliça + marca num desenho vetorial só, preso no canto, atrás do
   conteúdo, **fora da impressão**.
 - **Celular:** `100dvh`, `env(safe-area-inset-*)`, `touch-action:manipulation`
