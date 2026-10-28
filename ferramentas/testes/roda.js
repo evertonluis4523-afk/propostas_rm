@@ -13194,10 +13194,11 @@ teste('propostas-imagens', async (b, t) => {
     const manda = async (fs) => { const dt = new DataTransfer(); fs.forEach(f => dt.items.add(f)); const inp = document.getElementById('imArq'); inp.files = dt.files; inp.dispatchEvent(new Event('change', { bubbles: true })); for (let k = 0; k < 60 && d.imgs.itens.length < fs.length + o.antes; k++) await esp(100); await esp(150); };
     o.antes = 0; await manda([await png()]);
     const x = d.imgs.itens[0] || {};
-    o.um = { n: d.imgs.itens.length, w: x.w, h: x.h, tit: x.tit, jpeg: /^data:image\/jpeg;base64,/.test(IMG[x.id] || ''), idb: (await IDBI.pega(x.id)) === BRUTO[x.id] && BRUTO[x.id] !== IMG[x.id], salvo: !JSON.stringify(d).includes('base64'), local: /só neste aparelho/.test(document.getElementById('ficha').textContent) };
+    o.um = { n: d.imgs.itens.length, w: x.w, h: x.h, tit: x.tit, jpeg: /^data:image\/png;base64,/.test(IMG[x.id] || ''), idb: (await IDBI.pega(x.id)) === BRUTO[x.id] && BRUTO[x.id] !== IMG[x.id], salvo: !JSON.stringify(d).includes('base64'), local: /só neste aparelho/.test(document.getElementById('ficha').textContent) };
     /* a marca d'água está na imagem: o centro escurece de leve, os cantos ficam brancos */
     const c = document.createElement('canvas'), g = c.getContext('2d');
-    const abre = async src => { const im = await carregaImg(src); c.width = im.naturalWidth; c.height = im.naturalHeight; g.drawImage(im, 0, 0); };
+    /* sobre o papel branco, como sai impresso (a parte sem fundo continua transparente na imagem) */
+    const abre = async src => { const im = await carregaImg(src); c.width = im.naturalWidth; c.height = im.naturalHeight; g.fillStyle = '#fff'; g.fillRect(0, 0, c.width, c.height); g.drawImage(im, 0, 0); };
     const px = (x0, y0, w, h) => { const a = g.getImageData(x0, y0, w, h).data; let mn = 255; for (let k = 0; k < a.length; k += 4) mn = Math.min(mn, a[k], a[k + 1], a[k + 2]); return mn; };
     const centro = () => px(c.width * .36, c.height * .3, c.width * .28, c.height * .4);
     await abre(IMG[x.id]);
@@ -13227,8 +13228,8 @@ teste('propostas-imagens', async (b, t) => {
       while (p + 30 < u.length && dv.getUint32(p, true) === 0x04034b50) { const n = dv.getUint16(p + 26, true), tam = dv.getUint32(p + 18, true);
         out[new TextDecoder().decode(u.slice(p + 30, p + 30 + n))] = u.slice(p + 30 + n, p + 30 + n + tam); p += 30 + n + tam; } return out; };
     const w = partes(await docxBytes(blocosImagens(d))), txt = k => new TextDecoder().decode(w[k] || new Uint8Array());
-    o.word = { midias: Object.keys(w).filter(k => /^word\/media\/imagem\d\.jpeg$/.test(k)).length, desenhos: (txt('word/document.xml').match(/r:embed="rIdIm\d"/g) || []).length,
-      rels: (txt('word/_rels/document.xml.rels').match(/Id="rIdIm\d"/g) || []).length, tipo: /Extension="jpeg"/.test(txt('[Content_Types].xml')), quebras: (txt('word/document.xml').match(/w:type="page"/g) || []).length,
+    o.word = { midias: Object.keys(w).filter(k => /^word\/media\/imagem\d\.(jpeg|png)$/.test(k)).length, desenhos: (txt('word/document.xml').match(/r:embed="rIdIm\d"/g) || []).length,
+      rels: (txt('word/_rels/document.xml.rels').match(/Id="rIdIm\d"/g) || []).length, tipo: /Extension="jpeg"/.test(txt('[Content_Types].xml')) && /Extension="png"/.test(txt('[Content_Types].xml')), quebras: (txt('word/document.xml').match(/w:type="page"/g) || []).length,
       titulo: /PERSPECTIVA GERAL|Perspectiva geral/.test(txt('word/document.xml')) };
     /* anexar no fim da proposta */
     const ax = document.querySelector('#ficha [data-p="imgs.anexar"]'); ax.checked = true; ax.dispatchEvent(new Event('input', { bubbles: true })); await esp(150);
@@ -13255,8 +13256,8 @@ teste('propostas-imagens', async (b, t) => {
   if (r.semRecurso) { t.ok('aba Imagens na proposta', false, 'sem #abaImagens'); await ctx.close(); return; }
   const u = r.um || {}, m = r.marca || {}, pg2 = r.pag || {}, w = r.word || {};
   t.ok('aba Imagens: cabeçalho do papel com a proposta, a revisão e o cliente; botão de adicionar', !r.erro && r.vazio.cab && r.vazio.cliente && r.vazio.arq, J);
-  t.ok('imagem reduzida para o A4 (1800 px), em JPEG, com o título do nome do arquivo', u.n === 1 && u.w === 1800 && u.h === 1013 && u.jpeg && u.tit === 'Fachada frontal', J);
-  t.ok("marca d'água na imagem que sai: o centro escurece de leve (3,5%), os cantos ficam brancos (o transparente vira branco)", m.centro <= 249 && m.centro >= 225 && m.canto >= 252 && m.cantoBaixo >= 252, J);
+  t.ok('imagem reduzida para o A4 (1800 px), em PNG por ter parte sem fundo, com o título do nome do arquivo', u.n === 1 && u.w === 1800 && u.h === 1013 && u.jpeg && u.tit === 'Fachada frontal', J);
+  t.ok("marca d'água na imagem que sai: o centro escurece de leve (3,5%), os cantos ficam brancos no papel (o transparente continua transparente)", m.centro <= 249 && m.centro >= 225 && m.canto >= 252 && m.cantoBaixo >= 252, J);
   t.ok("intensidade da marca em Configurações (3,5% → 8%): vale também para a imagem já adicionada; a guardada fica sem marca", r.cfg && r.cfg.valor === '3.5' && r.cfg.rot === '3,5%' && r.cfg.rot2 === '8%' && r.cfg.salvo === 8 && m.forte < m.centro - 4 && m.guardadaSem >= 252, J);
   t.ok('guardada no aparelho e fora da proposta (o salvar não leva a imagem); avisa que está só neste aparelho', u.idb && u.salvo && u.local, J);
   t.ok('duas por página; a de página inteira vai sozinha (4 imagens · 3 páginas)', pg2.quebras === 2 && pg2.tela === 2 && pg2.figs === 4 && /4 imagens · 3 páginas/.test(pg2.extra) && /Imagens\s*4/.test(pg2.aba), J);
@@ -14165,6 +14166,53 @@ teste('propostas-imagem-recorte', async (b, t) => {
   t.ok('a seta de medida fica no mesmo ponto da imagem', !r.erro && perto(r.seta, r.setaEsperada, 0.001) && Math.abs(r.seta[0] - 0.5) < 0.01, J);
   t.ok('grava e volta', !r.erro && /"w":0\.52/.test(r.volta), J);
   t.ok('"Imagem inteira" desfaz o recorte (e a seta volta ao lugar)', !r.erro && r.inteira.sem && r.inteira.w === 1600 && r.inteira.tam === '1600,1000' && r.inteira.seta === '0.5,0.3', J);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
+teste('propostas-imagem-transparente', async (b, t) => {
+  // "Essas imagens foram colocadas sem fundo, porém com temas escuros aparece
+  // fundo branco": a imagem era achatada em JPG sobre branco ao entrar (e de
+  // novo no recorte, realce, setas e marca). Agora a que tem transparência
+  // continua PNG transparente em todo o caminho, até o Word; foto comum
+  // segue JPG.
+  if (!fs.existsSync(path.join(RAIZ, 'propostas_rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'propostas_rm' });
+  await semLogin(pg);
+  const r = await pg.evaluate(async (FICT) => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    await iniciarApp();
+    const d = eval(FICT); docs[d.id] = d; abrir(d.id); await esp(50);
+    document.getElementById('abaImagens').click(); await esp(80);
+    /* um render fictício SEM FUNDO: o galpão no meio, os cantos transparentes */
+    const c0 = document.createElement('canvas'); c0.width = 900; c0.height = 500; const g0 = c0.getContext('2d');
+    g0.fillStyle = '#9aa1a8'; g0.fillRect(200, 120, 500, 260); g0.fillStyle = '#5a8a55'; g0.fillRect(150, 380, 600, 40);
+    const f = new File([await new Promise(ok => c0.toBlob(ok, 'image/png'))], 'Galpao sem fundo.png', { type: 'image/png' });
+    const dt = new DataTransfer(); dt.items.add(f); const inp = document.getElementById('imArq'); inp.files = dt.files; inp.dispatchEvent(new Event('change', { bubbles: true }));
+    for (let k = 0; k < 80 && !d.imgs.itens.length; k++) await esp(100); await esp(300);
+    const x = d.imgs.itens[0]; if (!x) return { semImagem: true };
+    const c = document.createElement('canvas'), g = c.getContext('2d', { willReadFrequently: true });
+    const canto = async (src) => { const im = await carregaImg(src); c.width = im.naturalWidth; c.height = im.naturalHeight; g.clearRect(0, 0, c.width, c.height); g.drawImage(im, 0, 0);
+      return { tipo: String(src).slice(5, 14), alfa: g.getImageData(3, 3, 1, 1).data[3], meio: g.getImageData(c.width >> 1, Math.round(c.height * 0.5), 1, 1).data[3] }; };
+    const o = { guardada: await canto(BRUTO[x.id]), pronta: await canto(IMG[x.id]) };
+    /* recorte, setas de cota e realce também mantêm o transparente */
+    x.recorte = { x: 0.05, y: 0.05, w: 0.9, h: 0.9 }; x.cotas = [{ x1: 0.3, y1: 0.3, x2: 0.3, y2: 0.7, txt: '6,00 m' }]; x.realce = { nivel: 'forte', grao: true };
+    delete IMG[x.id]; await imgPronta(x); o.comTudo = await canto(IMG[x.id]);
+    /* foto comum (sem transparência) continua JPG, mais leve */
+    const c1 = document.createElement('canvas'); c1.width = 400; c1.height = 300; const g1 = c1.getContext('2d'); g1.fillStyle = '#c8d0d8'; g1.fillRect(0, 0, 400, 300);
+    o.foto = (await prepararImagem(c1.toDataURL('image/png'))).dados.slice(5, 15);
+    /* Word: a imagem transparente vai como .png */
+    o.ext = [extImg(IMG[x.id]), extImg('data:image/jpeg;base64,xx')];
+    /* na tela, no tema escuro: o canto da imagem mostra a folha, não branco */
+    document.body.setAttribute('data-theme', 'escuro'); await esp(200);
+    return o;
+  }, PROP_FICT).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r);
+  t.ok('a imagem sem fundo entra e fica guardada como PNG transparente', !r.erro && r.guardada.tipo === 'image/png' && r.guardada.alfa === 0 && r.guardada.meio === 255, J);
+  t.ok('a imagem pronta (com a marca d\'água) continua transparente nos cantos', !r.erro && r.pronta.tipo === 'image/png' && r.pronta.alfa === 0, J);
+  t.ok('com recorte, setas e realce forte com grão, o fundo continua transparente', !r.erro && r.comTudo.tipo === 'image/png' && r.comTudo.alfa === 0 && r.comTudo.meio > 0, J);
+  t.ok('foto comum, sem transparência, continua JPG (mais leve)', !r.erro && r.foto === 'image/jpeg', J);
+  t.ok('no Word a imagem transparente vai como PNG', !r.erro && r.ext[0] === 'png' && r.ext[1] === 'jpeg', J);
   t.ok('sem erro na página', !erros.length, erros.join(' | '));
   await ctx.close();
 });
