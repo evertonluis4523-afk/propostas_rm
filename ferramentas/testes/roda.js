@@ -11595,6 +11595,32 @@ teste('bordas-limpas-tema-claro', async (b, t) => {
   await ctx.close();
 });
 
+teste('sw-procura-versao-sem-erro-solto', async (b, t) => {
+  // Relatório de melhorias: "Script .../Controle-estoque-maquinas/sw.js load
+  // failed" no Estoque de Máquinas. Era a procura de versão nova (ao abrir e
+  // toda vez que a tela volta) sem rede: a promessa falhava sem catch e
+  // virava erro relatado à Central. Sem rede ela só tenta na próxima vez.
+  const antes = () => {
+    window.__soltos = [];
+    addEventListener('unhandledrejection', e => window.__soltos.push(String((e.reason && e.reason.message) || e.reason)));
+    const falha = () => Promise.reject(new TypeError('Script sw.js load failed'));
+    const reg = { update: falha, addEventListener() {}, installing: null, waiting: null, active: null, unregister: () => Promise.resolve(true) };
+    // sis.local não é endereço seguro: o navegador do teste não tem service worker, então entra um de mentira
+    try { Object.defineProperty(navigator, 'serviceWorker', { configurable: true, value: { controller: null, ready: new Promise(() => {}),
+      register: () => Promise.resolve(reg), getRegistration: () => Promise.resolve(reg), getRegistrations: () => Promise.resolve([reg]), addEventListener() {} } }); } catch (e) {}
+  };
+  for (const r of repos()) {
+    const { ctx, pg } = await abre(b, { 'sis.local': r }, 'index.html', { antes });
+    const soltos = await pg.evaluate(async () => {
+      document.dispatchEvent(new Event('visibilitychange')); window.dispatchEvent(new Event('focus'));
+      await new Promise(x => setTimeout(x, 400));
+      return window.__soltos.filter(m => /load failed/.test(m));
+    }).catch(e => ['avaliação: ' + e.message]);
+    t.ok(r, !soltos.length, soltos.join(' | '));
+    await ctx.close();
+  }
+});
+
 teste('central-erro-com-versao', async (b, t) => {
   // o relatório de melhorias listava erros já corrigidos sem dizer de qual
   // versão eram (289 ocorrências do Orçamento, todas de antes da v74). Agora
