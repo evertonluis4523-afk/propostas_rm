@@ -10079,14 +10079,15 @@ teste('cores-todas-as-telas', async (b, t) => {
   // Obras e o "Isento de INSS" do Recibos brancos no escuro, os custos do
   // Corte com o fundo do navegador, o "Adicionar" do Contas com letra preta
   // no escuro, os botões da Central a 2,8:1. Aqui entra cada tela, aba e
-  // janela do sistema, no claro e nos três escuros.
+  // janela do sistema, no claro e nos quatro escuros.
   // a página de cada sistema e as outras páginas inteiras dele (a medição da PU)
   const pags = r => ['index.html'].concat(fs.readdirSync(path.join(RAIZ, r)).filter(n => n.endsWith('.html') && n !== 'index.html'
     && fs.readFileSync(path.join(RAIZ, r, n), 'utf8').includes('var RM_FONTE="@font-face')));
-  for (const r of repos()) for (const pag of pags(r)) for (const [tn, tom] of [['claro', null], ['forte', 'forte'], ['suave', 'suave'], ['nitido', 'nitido']]) {
+  for (const r of repos()) for (const pag of pags(r)) for (const [tn, tom] of [['claro', null], ['forte', 'forte'], ['suave', 'suave'], ['nitido', 'nitido'], ['jarvis', 'jarvis']]) {
     const antes = new Function("try{" + (tom ? "localStorage.setItem('rm_tema','escuro');localStorage.setItem('rm_tom','" + tom + "');" : "localStorage.setItem('rm_tema','claro');") + "}catch(e){}");
     const { ctx, pg } = await abre(b, { 'sis.local': r }, pag, { antes });
-    await pg.evaluate(() => { document.querySelectorAll('#loginScreen,#lock-screen').forEach(e => e.style.setProperty('display', 'none', 'important'));
+    // a abertura do Jarvis (Central) cobre a tela uns segundos: sai antes da medida
+    await pg.evaluate(() => { document.querySelectorAll('#loginScreen,#lock-screen,.jv-boot').forEach(e => e.style.setProperty('display', 'none', 'important'));
       try { if (typeof CURRENT_EMAIL !== 'undefined') { CURRENT_EMAIL = 'teste@teste'; render(); } } catch (e) {} }).catch(() => {});
     await pg.waitForTimeout(600);
     const res = await pg.evaluate(SONDA_CORES, !!tom).catch(e => [{ k: 'avaliação', txt: e.message }]);
@@ -10540,7 +10541,7 @@ teste('zz-auditoria', async (b, t) => {
   const sai = {};
   for (const r of repos()) {
     if (SO && !SO.includes(r)) continue;
-    if (MODO === 'cores') for (const [tn, tom] of [['claro', null], ['forte', 'forte'], ['suave', 'suave'], ['nitido', 'nitido']]) {
+    if (MODO === 'cores') for (const [tn, tom] of [['claro', null], ['forte', 'forte'], ['suave', 'suave'], ['nitido', 'nitido'], ['jarvis', 'jarvis']]) {
       const x = await abreSis(r, 'claro', tom); sai[r + '|' + tn] = { achados: await x.pg.evaluate(SONDA, !!tom).catch(e => [{ k: 'erro', txt: e.message }]), erros: x.erros }; await x.ctx.close();
     }
     if (MODO === 'celular') {
@@ -15210,8 +15211,8 @@ teste('tema-suave', async (b, t) => {
         if (!document.querySelector('[data-theme-chip="suave"]')) erros.push('sem a opção "Escuro suave" na Aparência');
       } else {
         const seq = []; window.rmTema('claro');
-        for (let i = 0; i < 4; i++) { window.rmTemaAlterna(); seq.push(document.documentElement.getAttribute('data-theme') + '/' + (tom() || '')); }
-        if (seq.join(' ') !== 'escuro/suave escuro/nitido escuro/forte claro/forte' && seq.join(' ') !== 'escuro/suave escuro/nitido escuro/forte claro/') erros.push('botão fora da ordem claro → suave → nítido → escuro: ' + seq.join(' '));
+        for (let i = 0; i < 5; i++) { window.rmTemaAlterna(); seq.push(document.documentElement.getAttribute('data-theme') + '/' + (tom() || '')); }
+        if (seq.join(' ') !== 'escuro/suave escuro/nitido escuro/forte escuro/jarvis claro/forte' && seq.join(' ') !== 'escuro/suave escuro/nitido escuro/forte escuro/jarvis claro/') erros.push('botão fora da ordem claro → suave → nítido → escuro → Jarvis: ' + seq.join(' '));
       }
       return erros;
     }).catch(e => ['avaliação: ' + e.message]);
@@ -15272,6 +15273,115 @@ teste('tema-escuro-nitido', async (b, t) => {
       return erros;
     }).catch(e => ['avaliação: ' + e.message]);
     t.ok(r, !res.length, res.join(' | '));
+    await ctx.close();
+  }
+});
+
+teste('central-tema-jarvis', async (b, t) => {
+  // "uma opção na Central como um tema estilo Jarvis, com movimentos": o 5º
+  // item da Aparência (ciano com a marca laranja). Abre com a inicialização
+  // TODA vez (um clique ou uma tecla pula, e ela sai sozinha), o reator gira
+  // atrás do painel e a varredura corre na tela. Com o movimento reduzido do
+  // aparelho e no celular não há abertura; trocar de tema tira tudo; o
+  // sistema aberto por cima recebe o tom, e o reator para enquanto isso.
+  const antes = () => { try { if (!sessionStorage.getItem('__jv')) { sessionStorage.setItem('__jv', '1'); localStorage.setItem('rm_tema', 'escuro'); localStorage.setItem('rm_tom', 'jarvis'); } } catch (e) {} };
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'central_rm' }, 'index.html', { antes, espera: 300 });
+  const prob = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms)), e = [], bd = document.body;
+    if (bd.getAttribute('data-theme') !== 'escuro' || bd.getAttribute('data-tom') !== 'jarvis') e.push('abriu sem o Jarvis (' + bd.getAttribute('data-theme') + '/' + bd.getAttribute('data-tom') + ')');
+    if (!document.querySelector('.jv-boot')) e.push('sem a abertura ao abrir');
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); await esp(600);
+    if (document.querySelector('.jv-boot')) e.push('uma tecla não pulou a abertura');
+    if (!document.querySelector('.content-watermark .jv-reator')) e.push('sem o reator atrás do painel');
+    if (!document.querySelector('.jv-scan')) e.push('sem a varredura');
+    const c = (getComputedStyle(bd).backgroundColor.match(/[\d.]+/g) || []).map(Number);
+    if (!(c[2] > c[0] + 12)) e.push('fundo não é o azul do Jarvis: ' + getComputedStyle(bd).backgroundColor);
+    const chips = [...document.querySelectorAll('[data-theme-chip]')].map(x => x.getAttribute('data-theme-chip'));
+    if (chips.join(' ') !== 'claro suave escuro nitido jarvis') e.push('Aparência fora da ordem: ' + chips.join(' '));
+    const ch = document.querySelector('[data-theme-chip="jarvis"]');
+    if (ch && !/Jarvis/.test(ch.textContent)) e.push('a opção não diz Jarvis');
+    // o sistema aberto na Central recebe o tom
+    const fr = document.createElement('iframe'); fr.srcdoc = '<p>x</p>'; document.body.appendChild(fr); await esp(200);
+    const msgs = []; fr.contentWindow.postMessage = m => msgs.push(m);
+    window.setTheme('claro'); await esp(100);
+    if (document.querySelector('.jv-reator,.jv-scan')) e.push('no claro ficaram o reator ou a varredura');
+    window.setTheme('jarvis'); await esp(100);
+    if (localStorage.getItem('rm_tema') !== 'escuro' || localStorage.getItem('rm_tom') !== 'jarvis') e.push('a Central não espalha o Jarvis (' + localStorage.getItem('rm_tema') + '/' + localStorage.getItem('rm_tom') + ')');
+    const ult = msgs[msgs.length - 1] || {};
+    if (ult.rm !== 'tema' || ult.tema !== 'escuro' || ult.tom !== 'jarvis') e.push('o sistema aberto não recebeu o Jarvis: ' + JSON.stringify(ult));
+    if (ch && !ch.classList.contains('active')) e.push('a opção Jarvis não aparece marcada');
+    if (!document.querySelector('.jv-reator') || !document.querySelector('.jv-scan')) e.push('voltar ao Jarvis não repôs o reator e a varredura');
+    fr.remove();
+    // escolher na Aparência mostra a abertura; um clique pula
+    if (ch) { ch.click(); await esp(150);
+      const bt = document.querySelector('.jv-boot'); if (!bt) e.push('escolher o Jarvis não mostrou a abertura');
+      else { bt.click(); await esp(600); if (document.querySelector('.jv-boot')) e.push('um clique não pulou a abertura'); } }
+    // um sistema que troca o tema por dentro avisa a Central
+    window.setTheme('escuro'); window.postMessage({ rm: 'tema', tema: 'escuro', tom: 'jarvis' }, '*'); await esp(200);
+    if (bd.getAttribute('data-tom') !== 'jarvis') e.push('mensagem de um sistema com o Jarvis não aplicou (' + bd.getAttribute('data-tom') + ')');
+    // com um sistema aberto por cima, o reator para de girar
+    const lay = document.createElement('div'); lay.className = 'iframe-layer active'; document.body.appendChild(lay); await esp(50);
+    const giro = document.querySelector('.jv-reator .a1');
+    if (!giro || getComputedStyle(giro).animationPlayState !== 'paused') e.push('o reator continua girando com um sistema aberto por cima');
+    lay.remove();
+    return e;
+  }).catch(e => ['avaliação: ' + e.message]);
+  // "toda vez que abrir": abre de novo e a abertura volta, e sai sozinha
+  await pg.reload({ waitUntil: 'domcontentloaded' }); await pg.waitForTimeout(300);
+  if (!await pg.evaluate(() => !!document.querySelector('.jv-boot'))) prob.push('a abertura não voltou na segunda vez');
+  await pg.waitForTimeout(5600);
+  if (await pg.evaluate(() => !!document.querySelector('.jv-boot'))) prob.push('a abertura não saiu sozinha');
+  // movimento reduzido no aparelho: sem abertura e sem giro
+  await pg.emulateMedia({ reducedMotion: 'reduce' }); await pg.reload({ waitUntil: 'domcontentloaded' }); await pg.waitForTimeout(400);
+  const q = await pg.evaluate(() => ({ boot: !!document.querySelector('.jv-boot'), giro: (document.querySelector('.jv-reator .a1') ? getComputedStyle(document.querySelector('.jv-reator .a1')).animationName : 'none') }));
+  if (q.boot || q.giro !== 'none') prob.push('com movimento reduzido ainda há abertura ou giro (' + JSON.stringify(q) + ')');
+  // no celular: sem abertura, reator e varredura
+  await pg.emulateMedia({ reducedMotion: 'no-preference' }); await pg.setViewportSize({ width: 390, height: 800 });
+  await pg.reload({ waitUntil: 'domcontentloaded' }); await pg.waitForTimeout(400);
+  const cel = await pg.evaluate(() => [...document.querySelectorAll('.jv-boot,.jv-reator,.jv-scan')].filter(x => getComputedStyle(x).display !== 'none').map(x => x.getAttribute('class')));
+  if (cel.length) prob.push('no celular aparecem ' + cel.join(', '));
+  t.ok('Jarvis na Central', !prob.length && !erros.length, prob.concat(erros).join(' | '));
+  await ctx.close();
+});
+
+teste('tema-jarvis-sistemas', async (b, t) => {
+  // o Jarvis nos sistemas: só as cores (azul-petróleo com ciano, a marca
+  // continua laranja) e as cantoneiras nos cartões -- a abertura e o reator
+  // ficam na Central, para não pesar em quem trabalha. Vem pela chave comum,
+  // pela mensagem da Central e pelo botão de tema, e a porta acompanha.
+  const antes = () => { try { if (!sessionStorage.getItem('__jv')) { sessionStorage.setItem('__jv', '1'); localStorage.setItem('rm_tema', 'escuro'); localStorage.setItem('rm_tom', 'jarvis'); } } catch (e) {} };
+  for (const r of repos()) {
+    if (r === 'central_rm') continue;
+    const { ctx, pg, erros } = await abre(b, { 'sis.local': r }, 'index.html', { antes });
+    const res = await pg.evaluate(async () => {
+      const esp = ms => new Promise(x => setTimeout(x, ms)), e = [], h = document.documentElement;
+      const tom = () => h.getAttribute('data-tom') || document.body.getAttribute('data-tom');
+      const opaco = c => { const m = (c || '').match(/[\d.]+/g); return m && m.length > 2 && (m.length < 4 || +m[3] > 0.5); };
+      const fundo = el => { for (; el && el.nodeType === 1; el = el.parentElement) { const c = getComputedStyle(el).backgroundColor; if (opaco(c)) return c.match(/[\d.]+/g).map(Number); } return [255, 255, 255]; };
+      const azul = c => c[2] > c[0] + 8 && c[2] < 90;
+      if (h.getAttribute('data-theme') !== 'escuro' || tom() !== 'jarvis') e.push('abriu sem o Jarvis (' + h.getAttribute('data-theme') + '/' + tom() + ')');
+      // a porta, enquanto ninguém entrou
+      const porta = document.getElementById('loginScreen');
+      if (porta) { porta.classList.remove('hide'); porta.hidden = false; if (getComputedStyle(porta).display === 'none') porta.style.display = 'flex'; await esp(200);
+        const pc = fundo(porta); if (!azul(pc)) e.push('porta fora do Jarvis: rgb(' + pc.join(',') + ')');
+        porta.style.setProperty('display', 'none', 'important'); }
+      document.querySelectorAll('#lock-screen').forEach(x => x.style.setProperty('display', 'none', 'important'));
+      await esp(500);
+      const bc = fundo(document.body); if (!azul(bc)) e.push('fundo não é o azul do Jarvis: rgb(' + bc.join(',') + ')');
+      if (!document.getElementById('rm-tema-jarvis')) e.push('sem as cantoneiras do Jarvis');
+      const card = [...document.querySelectorAll('.card,.kpi,.panel')].find(x => x.getBoundingClientRect().width > 40);
+      if (card && !/gradient/.test(getComputedStyle(card).backgroundImage)) e.push('cartão sem as cantoneiras');
+      if (document.querySelector('.jv-boot,.jv-reator,.jv-scan')) e.push('abertura ou reator dentro do sistema (são da Central)');
+      const bt = document.getElementById('rm-bt-tema');
+      if (bt && !/Jarvis/.test(bt.title)) e.push('o botão de tema não diz Jarvis: ' + bt.title);
+      window.rmTema('claro'); await esp(100);
+      if (document.getElementById('rm-tema-jarvis')) e.push('no claro ficaram as cantoneiras');
+      window.postMessage({ rm: 'tema', tema: 'escuro', tom: 'jarvis' }, '*'); await esp(300);
+      if (tom() !== 'jarvis' || !document.getElementById('rm-tema-jarvis')) e.push('mensagem da Central com o Jarvis não aplicou (' + tom() + ')');
+      if (localStorage.getItem('rm_tom') !== 'jarvis') e.push('o Jarvis vindo da Central não ficou guardado (' + localStorage.getItem('rm_tom') + ')');
+      return e;
+    }).catch(e => ['avaliação: ' + e.message]);
+    t.ok(r, !res.length && !erros.length, res.concat(erros).join(' | '));
     await ctx.close();
   }
 });
