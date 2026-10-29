@@ -13942,6 +13942,96 @@ teste('propostas-acrescimo-complementares-e-geral', async (b, t) => {
   await ctx.close();
 });
 
+teste('propostas-itens-extras', async (b, t) => {
+  // pedido: no fim da ficha, "itens extras" de uso interno (ex.: Logística):
+  // nome escolhido numa lista de serviços extras (Configurações), valor e a
+  // caixinha "somar ao total". Marcado, o valor entra no total da proposta e
+  // do contrato; desmarcado, não. Nunca aparece no papel, PDF ou Word.
+  if (!fs.existsSync(path.join(RAIZ, 'propostas_rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'propostas_rm' });
+  await semLogin(pg);
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    await iniciarApp();
+    const d = normalizar(novoDoc('padrao'));
+    d.cliente.nome = 'Cliente Fictício Ltda';
+    d.valores = [{ etapa: 'Estrutura', valor: 100000, opcional: false, contrato: true, mostrar: true, cortesia: false }];
+    d.contrato = novoContrato(d);
+    docs[d.id] = d; abrir(d.id); await esp(80);
+    const el = p => document.querySelector('#ficha [data-p="' + p + '"]');
+    const campo = (p, v) => { const e = el(p); e.value = v; e.dispatchEvent(new Event('input', { bubbles: true })); e.dispatchEvent(new Event('change', { bubbles: true })); };
+    const resumo = () => { const e = document.querySelector('#ficha .tot-linha[data-tot="proposta"]'); return e ? e.textContent.replace(/\s+/g, ' ') : ''; };
+    const papel = () => JSON.stringify(blocosProposta(d)) + JSON.stringify(blocosContrato(d)) + document.getElementById('folha').textContent;
+    const o = { antes: totalProposta(d), contAntes: totalContrato(d), lista: listaCadastro('extra') };
+    // Configurações: a lista "Serviços extras" existe e começa com Logística
+    document.getElementById('btnModelo').click(); await esp(80);
+    const sel = document.getElementById('cfgLista');
+    o.cfgOpcao = [...sel.options].some(x => x.value === 'extra' && /Serviços extras/.test(x.textContent));
+    sel.value = 'extra'; sel.dispatchEvent(new Event('change')); await esp(30);
+    o.cfgItens = document.getElementById('cfgListaItens').textContent;
+    document.getElementById('modeloTela').classList.remove('on');
+    // ficha: seção no fim, adicionar item
+    const secs = [...document.querySelectorAll('#ficha details.sec')];
+    o.ultima = secs.length ? secs[secs.length - 1].querySelector('summary').textContent : '';
+    document.querySelector('#ficha [data-acao="extraAdd"]').click(); await esp(80);
+    o.linhas = d.extras.length; o.nasceMarcado = d.extras[0].somar === true && el('extras.0.somar').checked;
+    campo('extras.0.nome', 'Logística'); campo('extras.0.valor', '4.000,00'); await esp(250);
+    o.nascido = { prop: totalProposta(d), cont: totalContrato(d) };
+    el('extras.0.somar').click(); await esp(250);
+    o.semMarca = { prop: totalProposta(d), cont: totalContrato(d), extras: JSON.stringify(d.extras) };
+    el('extras.0.somar').click(); await esp(250);
+    o.marcado = { prop: totalProposta(d), cont: totalContrato(d), resumo: resumo(), papel: /Log[ií]stica/.test(papel()) || /(^|\D)4\.000,00/.test(papel()) };
+    // segundo item, com nome novo digitado na ficha: passa para a lista das Configurações
+    document.querySelector('#ficha [data-acao="extraAdd"]').click(); await esp(80);
+    campo('extras.1.nome', 'Guindaste Exemplo'); campo('extras.1.valor', '1.000,00'); await esp(150);
+    o.novoNaLista = listaCadastro('extra').includes('Guindaste Exemplo');
+    o.segundoMarcado = totalProposta(d);
+    el('extras.1.somar').click(); await esp(150);
+    o.segundoSemMarca = totalProposta(d);
+    el('extras.0.somar').click(); await esp(150);
+    o.desmarcado = totalProposta(d);
+    el('extras.0.somar').click(); await esp(150);
+    // total digitado e valor do contrato com desconto digitado
+    d.tot.manual = 200000; o.digitado = totalProposta(d); d.tot.manual = 0;
+    d.contrato.valorAjustado = 90000; o.ajustado = totalContrato(d);
+    o.parcelas = centavos(parcelasContrato(d).reduce((s, x) => s + x.valor, 0));
+    aba = 'contrato'; renderFicha(); await esp(80);
+    o.sugestao = el('contrato.valorAjustado').placeholder; o.notaDesc = (document.querySelector('#ficha [data-desc]') || {}).textContent || '';
+    d.contrato.valorAjustado = 0; aba = 'proposta'; renderFicha(); await esp(50);
+    // persistência: guarda, relê do armazenamento do navegador e reabre
+    const volta = normalizar(JSON.parse(JSON.stringify(d)));
+    o.volta = [volta.extras.length, volta.extras[0].nome, volta.extras[0].valor, volta.extras[0].somar, totalProposta(volta)];
+    guardarLocal();
+    o.guardado = Object.keys(localStorage).some(k => /extras/.test(localStorage.getItem(k) || '') && /Log/.test(localStorage.getItem(k) || ''));
+    abrir(d.id); await esp(80);
+    o.reaberto = [...document.querySelectorAll('#ficha [data-p$=".nome"]')].filter(e => /^extras\./.test(e.dataset.p)).map(e => e.value).join('|');
+    // documento antigo, sem o campo
+    const velho = normalizar({ valores: [{ etapa: 'A', valor: 1000, contrato: true }] });
+    o.velho = [velho.extras.length, totalProposta(velho), totalContratoBase(velho)];
+    const sem = normalizar(JSON.parse(JSON.stringify(Object.assign({}, d, { extras: undefined }))));
+    o.sem = [sem.extras.length, totalProposta(sem)];
+    const gravado = normalizar({ valores: [{ etapa: 'A', valor: 1000 }], extras: [{ nome: 'X', valor: 500, somar: false }] });
+    o.gravadoDesmarcado = [gravado.extras[0].somar, totalProposta(gravado)];
+    return o;
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  t.ok('Configurações tem a lista "Serviços extras", começando com Logística', !r.erro && r.cfgOpcao && /Logística/.test(r.cfgItens) && r.lista.join() === 'Logística', J);
+  t.ok('a seção de itens extras é a última da ficha', !r.erro && /Itens extras/.test(r.ultima), J);
+  t.ok('"＋ Item extra" cria a linha já com "somar ao total" marcado, e o total sobe 4.000', !r.erro && r.linhas === 1 && r.nasceMarcado && r.nascido.prop === 104000 && r.nascido.cont === 104000, J);
+  t.ok('desmarcando "somar", o total não muda', !r.erro && r.semMarca.prop === 100000 && r.semMarca.cont === 100000 && /4000/.test(r.semMarca.extras), J);
+  t.ok('marcando de novo: proposta e contrato sobem 4.000 e o resumo mostra', !r.erro && r.marcado.prop === 104000 && r.marcado.cont === 104000 && /104\.000,00/.test(r.marcado.resumo), J);
+  t.ok('o item extra não aparece no papel, no PDF, no contrato nem no Word (mesmos blocos)', !r.erro && r.marcado.papel === false, J);
+  t.ok('nome novo digitado na ficha passa a existir na lista das Configurações', !r.erro && r.novoNaLista, J);
+  t.ok('segundo item nasce marcado e soma; desmarcado, não soma; desmarcar o primeiro tira o valor', !r.erro && r.segundoMarcado === 105000 && r.segundoSemMarca === 104000 && r.desmarcado === 100000, J);
+  t.ok('total digitado leva os extras marcados', !r.erro && r.digitado === 204000, J);
+  t.ok('valor do contrato digitado vale, e os extras marcados somam por cima uma vez só (90.000 + 4.000), parcelas fecham', !r.erro && r.ajustado === 94000 && r.parcelas === 94000, J);
+  t.ok('a sugestão e o aviso do contrato não contam os extras duas vezes', !r.erro && r.sugestao === '100.000,00' && /100\.000,00/.test(r.notaDesc) && /somam por cima/.test(r.notaDesc), J);
+  t.ok('grava e reabre com os itens, o valor e a marca', !r.erro && r.volta.join() === '2,Logística,4000,true,104000' && r.guardado && r.reaberto === 'Logística|Guindaste Exemplo', J);
+  t.ok('documento antigo sem o campo: lista vazia e total igual ao de antes', !r.erro && r.velho.join() === '0,1000,1000' && r.sem.join() === '0,100000' && r.gravadoDesmarcado.join() === 'false,1000', J);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
 teste('obras-parte-com-data-propria', async (b, t) => {
   // parcela dividida: uma parte pode ser paga noutro dia. Cada parte tem a
   // sua data; vazia, vale a da parcela (e acompanha quando ela muda). Os
