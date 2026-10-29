@@ -2129,7 +2129,7 @@ teste('leitor-revisao-ux', async (b, t) => {
     document.querySelector('#detSub [data-dsub="comp"]').click(); await esp(300);
     o.custosComp = !$('detCustos').classList.contains('hide') && !!$('detCustos').querySelector('#custosBox');
     const cmp = txt($('detComp'));
-    o.cmp = { semMenos: !/-\d+,\d%/.test(cmp), semEconomia: /Sem economia do encaixe|Economia do encaixe/.test(cmp), alerta: /o plano de emenda pede \d+ barras/.test(cmp) || !/estimativa com quebra/.test(cmp) };
+    o.cmp = { semMenos: !/-\d+,\d%/.test(cmp), semEconomia: /Sem economia do encaixe|Economia do encaixe/.test(cmp), alerta: !/o plano de emenda pede \d+ barras/.test(cmp) };
     document.querySelector('#detSub [data-dsub="lista"]').click(); await esp(100);
     // L7 saídas no alto do relatório
     $('obra').value = '';
@@ -2156,7 +2156,7 @@ teste('leitor-revisao-ux', async (b, t) => {
   t.ok('L3: metros da lista com vírgula', !r.erro && /^\d+(\.\d{3})*,\d$/.test(r.metros || ''), J);
   t.ok('L4: texto de apoio da conferência dos perfis numa linha própria', !r.erro && r.iBloco === 'block', J);
   t.ok('L5: sem mensagem técnica da biblioteca acima das abas', !r.erro && !/wasm|wrapper|pronto|carregando módulo|Failed/i.test(r.log), J);
-  t.ok('L6: comparativo sem economia negativa', !r.erro && r.cmp.semMenos && r.cmp.semEconomia && r.cmp.alerta, J);
+  t.ok('L6: comparativo sem economia negativa e sem aviso de banzo (o tudo em barras já usa o maior)', !r.erro && r.cmp.semMenos && r.cmp.semEconomia && r.cmp.alerta, J);
   t.ok('L7: saídas antes do papel, em grupos (folha, montador, DXF)', !r.erro && r.saidas.alto && ['Folha das pranchas e do DXF', 'Para o montador (PDF)', 'Arquivos (DXF)'].every(g => r.saidas.grupos.includes(g)), J);
   t.ok('L7: o botão diz "Pranchas de montagem"', !r.erro && /Pranchas de montagem/.test(r.botaoPranchas), J);
   t.ok('L8: obra em branco pergunta antes da prancha e Cancelar leva ao campo', !r.erro && r.obra.perguntou && r.obra.naoGerou, J);
@@ -2445,10 +2445,11 @@ teste('leitor-banzo-exato-no-detalhado', async (b, t) => {
     document.getElementById('cutReport').click(); await esp(500);
     return { cards, lista, rel: document.getElementById('printArea').innerText.replace(/\s+/g, ' ') };
   }).catch(e => ({ erro: e.message }));
-  const n = c => +((String(c).match(/(\d+) barras de 6 m · (?:estimativa com quebra|plano de emenda)/) || [])[1]);
+  const n = c => +((String(c).match(/(\d+) barras de 6 m · (?:o maior entre a quebra e o plano de emenda|plano de emenda)/) || [])[1]);
   const J = JSON.stringify({ erro: r.erro, cards: (r.cards || []).map(c => c.slice(0, 260)), lista: r.lista }) + ' ' + erros.join(' | ');
-  t.ok('tudo em barras: banzo com a quebra; detalhado e chapas: barras do plano de emenda', !r.erro && /barras de 6 m · estimativa com quebra/.test(r.cards[0]) &&
+  t.ok('tudo em barras: banzo com a quebra; detalhado e chapas: barras do plano de emenda', !r.erro && /barras de 6 m · o maior entre a quebra e o plano de emenda/.test(r.cards[0]) &&
     /barras de 6 m · plano de emenda/.test(r.cards[1]) && /barras de 6 m · plano de emenda/.test(r.cards[2]) && n(r.cards[0]) > 0, J);
+  t.ok('tudo em barras usa o maior custo: nunca menos barras de banzo que o plano de emenda', !r.erro && n(r.cards[0]) >= n(r.cards[1]) && !/o plano de emenda pede/.test(r.cards[0]), J);
   t.ok('o banzo do detalhado é o mesmo número da lista de compra', !r.erro && r.lista.length === 1 && n(r.cards[1]) === r.lista[0], J);
   t.ok('o relatório de corte diz "plano de emenda, sem quebra"', !r.erro && /plano de emenda, sem quebra/.test(r.rel), J);
   t.ok('sem erro na página', !erros.length, erros.join(' | '));
@@ -14238,6 +14239,137 @@ teste('propostas-imagem-recorte', async (b, t) => {
   t.ok('"Imagem inteira" desfaz o recorte (e a seta volta ao lugar)', !r.erro && r.inteira.sem && r.inteira.w === 1600 && r.inteira.tam === '1600,1000' && r.inteira.seta === '0.5,0.3', J);
   t.ok('sem erro na página', !erros.length, erros.join(' | '));
   await ctx.close();
+});
+
+teste('propostas-revisao-ux', async (b, t) => {
+  // Revisão de UX do Propostas e Contratos (dados fictícios):
+  // P1 a aba Contrato pergunta antes de gerar; P2 "Acréscimo ou desconto";
+  // P3 Imprimir apagado nos Salvos; P4 sem botões repetidos e textos que
+  // apontam para Configurações › Textos padrão; P5 avisos antes da ficha
+  // numa coluna; P6 menu "Mais"; P7 o Imprimir diz o que sai; P8 seções da
+  // proposta recolhidas no Contrato; P10 pessoa física/jurídica; P11
+  // "Lendo da nuvem"; P12 anexar imagens perto do Adicionar.
+  if (!fs.existsSync(path.join(RAIZ, 'propostas_rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'propostas_rm' });
+  await semLogin(pg);
+  const r = await pg.evaluate(async (FICT) => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    const $ = id => document.getElementById(id), vis = el => !!el && getComputedStyle(el).display !== 'none' && el.offsetParent !== null;
+    await iniciarApp(); await esp(50);
+    const o = {};
+    // P3 / P4 nos Salvos
+    o.salvos = { imprimirApagado: $('btnImprimir').disabled && +getComputedStyle($('btnImprimir')).opacity < 0.9, novaTopo: vis($('btnNova')), novaLista: vis($('iniNova')) };
+    // P11 lendo da nuvem
+    LENDO_NUVEM = true; renderSalvos(); o.lendo = $('listaProp').textContent; LENDO_NUVEM = false; renderSalvos();
+    const d = eval(FICT); d.contrato = null; docs[d.id] = d; abrir(d.id); await esp(80);
+    o.importarNoCartao = !!document.querySelector('.docs-card #btnImportar');
+    // P6 menu Mais
+    o.mais = { menu: !!$('docsMais'), dentro: ['btnTipo', 'btnDup', 'btnDel'].every(id => $('docsMais').contains($(id))), aVista: ['btnFechar', 'btnRev'].every(id => vis($(id))) };
+    // P7 nome do imprimir
+    o.imp = { prop: $('btnImprimir').textContent };
+    // P2 desconto
+    const ficha = $('ficha').textContent;
+    o.desc = /Acréscimo ou desconto nas etapas \(%\)/.test(ficha) && !!document.querySelector('#ficha input[data-p="tot.pct"][placeholder="ex.: 10 ou -5"]');
+    o.textosPadrao = /Configurações › Textos padrão/.test(ficha) && !/use "Textos padrão"/.test(ficha);
+    // P10 PF / PJ
+    const pf = () => !!document.querySelector('#ficha input[data-p="cliente.rg"]');
+    d.cliente.doc = '12.345.678/0001-90'; d.cliente.nacionalidade = d.cliente.profissao = d.cliente.estadoCivil = d.cliente.rg = ''; d.cliente.tipoPessoa = ''; renderFicha();
+    o.pj = pf();
+    d.cliente.doc = '123.456.789-00'; renderFicha(); o.cpf = pf();
+    d.cliente.doc = ''; d.cliente.tipoPessoa = 'pf'; renderFicha(); o.escolhido = pf(); d.cliente.tipoPessoa = '';
+    // P1 a aba Contrato pergunta
+    $('abaContrato').click(); await esp(80);
+    o.contrato = { rot: $('abaContrato').textContent, perguntou: $('modal').classList.contains('on'), semCriar: !d.contrato };
+    $('modalNao').click(); await esp(30); o.contrato.naoCriou = !d.contrato;
+    $('abaContrato').click(); await esp(50); $('modalSim').click(); await esp(150);
+    o.contrato.criou = !!d.contrato;
+    o.imp.cont = $('btnImprimir').textContent;
+    // P8 seções da proposta recolhidas, com o subtítulo
+    const secs = [...document.querySelectorAll('#ficha details.sec')];
+    const iCli = secs.findIndex(x => /^Cliente/.test(x.querySelector('summary').textContent));
+    o.recolhe = { sub: /Dados da proposta/.test($('ficha').textContent), contratoAberto: secs.slice(0, iCli).some(x => x.open), propostaFechada: iCli > 0 && secs.slice(iCli).every(x => !x.open) };
+    // P12 anexar imagens logo depois do Adicionar
+    $('abaImagens').click(); await esp(80);
+    o.imp.img = $('btnImprimir').textContent;
+    const drop = $('imDrop'), anx = document.querySelector('#ficha input[data-p="imgs.anexar"]');
+    o.anexar = !!drop && !!anx && (drop.compareDocumentPosition(anx) & Node.DOCUMENT_POSITION_FOLLOWING) > 0 && !document.querySelector('.im-lista') || (document.querySelector('.im-lista') && (anx.compareDocumentPosition(document.querySelector('.im-lista')) & Node.DOCUMENT_POSITION_FOLLOWING) > 0);
+    return o;
+  }, PROP_FICT).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r).slice(0, 1500) + ' ' + erros.join(' | ');
+  t.ok('P1: a aba se chama Contrato e pergunta antes de gerar; Não deixa como está', !r.erro && r.contrato.rot === 'Contrato' && r.contrato.perguntou && r.contrato.semCriar && r.contrato.naoCriou && r.contrato.criou, J);
+  t.ok('P2: "Acréscimo ou desconto" com o exemplo de número negativo', !r.erro && r.desc, J);
+  t.ok('P3: nos Salvos o Imprimir aparece apagado', !r.erro && r.salvos.imprimirApagado, J);
+  t.ok('P4: um "Nova proposta" nos Salvos; Importar só nos Salvos; textos apontam para Configurações', !r.erro && !r.salvos.novaTopo && r.salvos.novaLista && !r.importarNoCartao && r.textosPadrao, J);
+  t.ok('P6: Passar, Duplicar e Excluir no menu Mais; Salvar e fechar e Nova revisão à vista', !r.erro && r.mais.menu && r.mais.dentro && r.mais.aVista, J);
+  t.ok('P7: o Imprimir diz o que sai (proposta, contrato, imagens)', !r.erro && /da proposta/.test(r.imp.prop) && /do contrato/.test(r.imp.cont) && /das imagens/.test(r.imp.img), J);
+  t.ok('P8: no Contrato, as seções da proposta vêm recolhidas, com o subtítulo', !r.erro && r.recolhe.sub && r.recolhe.contratoAberto && r.recolhe.propostaFechada, J);
+  t.ok('P10: campos de pessoa física só com CPF ou escolhendo Pessoa física', !r.erro && !r.pj && r.cpf && r.escolhido, J);
+  t.ok('P11: enquanto lê a nuvem, os Salvos dizem "Lendo as propostas da nuvem…"', !r.erro && /Lendo as propostas da nuvem/.test(r.lendo), J);
+  t.ok('P12: "anexar as imagens" logo depois de Adicionar imagens', !r.erro && r.anexar, J);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+  // P5 celular: avisos antes da ficha e "Ver o papel"
+  const c = await abre(b, { 'sis.local': 'propostas_rm' }, 'index.html', { tela: { width: 360, height: 740 } });
+  await semLogin(c.pg);
+  const m = await c.pg.evaluate(async (FICT) => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    await iniciarApp(); const d = eval(FICT); d.cliente.nome = ''; docs[d.id] = d; abrir(d.id); await esp(150);
+    const av = document.getElementById('avisos'), fi = document.getElementById('ficha');
+    const btn = document.querySelector('#ficha [data-fipapel]');
+    return { avisoAntes: av.style.display !== 'none' && av.getBoundingClientRect().top < fi.getBoundingClientRect().top, verPapel: !!btn && getComputedStyle(btn).display !== 'none' };
+  }, PROP_FICT).catch(e => ({ erro: e.message }));
+  t.ok('P5 celular: os avisos vêm antes da ficha e há "Ver o papel ↓"', !m.erro && m.avisoAntes && m.verPapel, JSON.stringify(m));
+  await c.ctx.close();
+});
+
+teste('recibos-revisao-ux', async (b, t) => {
+  // Revisão de UX do Recibos (dados fictícios): R9 "Vales, extras e
+  // descontos" também no adiantamento (grava no pagamento do mês); R10
+  // próximos passos depois do recibo da rescisão; R11 funcionário primeiro no
+  // Pedido de demissão; R13 fechamento do PF depois da tabela; epi.html sem
+  // "sistema completo" no celular.
+  if (!fs.existsSync(path.join(RAIZ, 'recibos_rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'recibos_rm' });
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    const l = document.getElementById('loginScreen'); if (l) l.style.setProperty('display', 'none', 'important');
+    state.employees = [{ id: 'g1', nome: 'ANA TESTE', status: 'ativo', salario: 1000, docTipo: 'CPF', doc: '' }];
+    const o = {};
+    // R9: no adiantamento o lançamento vai para o pagamento do mês
+    salCiclo = { tipo: 'adiantamento', ano: 2031, mesIdx: 4 };
+    abrirFolhaExtra('g1');
+    o.titulo = document.getElementById('folhaTitulo').textContent;
+    folhaTmp.push({ desc: 'Vale', valor: -50 });
+    atualizarFolhaResto(); o.resto = document.getElementById('folhaResto').textContent;
+    document.getElementById('folhaSalvar').click(); await esp(30);
+    const reg = state.ciclos[cicloKey({ tipo: 'pagamento', ano: 2031, mesIdx: 4 })];
+    o.noPagamento = !!(reg && reg.itens && reg.itens.g1 && reg.itens.g1.folhaExtra && reg.itens.g1.folhaExtra.length === 1);
+    o.tela = (state.employees[0].folhaExtra || []).length;
+    // R10: próximos passos
+    state.rescisoes = []; rescProximos({ empId: 'g1', data: '2031-05-10' });
+    const bx = document.getElementById('rescProximo');
+    o.prox = { aberto: !bx.hidden, docs: !!document.getElementById('rescIrDocs'), marca: !!document.getElementById('rescMarcaDeslig') };
+    // R11: funcionário antes da situação
+    const nome = document.getElementById('pdNome'), sit = document.getElementById('pdSit');
+    o.pdOrdem = !!(nome.compareDocumentPosition(sit) & Node.DOCUMENT_POSITION_FOLLOWING);
+    // R13: fechamento depois da tabela
+    const fe = document.getElementById('pfFechaBox'), tb = document.getElementById('pfBody');
+    o.pfOrdem = !!(tb.compareDocumentPosition(fe) & Node.DOCUMENT_POSITION_FOLLOWING);
+    // R7 rótulos
+    o.rot = { ce: document.getElementById('ceGerar').textContent, ad: document.getElementById('adGerar').textContent, resc: document.getElementById('btnRescGerar').textContent };
+    return o;
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  t.ok('R9: a janela se chama "Vales, extras e descontos"', !r.erro && /Vales, extras e descontos/.test(r.titulo), J);
+  t.ok('R9: no adiantamento o lançamento vai para o pagamento do mês e avisa', !r.erro && r.noPagamento && r.tela === 0 && /Não mexe neste adiantamento/.test(r.resto), J);
+  t.ok('R10: depois do recibo da rescisão aparecem os próximos passos', !r.erro && r.prox.aberto && r.prox.docs && r.prox.marca, J);
+  t.ok('R11: no Pedido de demissão o funcionário vem antes da situação', !r.erro && r.pdOrdem, J);
+  t.ok('R13: o fechamento do PF fica depois da tabela', !r.erro && r.pfOrdem, J);
+  t.ok('R7: botões com nomes claros', !r.erro && r.rot.ce === 'Imprimir / PDF' && r.rot.ad === 'Imprimir / PDF' && /Emitir e imprimir/.test(r.rot.resc), J);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+  const epi = fs.readFileSync(path.join(RAIZ, 'recibos_rm', 'epi.html'), 'utf8');
+  t.ok('epi.html: "Abrir o sistema completo" some no celular', /id="btCompleto"/.test(epi) && /#btCompleto\{display:none\}/.test(epi));
 });
 
 teste('propostas-imagem-transparente', async (b, t) => {
