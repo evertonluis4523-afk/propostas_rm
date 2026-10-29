@@ -848,7 +848,7 @@ teste('orcamento-banco-fornecedores', async (b, t) => {
     o.tirou = !catFornCols(catById('cat_vt')).includes('JR') && precoDe('JR') == null;
     /* 6) "＋ Fornecedor" em outra categoria: escolher da lista */
     showTab('cat:cat_lam'); await esp(40);
-    [...document.querySelectorAll('[data-panel="cat:cat_lam"] .db-bar button')].find(x => /Fornecedor/.test(x.textContent)).click(); await esp(30);
+    document.querySelector('[data-panel="cat:cat_lam"] .db-novab').click();   /* um "＋ Fornecedor" só, no cabeçalho da tabela */ await esp(30);
     o.escolher = [...document.querySelectorAll('#dbPop button')].map(x => x.textContent);
     [...document.querySelectorAll('#dbPop button')].find(x => x.textContent === 'JR').click(); await esp(60);
     o.lam = catFornCols(catById('cat_lam')).includes('JR') && ths('cat:cat_lam').some(x => /^JR/.test(x));
@@ -873,13 +873,13 @@ teste('orcamento-banco-fornecedores', async (b, t) => {
     const inpT = document.querySelectorAll('#dbTelhaBody tbody tr')[0].querySelectorAll('td.r input')[iT]; inpT.value = '39,90'; inpT.dispatchEvent(new Event('change')); await esp(50);
     o.telha = { jr: cpForn('JR').telhas && cpForn('JR').telhas[t0.id], ref: telhaPrecoDe(t0, ref) > 0 };
     showTab('chapas'); await esp(30);
-    document.querySelector('[data-panel="chapas"] .db-bar .btn-sm.red').click(); await esp(30);
+    document.querySelector('[data-panel="chapas"] .db-novab').click(); await esp(30);
     [...document.querySelectorAll('#dbPop button')].find(x => x.textContent === 'JR').click(); await esp(60);
     const iC = fornCols('chapas').indexOf('JR'), m0 = S.materiaisKg[0];
     const inpC = document.querySelectorAll('#chapasBody tr')[0].querySelectorAll('td.r input')[iC]; inpC.value = '9,10'; inpC.dispatchEvent(new Event('change')); await esp(50);
     o.chapa = { jr: matPrecoDe(m0, 'JR'), col: iC > 0 };
     showTab('forn'); await esp(30);
-    document.querySelector('[data-panel="forn"] .db-bar .btn-sm.red').click(); await esp(30);
+    document.querySelector('[data-panel="forn"] .db-novab').click(); await esp(30);
     [...document.querySelectorAll('#dbPop button')].find(x => x.textContent === 'JR').click(); await esp(60);
     const iK = fornCols('kg').indexOf('JR'), e0 = S.espessuras[0];
     const inpK = document.querySelectorAll('#fornBody tr')[0].querySelectorAll('td.r input')[iK]; inpK.value = '7,25'; inpK.dispatchEvent(new Event('change')); await esp(50);
@@ -1407,7 +1407,8 @@ teste('orcamento-tela-enxuta', async (b, t) => {
     t.ok(onde + 'barra de baixo numa linha só, Salvar à vista', !r.erro && r.alturas.mesmaLinha && r.alturas.bar <= (cel ? 80 : 90) && r.alturas.salvarVisivel && /\d{3}\.\d{3}/.test(r.alturas.total), J);
     if (cel) t.ok(onde + 'barra de cima numa linha só', !r.erro && r.alturas.topo <= 64, J);
     t.ok(onde + 'sem Controle e Mais no topo', !r.erro && !r.topoBotoes.some(x => /^(Controle|Mais)$/.test(x)), J);
-    t.ok(onde + 'a engrenagem tem cotações, catálogos, exportar e importar', !r.erro && ['Cota', 'Catálogo', 'Exportar', 'Importar'].every(k => r.menu.some(x => x.includes(k))), J);
+    /* Cotações (histórico) foi para o Banco de dados → Ferramentas (revisão de UX) */
+    t.ok(onde + 'a engrenagem tem catálogos, exportar e importar', !r.erro && ['Catálogo', 'Exportar', 'Importar'].every(k => r.menu.some(x => x.includes(k))), J);
     t.ok(onde + 'Dados da empresa abre preenchido', !r.erro && r.empresa > 60, J);
     t.ok(onde + 'Ajustes com acento', !r.erro && !semAcento.length, semAcento.join(','));
     t.ok(onde + 'sem "Cor de destaque": a cor é a da marca', !r.erro && !/Cor de destaque/.test(r.ajustes) && r.cor === '', J);
@@ -1742,7 +1743,7 @@ teste('leitor-suporte-de-terca-ignorado', async (b, t) => {
   };
   const base = await le(trelicaTeste('sup_base')), com = await le(trelicaTeste('sup_com', { suportes: true }));
   const J = JSON.stringify({ base: base.r, com: com.r }) + ' ' + base.erros.concat(com.erros).join(' | ');
-  t.ok('conferir: o suporte sozinho não vira "linha fora de estrutura"', !com.r.erro && !com.r.fora && /nenhuma linha de peça sobrando/.test(com.r.res), J);
+  t.ok('conferir: o suporte sozinho não vira "linha fora de estrutura"', !com.r.erro && !com.r.fora && /nenhuma linha fora das estruturas/.test(com.r.res), J);
   t.ok('conferir: o suporte sobre o banzo não conta como peça interna', !com.r.erro && com.r.cab.includes('2 de banzo · 13 internas'), J);
   t.ok('detalhamento: as mesmas peças com e sem suporte', !com.r.erro && base.r.pecas > 0 && com.r.grupos === base.r.grupos, J);
   t.ok('sem erro na página', !base.erros.length && !com.erros.length, J);
@@ -2099,6 +2100,73 @@ const leitorCapturaPdf = (pg, botao, cm) => pg.evaluate(async ({ botao, cm }) =>
   return { h, folhas };
 }, { botao, cm: !!cm }).catch(e => ({ erro: e.message }));
 
+teste('leitor-revisao-ux', async (b, t) => {
+  // Revisão de UX do Leitor DWG (exemplo fictício do próprio repositório):
+  // L1 o relatório é da aba que o abriu; L2 resumo e checagem com nomes
+  // distintos; L3 números com vírgula; L4 textos de apoio numa linha própria;
+  // L5 sem mensagem técnica da biblioteca; L6 economia sem "-50%" e o banzo
+  // estimado avisa quando o plano pede mais; L7 saídas das pranchas no alto;
+  // L8 pede a obra antes da prancha; L9 custos na aba Comparativo; L10 a
+  // obra e o Salvar obra na faixa do arquivo; nomes de pessoa fora dos exemplos.
+  if (!fs.existsSync(LEITOR_EXEMPLO())) return;
+  const { ctx, pg, erros } = await leitorImporta(b, LEITOR_EXEMPLO(), { viewport: { width: 1400, height: 900 } });
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    const $ = id => document.getElementById(id), txt = el => (el ? el.textContent : '').replace(/\s+/g, ' ');
+    const o = {};
+    o.log = txt($('log'));
+    o.resumo = txt($('conferir'));
+    o.checagem = txt($('checagem'));
+    const lin = [...$('result').querySelectorAll('tr')].map(tr => [...tr.cells].map(c => c.textContent.trim())).find(c => c.length > 3 && /\d,\d/.test(c[2] || ''));
+    o.metros = lin ? lin[2] : null;
+    const iPerf = document.querySelector('#perfilAudit td i');
+    o.iBloco = iPerf ? getComputedStyle(iPerf).display : 'sem';
+    o.placeholders = [...document.querySelectorAll('input[placeholder]')].map(i => i.placeholder).filter(p => /Rogério|Silva|Refricomp/i.test(p));
+    o.obraNaFaixa = !!document.querySelector('.filebar #obra') && !!document.querySelector('.filebar #saveObra');
+    o.botaoPranchas = txt($('detalhar'));
+    // L9 custos só na aba Comparativo
+    o.custosLista = !$('detCustos').classList.contains('hide');
+    document.querySelector('#detSub [data-dsub="comp"]').click(); await esp(300);
+    o.custosComp = !$('detCustos').classList.contains('hide') && !!$('detCustos').querySelector('#custosBox');
+    const cmp = txt($('detComp'));
+    o.cmp = { semMenos: !/-\d+,\d%/.test(cmp), semEconomia: /Sem economia do encaixe|Economia do encaixe/.test(cmp), alerta: !/o plano de emenda pede \d+ barras/.test(cmp) };
+    document.querySelector('#detSub [data-dsub="lista"]').click(); await esp(100);
+    // L7 saídas no alto do relatório
+    $('obra').value = '';
+    $('detalhar').click(); await esp(800);
+    const pa = $('printArea'), sai = pa.querySelector('.dt-saidas'), folha = pa.querySelector('.rm-sheet');
+    o.saidas = { alto: !!sai && !!folha && (sai.compareDocumentPosition(folha) & Node.DOCUMENT_POSITION_FOLLOWING) > 0, grupos: sai ? [...sai.querySelectorAll('.dt-saidas-t')].map(x => x.textContent) : [] };
+    // L8 obra em branco: pergunta; Cancelar volta ao campo e não gera
+    let perguntou = ''; window.confirm = m => { perguntou = m; return false; };
+    $('dtPrancha').click(); await esp(400);
+    o.obra = { perguntou: /obra está em branco/.test(perguntou), naoGerou: $('dtPranchas').classList.contains('hide') || !$('dtPranchas').innerHTML.trim(), foco: document.activeElement && document.activeElement.id };
+    window.confirm = () => true;
+    // L1 o relatório some na Planificação e volta no Detalhamento
+    const aba = q => document.querySelector('#abas .aba[data-aba="' + q + '"]');
+    const visivel = () => !pa.classList.contains('hide');
+    o.rel = { antes: visivel() };
+    const outra = [...document.querySelectorAll('#abas .aba')].find(x => x.dataset.aba !== 'det');
+    outra.click(); await esp(200); o.rel.fora = visivel();
+    aba('det').click(); await esp(200); o.rel.volta = visivel();
+    return o;
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r).slice(0, 1400) + ' ' + erros.join(' | ');
+  t.ok('L1: o relatório some ao ir para outra aba e volta no Detalhamento', !r.erro && r.rel.antes && !r.rel.fora && r.rel.volta, J);
+  t.ok('L2: resumo diz "linha fora das estruturas"; a checagem fala em "pontos para conferir"', !r.erro && /nenhuma linha fora das estruturas|linha\(s\) de peça fora de estrutura/.test(r.resumo) && !/sobrando/.test(r.resumo) && (/ponto\(s\) para conferir|nenhuma ponta solta/.test(r.checagem)) && !/\d+ aviso\(s\)/.test(r.checagem), J);
+  t.ok('L3: metros da lista com vírgula', !r.erro && /^\d+(\.\d{3})*,\d$/.test(r.metros || ''), J);
+  t.ok('L4: texto de apoio da conferência dos perfis numa linha própria', !r.erro && r.iBloco === 'block', J);
+  t.ok('L5: sem mensagem técnica da biblioteca acima das abas', !r.erro && !/wasm|wrapper|pronto|carregando módulo|Failed/i.test(r.log), J);
+  t.ok('L6: comparativo sem economia negativa e sem aviso de banzo (o tudo em barras já usa o maior)', !r.erro && r.cmp.semMenos && r.cmp.semEconomia && r.cmp.alerta, J);
+  t.ok('L7: saídas antes do papel, em grupos (folha, montador, DXF)', !r.erro && r.saidas.alto && ['Folha das pranchas e do DXF', 'Para o montador (PDF)', 'Arquivos (DXF)'].every(g => r.saidas.grupos.includes(g)), J);
+  t.ok('L7: o botão diz "Pranchas de montagem"', !r.erro && /Pranchas de montagem/.test(r.botaoPranchas), J);
+  t.ok('L8: obra em branco pergunta antes da prancha e Cancelar leva ao campo', !r.erro && r.obra.perguntou && r.obra.naoGerou, J);
+  t.ok('L9: os custos ficam na aba Comparativo, não na leitura', !r.erro && !r.custosLista && r.custosComp, J);
+  t.ok('L10: obra e Salvar obra na faixa do arquivo', !r.erro && r.obraNaFaixa, J);
+  t.ok('sem nome de pessoa ou de cliente nos exemplos dos campos', !r.erro && !r.placeholders.length, J);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
 teste('leitor-grupos-banzos', async (b, t) => {
   // "Na opção peças por grupo não aparecem os banzos e seus tamanhos com as
   // divisões, sendo que o sistema detalhou" -- e "não adianta linha de corte,
@@ -2377,10 +2445,11 @@ teste('leitor-banzo-exato-no-detalhado', async (b, t) => {
     document.getElementById('cutReport').click(); await esp(500);
     return { cards, lista, rel: document.getElementById('printArea').innerText.replace(/\s+/g, ' ') };
   }).catch(e => ({ erro: e.message }));
-  const n = c => +((String(c).match(/(\d+) barras de 6 m · (?:com quebra|plano de emenda)/) || [])[1]);
+  const n = c => +((String(c).match(/(\d+) barras de 6 m · (?:o maior entre a quebra e o plano de emenda|plano de emenda)/) || [])[1]);
   const J = JSON.stringify({ erro: r.erro, cards: (r.cards || []).map(c => c.slice(0, 260)), lista: r.lista }) + ' ' + erros.join(' | ');
-  t.ok('tudo em barras: banzo com a quebra; detalhado e chapas: barras do plano de emenda', !r.erro && /barras de 6 m · com quebra/.test(r.cards[0]) &&
+  t.ok('tudo em barras: banzo com a quebra; detalhado e chapas: barras do plano de emenda', !r.erro && /barras de 6 m · o maior entre a quebra e o plano de emenda/.test(r.cards[0]) &&
     /barras de 6 m · plano de emenda/.test(r.cards[1]) && /barras de 6 m · plano de emenda/.test(r.cards[2]) && n(r.cards[0]) > 0, J);
+  t.ok('tudo em barras usa o maior custo: nunca menos barras de banzo que o plano de emenda', !r.erro && n(r.cards[0]) >= n(r.cards[1]) && !/o plano de emenda pede/.test(r.cards[0]), J);
   t.ok('o banzo do detalhado é o mesmo número da lista de compra', !r.erro && r.lista.length === 1 && n(r.cards[1]) === r.lista[0], J);
   t.ok('o relatório de corte diz "plano de emenda, sem quebra"', !r.erro && /plano de emenda, sem quebra/.test(r.rel), J);
   t.ok('sem erro na página', !erros.length, erros.join(' | '));
@@ -2808,7 +2877,7 @@ teste('leitor-modelo-de-desenho-rm', async (b, t) => {
   t.ok('o que está em RM-SUPORTE não é peça (13 internas, não 14+)', !camada.r.erro && camada.r.det && camada.r.det.i === 13 && camada.r.cab.includes('13 internas'), J);
   t.ok('o modelo vazio existe para baixar', modelo, J);
   t.ok('o exemplo do modelo: ficha do bloco lida, estrutura detalhada, nenhum aviso', !exemplo.r.erro && exemplo.r.det && exemplo.r.det.b >= 2 && exemplo.r.det.i > 0 &&
-    /nenhum aviso/.test(exemplo.r.res) && /nenhuma linha de peça sobrando/.test(exemplo.r.res), J);
+    /nenhum aviso/.test(exemplo.r.res) && /nenhuma linha fora das estruturas/.test(exemplo.r.res), J);
   t.ok('sem erro na página', !camada.erros.length && !exemplo.erros.length, J);
 });
 
@@ -4543,7 +4612,7 @@ teste('leitor-dupla-x2', async (b, t) => {
     if (dupla) fs.writeFileSync(f, fs.readFileSync(f, 'latin1').replace('PU 30x93x30 #2,00', 'PU 30x93x30 #2,00 (dupla)'), 'latin1');
     const { ctx, pg } = await leitorImporta(b, f);
     bars[dupla] = await pg.evaluate(() => { const l = document.getElementById('result').innerText.split('\n').find(x => /^U 30x93x30/.test(x));
-      return l ? Number(l.split('\t')[2]) : null; }).catch(() => null);
+      return l ? Number(l.split('\t')[2].replace(/\./g, '').replace(',', '.')) : null; }).catch(() => null);   /* metros com vírgula (padrão RM) */
     await ctx.close();
   }
   // barras exatas = metros ÷ 6 − as 2 de segurança
@@ -6038,7 +6107,7 @@ teste('nome-pdf', async (b, t) => {
     const l = document.getElementById('loginScreen'); if (l) l.style.setProperty('display', 'none', 'important');
     window.confirm = () => true;
     const set = (id, v) => { const e = document.getElementById(id); e.value = v; e.dispatchEvent(new Event('input', { bubbles: true })); };
-    set('q_cliente', 'REFRICOMP - PORTAS'); set('q_data', '28/09/2026'); set('q_validade', '15 dias');
+    set('q_cliente', 'CLIENTE TESTE - PORTAS'); set('q_data', '28/09/2026'); set('q_validade', '15 dias');
     const tituloAntes = document.title;
     window.dispatchEvent(new Event('beforeprint')); const tituloImpr = document.title;
     window.dispatchEvent(new Event('afterprint'));
@@ -6046,8 +6115,8 @@ teste('nome-pdf', async (b, t) => {
     document.getElementById('orcPrintMode').value = 'interno'; orcImprimir(); await new Promise(r => setTimeout(r, 600));
     return { nomes: window.__nomes, tituloImpr, voltou: document.title === tituloAntes };
   }).catch(e => ({ erro: e.message }));
-  const ok = !r.erro && r.nomes[0] === 'Orçamento REFRICOMP - PORTAS 28-09-2026' && r.nomes[1] === 'Orçamento interno REFRICOMP - PORTAS 28-09-2026'
-    && r.tituloImpr === 'Orçamento REFRICOMP - PORTAS 28-09-2026' && r.voltou;
+  const ok = !r.erro && r.nomes[0] === 'Orçamento CLIENTE TESTE - PORTAS 28-09-2026' && r.nomes[1] === 'Orçamento interno CLIENTE TESTE - PORTAS 28-09-2026'
+    && r.tituloImpr === 'Orçamento CLIENTE TESTE - PORTAS 28-09-2026' && r.voltou;
   t.ok('orçamento: PDF com o nome do cliente e a data', ok && !erros.length, JSON.stringify(r) + ' ' + erros.join(' | '));
   await ctx.close();
 });
@@ -11424,7 +11493,7 @@ teste('orcamento-chave-na-mao', async (b, t) => {
   const { ctx, pg, erros } = await abre(b, { 'sis.local': 'orcamento-rm' });
   const r = await pg.evaluate(async () => {
     const esp = ms => new Promise(x => setTimeout(x, ms));
-    const aba = [...document.querySelectorAll('.orc-tab[data-aba]')].map(x => x.textContent.trim());
+    const aba = [...document.querySelectorAll('.orc-tab[data-aba]')].map(x => (x.querySelector('.nm-pc') || x).textContent.trim());
     orcAba('cnm'); await esp(50);
     const vis = !!(document.getElementById('panel-cnm') || {}).classList && document.getElementById('panel-cnm').classList.contains('on');
     const nomes = [...document.querySelectorAll('#cnmServ .cnm-srv-h b')].map(x => x.textContent);
@@ -11496,7 +11565,8 @@ teste('orcamento-chave-na-mao-salvos', async (b, t) => {
       cel: (document.getElementById('cnmObra') || {}).value, tag };
   }).catch(e => ({ erro: e.message }));
   const J = JSON.stringify(r).slice(0, 1200) + ' ' + erros.join(' | ');
-  t.ok('botões "Salvar detalhamento" e "Imprimir / PDF"', !r.erro && r.botoes.includes('Salvar detalhamento') && r.botoes.includes('Imprimir / PDF'), J);
+  /* revisão de UX: Novo e Salvar ficam só na barra de baixo, e o Imprimir só no alto (imprime o detalhamento nesta aba) */
+  t.ok('sem Novo/Salvar/Imprimir repetidos dentro da aba (ficam na barra de baixo e no alto)', !r.erro && !r.botoes.some(x => /Salvar|Nova obra|Imprimir/.test(x)), J);
   t.ok('depois de salvar, a aba diz que está salvo e o número', !r.erro && /Salvo · Nº \d+/.test(r.estado), J);
   t.ok('lista de detalhamentos salvos: os dois, com total, e sem o orçamento comum', !r.erro && r.linhas.length === 2 && r.linhas.some(x => /OBRA UM/.test(x) && /5\.000,00/.test(x)) && r.linhas.some(x => /OBRA DOIS/.test(x) && /8\.000,00/.test(x)), J);
   t.ok('a busca filtra por cidade', !r.erro && r.filtrado === 1, J);
@@ -12845,7 +12915,7 @@ teste('propostas-pagamento-e-chave-na-mao', async (b, t) => {
     campo('[data-p="pagProp.0.bem"]', 'VW Gol 2015'); await esp(200);
     o.bem = { campo: !!document.querySelector('#ficha [data-p="pagProp.0.bem"]'), folha: /Carro — VW Gol 2015/.test(folha()), formas: [...document.querySelectorAll('#ficha [data-p="pagProp.1.forma"] option')].map(x => x.textContent) };
     /* contrato: desconto e parcelas livres */
-    document.getElementById('abaContrato').click(); await esp(200);
+    document.getElementById('abaContrato').click(); { const m = document.getElementById('modal'); if (m && m.classList.contains('on')) document.getElementById('modalSim').click(); } await esp(200);
     const propostaAntes = totalProposta(d), valoresAntes = JSON.stringify(d.valores);
     o.base = totalContratoBase(d);
     campo('[data-p="contrato.valorAjustado"]', '850.000,00'); await esp(200);
@@ -12956,7 +13026,7 @@ teste('propostas-tipo-chave-na-mao', async (b, t) => {
     nm.value = 'gesso'; nm.dispatchEvent(new Event('input', { bubbles: true })); nm.dispatchEvent(new Event('change', { bubbles: true })); await esp(100);
     o.gesso = /gesso no forro/.test(d.cnm.itens[k].texto);
     /* contrato: os serviços com os títulos deles, sem "chave na mão" */
-    document.getElementById('abaContrato').click(); await esp(150);
+    document.getElementById('abaContrato').click(); { const m = document.getElementById('modal'); if (m && m.classList.contains('on')) document.getElementById('modalSim').click(); } await esp(150);
     o.contrato = { servico: /Esquadrias/.test(folha()) && /Porta de alumínio/.test(folha()), semTermo: !/chave na m[aã]o/i.test(folha()) };
     /* proposta padrão: sem o bloco de serviços */
     document.getElementById('btnFechar').click(); await esp(50);
@@ -13019,7 +13089,7 @@ teste('propostas-complementares-com-valor', async (b, t) => {
     marca('compCfg.mostrar', true); await esp(100); marca('compCfg.somar', false); await esp(200);
     o.fora = { total: totalProposta(d), aviso: /fora do total da obra/.test(folha()) };
     marca('compCfg.somar', true); await esp(100);
-    document.getElementById('abaContrato').click(); await esp(100);
+    document.getElementById('abaContrato').click(); { const m = document.getElementById('modal'); if (m && m.classList.contains('on')) document.getElementById('modalSim').click(); } await esp(100);
     o.contrato = totalContratoBase(d);
     return o;
   }, PROP_FICT).catch(e => ({ erro: e.message }));
@@ -13093,14 +13163,14 @@ teste('propostas-contrato-chave', async (b, t) => {
     /* chave na mão */
     const d = eval(FICT); d.tipo = 'chave'; Object.assign(d.cliente, { nacionalidade: 'brasileiro', profissao: 'empresário', estadoCivil: 'casado', rg: '1234567', doc: '000.000.000-00' });
     docs[d.id] = d; abrir(d.id); await esp(50);
-    document.getElementById('abaContrato').click(); await esp(150);
+    document.getElementById('abaContrato').click(); { const m = document.getElementById('modal'); if (m && m.classList.contains('on')) document.getElementById('modalSim').click(); } await esp(150);
     const fc = folha();
     o.chave = { garantia: /4\.12\. A CONTRATADA dá garantia/.test(fc) && /5 \(cinco\) anos/.test(fc), multa: /R\$ 20\.000,00 \(vinte mil reais\) ao mês/.test(fc), mora: /juros moratórios de 2% ao mês/.test(fc),
       legal: /1\.3\.6\./.test(fc) && /Legalização perante os órgãos competentes/.test(fc), pf: /brasileiro, empresário, casado/.test(fc) && /RG 1234567 · CPF 000\.000\.000-00/.test(fc),
       banco: /Dados bancários para pagamento: Banco Exemplo · Agência 0001 · Conta 12345-6 · PIX 00\.000\.000\/0001-00\./.test(fc) };
     /* padrão */
     const p = eval(FICT); docs[p.id] = p; abrir(p.id); await esp(50);
-    document.getElementById('abaContrato').click(); await esp(150);
+    document.getElementById('abaContrato').click(); { const m = document.getElementById('modal'); if (m && m.classList.contains('on')) document.getElementById('modalSim').click(); } await esp(150);
     const fp = folha();
     o.padrao = { semGarantia: !/4\.12\./.test(fp), multa: /multa de 1% \(um por cento\)/.test(fp), semPf: !/brasileiro/.test(fp), banco: /Dados bancários para pagamento/.test(fp) };
     return o;
@@ -13155,7 +13225,7 @@ teste('propostas-mudar-tipo', async (b, t) => {
     o.servicosVoltaram = d.tipo === 'chave' && d.cnm.itens[0].valor === 5000;
     document.querySelector('#ficha [data-revvolta="0"]').click(); await esp(30); document.getElementById('modalSim').click(); await esp(120);
     o.rev0 = { tipo: d.tipo, contrato: difs.slice(1).every(k => d.contrato.textos[k] === m.contrato[k]), mao: d.contrato.textos[kMao] };
-    document.getElementById('abaContrato').click(); await esp(150);
+    document.getElementById('abaContrato').click(); { const m = document.getElementById('modal'); if (m && m.classList.contains('on')) document.getElementById('modalSim').click(); } await esp(150);
     o.folhaPadrao = !/4\.12\./.test(folha());
     return o;
   }, PROP_FICT).catch(e => ({ erro: e.message }));
@@ -13400,12 +13470,12 @@ teste('propostas-contrato-da-proposta', async (b, t) => {
     const d = eval(FICT); docs[d.id] = d; abrir(d.id); await esp(50);
     const prop = document.getElementById('folha').textContent;
     const btn = document.getElementById('abaContrato'), rotAntes = btn.textContent.trim();
-    btn.click(); await esp(150);
+    btn.click(); { const m = document.getElementById('modal'); if (m && m.classList.contains('on')) document.getElementById('modalSim').click(); } await esp(150);
     const c1 = document.getElementById('folha').textContent;
     /* volta à proposta, muda a quantidade de pilares pela ficha */
     document.getElementById('abaProposta').click(); await esp(50);
     const q = document.querySelector('#ficha [data-p="pre.0.itens.0.qtd"]'); q.value = '10'; q.dispatchEvent(new Event('input', { bubbles: true })); await esp(250);
-    document.getElementById('abaContrato').click(); await esp(150);
+    document.getElementById('abaContrato').click(); { const m = document.getElementById('modal'); if (m && m.classList.contains('on')) document.getElementById('modalSim').click(); } await esp(150);
     const c2 = document.getElementById('folha').textContent;
     /* textos padrão mudados depois não reescrevem o contrato que já existe */
     modeloNuvem = { contrato: { gerais: '6.1. Texto novo de teste.' } };
@@ -13421,7 +13491,8 @@ teste('propostas-contrato-da-proposta', async (b, t) => {
   }, PROP_FICT).catch(e => ({ erro: e.message }));
   const J = JSON.stringify(r).slice(0, 1500);
   t.ok('proposta: cliente, total sem opcionais e por extenso, opcionais à parte, somados e com o total', r.prop && Object.values(r.prop).every(Boolean), J);
-  t.ok('"＋ Gerar contrato" vira a aba "Contrato"', /Gerar contrato/.test(r.rotAntes || '') && r.tela && r.tela.contrato === 'Contrato', J);
+  /* revisão de UX: a aba se chama sempre "Contrato" e pergunta antes de gerar */
+  t.ok('a aba se chama "Contrato" antes e depois de gerar', r.rotAntes === 'Contrato' && r.tela && r.tela.contrato === 'Contrato', J);
   t.ok('contrato com as peças, o cliente, o total por extenso, o endereço da obra, o foro e o prazo', r.c1 && Object.values(r.c1).every(Boolean), J);
   t.ok('peça mudada na proposta aparece no contrato', r.c2 === true, J);
   t.ok('texto padrão novo vale para o próximo contrato e não reescreve o que existe', r.velho && r.novo, J);
@@ -13623,7 +13694,7 @@ teste('propostas-importa-contrato-como-esta', async (b, t) => {
     return { T: { pre: T.preambulo, obs: T.observacoes, oc: T.obrigContratada, ot: T.obrigContratante, prazo: T.prazo, px: T.prazoExtra, pag: T.pagamento, enc: T.encargos, seg: T.seguranca, ger: T.gerais },
       parc: parcelasContrato(d).map(p => p.rot + '|' + p.quando + '|' + p.valor), aviso: (document.querySelector('#modalTxt .imp-av') || {}).textContent || '', comp: d.comp.map(x => x.item + '=' + x.sit),
       cli: { e: d.cliente.endereco, c: d.cliente.cidade, r: d.cliente.rep }, sobras: document.querySelectorAll('#modalTxt .imp-r').length, sobrasTxt: [...document.querySelectorAll('#modalTxt .imp-orig')].map(x => x.textContent),
-      botao: document.getElementById('btnImportar').textContent.trim(), aceita: document.getElementById('arqWord').accept }; }).catch(e => ({ erro: e.message }));
+      botao: document.getElementById('iniImportar').textContent.trim(), aceita: document.getElementById('arqWord').accept }; }).catch(e => ({ erro: e.message }));
   // PDF escaneado (sem texto): recusa com motivo
   const scan = await pg.evaluate(async () => { const d = await PDFLib.PDFDocument.create(); d.addPage([595, 842]).drawRectangle({ x: 40, y: 40, width: 100, height: 100 });
     const u = await d.save(); try { await window.__prop.lerPdf(u.buffer); return 'aceitou'; } catch (e) { return e.message; } });
@@ -14168,6 +14239,137 @@ teste('propostas-imagem-recorte', async (b, t) => {
   t.ok('"Imagem inteira" desfaz o recorte (e a seta volta ao lugar)', !r.erro && r.inteira.sem && r.inteira.w === 1600 && r.inteira.tam === '1600,1000' && r.inteira.seta === '0.5,0.3', J);
   t.ok('sem erro na página', !erros.length, erros.join(' | '));
   await ctx.close();
+});
+
+teste('propostas-revisao-ux', async (b, t) => {
+  // Revisão de UX do Propostas e Contratos (dados fictícios):
+  // P1 a aba Contrato pergunta antes de gerar; P2 "Acréscimo ou desconto";
+  // P3 Imprimir apagado nos Salvos; P4 sem botões repetidos e textos que
+  // apontam para Configurações › Textos padrão; P5 avisos antes da ficha
+  // numa coluna; P6 menu "Mais"; P7 o Imprimir diz o que sai; P8 seções da
+  // proposta recolhidas no Contrato; P10 pessoa física/jurídica; P11
+  // "Lendo da nuvem"; P12 anexar imagens perto do Adicionar.
+  if (!fs.existsSync(path.join(RAIZ, 'propostas_rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'propostas_rm' });
+  await semLogin(pg);
+  const r = await pg.evaluate(async (FICT) => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    const $ = id => document.getElementById(id), vis = el => !!el && getComputedStyle(el).display !== 'none' && el.offsetParent !== null;
+    await iniciarApp(); await esp(50);
+    const o = {};
+    // P3 / P4 nos Salvos
+    o.salvos = { imprimirApagado: $('btnImprimir').disabled && +getComputedStyle($('btnImprimir')).opacity < 0.9, novaTopo: vis($('btnNova')), novaLista: vis($('iniNova')) };
+    // P11 lendo da nuvem
+    LENDO_NUVEM = true; renderSalvos(); o.lendo = $('listaProp').textContent; LENDO_NUVEM = false; renderSalvos();
+    const d = eval(FICT); d.contrato = null; docs[d.id] = d; abrir(d.id); await esp(80);
+    o.importarNoCartao = !!document.querySelector('.docs-card #btnImportar');
+    // P6 menu Mais
+    o.mais = { menu: !!$('docsMais'), dentro: ['btnTipo', 'btnDup', 'btnDel'].every(id => $('docsMais').contains($(id))), aVista: ['btnFechar', 'btnRev'].every(id => vis($(id))) };
+    // P7 nome do imprimir
+    o.imp = { prop: $('btnImprimir').textContent };
+    // P2 desconto
+    const ficha = $('ficha').textContent;
+    o.desc = /Acréscimo ou desconto nas etapas \(%\)/.test(ficha) && !!document.querySelector('#ficha input[data-p="tot.pct"][placeholder="ex.: 10 ou -5"]');
+    o.textosPadrao = /Configurações › Textos padrão/.test(ficha) && !/use "Textos padrão"/.test(ficha);
+    // P10 PF / PJ
+    const pf = () => !!document.querySelector('#ficha input[data-p="cliente.rg"]');
+    d.cliente.doc = '12.345.678/0001-90'; d.cliente.nacionalidade = d.cliente.profissao = d.cliente.estadoCivil = d.cliente.rg = ''; d.cliente.tipoPessoa = ''; renderFicha();
+    o.pj = pf();
+    d.cliente.doc = '123.456.789-00'; renderFicha(); o.cpf = pf();
+    d.cliente.doc = ''; d.cliente.tipoPessoa = 'pf'; renderFicha(); o.escolhido = pf(); d.cliente.tipoPessoa = '';
+    // P1 a aba Contrato pergunta
+    $('abaContrato').click(); await esp(80);
+    o.contrato = { rot: $('abaContrato').textContent, perguntou: $('modal').classList.contains('on'), semCriar: !d.contrato };
+    $('modalNao').click(); await esp(30); o.contrato.naoCriou = !d.contrato;
+    $('abaContrato').click(); await esp(50); $('modalSim').click(); await esp(150);
+    o.contrato.criou = !!d.contrato;
+    o.imp.cont = $('btnImprimir').textContent;
+    // P8 seções da proposta recolhidas, com o subtítulo
+    const secs = [...document.querySelectorAll('#ficha details.sec')];
+    const iCli = secs.findIndex(x => /^Cliente/.test(x.querySelector('summary').textContent));
+    o.recolhe = { sub: /Dados da proposta/.test($('ficha').textContent), contratoAberto: secs.slice(0, iCli).some(x => x.open), propostaFechada: iCli > 0 && secs.slice(iCli).every(x => !x.open) };
+    // P12 anexar imagens logo depois do Adicionar
+    $('abaImagens').click(); await esp(80);
+    o.imp.img = $('btnImprimir').textContent;
+    const drop = $('imDrop'), anx = document.querySelector('#ficha input[data-p="imgs.anexar"]');
+    o.anexar = !!drop && !!anx && (drop.compareDocumentPosition(anx) & Node.DOCUMENT_POSITION_FOLLOWING) > 0 && !document.querySelector('.im-lista') || (document.querySelector('.im-lista') && (anx.compareDocumentPosition(document.querySelector('.im-lista')) & Node.DOCUMENT_POSITION_FOLLOWING) > 0);
+    return o;
+  }, PROP_FICT).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r).slice(0, 1500) + ' ' + erros.join(' | ');
+  t.ok('P1: a aba se chama Contrato e pergunta antes de gerar; Não deixa como está', !r.erro && r.contrato.rot === 'Contrato' && r.contrato.perguntou && r.contrato.semCriar && r.contrato.naoCriou && r.contrato.criou, J);
+  t.ok('P2: "Acréscimo ou desconto" com o exemplo de número negativo', !r.erro && r.desc, J);
+  t.ok('P3: nos Salvos o Imprimir aparece apagado', !r.erro && r.salvos.imprimirApagado, J);
+  t.ok('P4: um "Nova proposta" nos Salvos; Importar só nos Salvos; textos apontam para Configurações', !r.erro && !r.salvos.novaTopo && r.salvos.novaLista && !r.importarNoCartao && r.textosPadrao, J);
+  t.ok('P6: Passar, Duplicar e Excluir no menu Mais; Salvar e fechar e Nova revisão à vista', !r.erro && r.mais.menu && r.mais.dentro && r.mais.aVista, J);
+  t.ok('P7: o Imprimir diz o que sai (proposta, contrato, imagens)', !r.erro && /da proposta/.test(r.imp.prop) && /do contrato/.test(r.imp.cont) && /das imagens/.test(r.imp.img), J);
+  t.ok('P8: no Contrato, as seções da proposta vêm recolhidas, com o subtítulo', !r.erro && r.recolhe.sub && r.recolhe.contratoAberto && r.recolhe.propostaFechada, J);
+  t.ok('P10: campos de pessoa física só com CPF ou escolhendo Pessoa física', !r.erro && !r.pj && r.cpf && r.escolhido, J);
+  t.ok('P11: enquanto lê a nuvem, os Salvos dizem "Lendo as propostas da nuvem…"', !r.erro && /Lendo as propostas da nuvem/.test(r.lendo), J);
+  t.ok('P12: "anexar as imagens" logo depois de Adicionar imagens', !r.erro && r.anexar, J);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+  // P5 celular: avisos antes da ficha e "Ver o papel"
+  const c = await abre(b, { 'sis.local': 'propostas_rm' }, 'index.html', { tela: { width: 360, height: 740 } });
+  await semLogin(c.pg);
+  const m = await c.pg.evaluate(async (FICT) => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    await iniciarApp(); const d = eval(FICT); d.cliente.nome = ''; docs[d.id] = d; abrir(d.id); await esp(150);
+    const av = document.getElementById('avisos'), fi = document.getElementById('ficha');
+    const btn = document.querySelector('#ficha [data-fipapel]');
+    return { avisoAntes: av.style.display !== 'none' && av.getBoundingClientRect().top < fi.getBoundingClientRect().top, verPapel: !!btn && getComputedStyle(btn).display !== 'none' };
+  }, PROP_FICT).catch(e => ({ erro: e.message }));
+  t.ok('P5 celular: os avisos vêm antes da ficha e há "Ver o papel ↓"', !m.erro && m.avisoAntes && m.verPapel, JSON.stringify(m));
+  await c.ctx.close();
+});
+
+teste('recibos-revisao-ux', async (b, t) => {
+  // Revisão de UX do Recibos (dados fictícios): R9 "Vales, extras e
+  // descontos" também no adiantamento (grava no pagamento do mês); R10
+  // próximos passos depois do recibo da rescisão; R11 funcionário primeiro no
+  // Pedido de demissão; R13 fechamento do PF depois da tabela; epi.html sem
+  // "sistema completo" no celular.
+  if (!fs.existsSync(path.join(RAIZ, 'recibos_rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'recibos_rm' });
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    const l = document.getElementById('loginScreen'); if (l) l.style.setProperty('display', 'none', 'important');
+    state.employees = [{ id: 'g1', nome: 'ANA TESTE', status: 'ativo', salario: 1000, docTipo: 'CPF', doc: '' }];
+    const o = {};
+    // R9: no adiantamento o lançamento vai para o pagamento do mês
+    salCiclo = { tipo: 'adiantamento', ano: 2031, mesIdx: 4 };
+    abrirFolhaExtra('g1');
+    o.titulo = document.getElementById('folhaTitulo').textContent;
+    folhaTmp.push({ desc: 'Vale', valor: -50 });
+    atualizarFolhaResto(); o.resto = document.getElementById('folhaResto').textContent;
+    document.getElementById('folhaSalvar').click(); await esp(30);
+    const reg = state.ciclos[cicloKey({ tipo: 'pagamento', ano: 2031, mesIdx: 4 })];
+    o.noPagamento = !!(reg && reg.itens && reg.itens.g1 && reg.itens.g1.folhaExtra && reg.itens.g1.folhaExtra.length === 1);
+    o.tela = (state.employees[0].folhaExtra || []).length;
+    // R10: próximos passos
+    state.rescisoes = []; rescProximos({ empId: 'g1', data: '2031-05-10' });
+    const bx = document.getElementById('rescProximo');
+    o.prox = { aberto: !bx.hidden, docs: !!document.getElementById('rescIrDocs'), marca: !!document.getElementById('rescMarcaDeslig') };
+    // R11: funcionário antes da situação
+    const nome = document.getElementById('pdNome'), sit = document.getElementById('pdSit');
+    o.pdOrdem = !!(nome.compareDocumentPosition(sit) & Node.DOCUMENT_POSITION_FOLLOWING);
+    // R13: fechamento depois da tabela
+    const fe = document.getElementById('pfFechaBox'), tb = document.getElementById('pfBody');
+    o.pfOrdem = !!(tb.compareDocumentPosition(fe) & Node.DOCUMENT_POSITION_FOLLOWING);
+    // R7 rótulos
+    o.rot = { ce: document.getElementById('ceGerar').textContent, ad: document.getElementById('adGerar').textContent, resc: document.getElementById('btnRescGerar').textContent };
+    return o;
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  t.ok('R9: a janela se chama "Vales, extras e descontos"', !r.erro && /Vales, extras e descontos/.test(r.titulo), J);
+  t.ok('R9: no adiantamento o lançamento vai para o pagamento do mês e avisa', !r.erro && r.noPagamento && r.tela === 0 && /Não mexe neste adiantamento/.test(r.resto), J);
+  t.ok('R10: depois do recibo da rescisão aparecem os próximos passos', !r.erro && r.prox.aberto && r.prox.docs && r.prox.marca, J);
+  t.ok('R11: no Pedido de demissão o funcionário vem antes da situação', !r.erro && r.pdOrdem, J);
+  t.ok('R13: o fechamento do PF fica depois da tabela', !r.erro && r.pfOrdem, J);
+  t.ok('R7: botões com nomes claros', !r.erro && r.rot.ce === 'Imprimir / PDF' && r.rot.ad === 'Imprimir / PDF' && /Emitir e imprimir/.test(r.rot.resc), J);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+  const epi = fs.readFileSync(path.join(RAIZ, 'recibos_rm', 'epi.html'), 'utf8');
+  t.ok('epi.html: "Abrir o sistema completo" some no celular', /id="btCompleto"/.test(epi) && /#btCompleto\{display:none\}/.test(epi));
 });
 
 teste('propostas-imagem-transparente', async (b, t) => {
@@ -14871,6 +15073,119 @@ teste('recibos-publica-resultados', async (b, t) => {
   await ctx.close();
 });
 
+teste('orcamento-preco-do-salvo', async (b, t) => {
+  // Revisão de UX do Orçamento RM, com as respostas do dono:
+  // O1 "manter o antigo, a não ser que eu mude": o salvo guarda o preço de
+  //    cada linha; abrir/revisar não recalcula com o banco de hoje, avisa a
+  //    diferença e oferece "Usar os preços de hoje".
+  // O2 PDF de orçamento não salvo pergunta "Salvar e imprimir".
+  // O3 um "Imprimir / PDF" só, que imprime o que a aba mostra.
+  // O4 um "Novo orçamento" e um "Salvar", na barra de baixo.
+  // O5 a versão do impresso aparece no botão do celular.
+  // O7 excluir linha tem Desfazer.  O8 linha "Nº · cliente · salvo".
+  // O11 Banco de dados aceso.  O12 as duas Cidades ligadas. Dados fictícios.
+  if (!fs.existsSync(path.join(RAIZ, 'orcamento-rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'orcamento-rm' });
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    window.confirm = () => true; window.alert = () => {};
+    const tot = () => document.getElementById('t_total').textContent;
+    const o = {};
+    S.orcamentosSalvos = []; clearQuote(); await esp(30);
+    S.cliente = 'Cliente Fictício P'; S.obra = 'Galpão Teste'; initRender();
+    addPerfilLine(S.perfis[0].id); await esp(30);
+    const l = S.linhasPerfil[0]; l.qtd = 10; recompute(); await esp(20);
+    const forn = cpForn(cpSupplier(l)), p0 = S.perfis[0];
+    o.semPrecoAntes = !(cpCalc(l, p0, 'p').pk > 0);
+    // O8 antes de salvar
+    await esp(450); o.estado1 = (document.getElementById('orcEstado') || {}).textContent || '';
+    // O2: imprimir sem salvar pergunta
+    let imprimiu = 0; window.print = () => { imprimiu++; }; window.printQuote = () => { imprimiu++; };
+    imprimirDaAba(); await esp(30);
+    o.pergunta = [...document.querySelectorAll('#escolhaFoot button')].map(x => x.textContent);
+    [...document.querySelectorAll('#escolhaFoot button')].find(x => /Salvar e imprimir/.test(x.textContent)).click(); await esp(80);
+    o.salvouAoImprimir = { n: S.orcamentosSalvos.length, imprimiu, atual: !!S.orcamentoAtualId };
+    const salvo = S.orcamentosSalvos[0], totSalvo = tot();
+    o.guardou = !!(l.precoSalvo && l.precoSalvo.pk > 0) && !!(salvo.quote.linhasPerfil[0].precoSalvo);
+    // imprimir de novo, já salvo: não pergunta
+    imprimiu = 0; imprimirDaAba(); await esp(30); o.semPergunta = imprimiu === 1 && !document.getElementById('escolhaOverlay').classList.contains('open');
+    await esp(450); o.estado2 = (document.getElementById('orcEstado') || {}).textContent || '';
+    // O1: o banco sobe 10%; abrir o salvo mantém o preço de quando foi salvo
+    const esp0 = p0.esp; const antigo = forn.precos[esp0]; forn.precos[esp0] = Math.round(antigo * 1.1 * 100) / 100;
+    clearQuote(); await esp(30);
+    loadOrcamento(salvo.id); await esp(600);
+    o.aoAbrir = { total: tot(), igual: tot() === totSalvo, aviso: !document.getElementById('avisoPrecoSalvo').hidden, txt: document.getElementById('avisoPrecoSalvo').textContent };
+    // a prévia dos Salvos também mostra o preço guardado
+    o.previa = brl(orcPrevia(salvo).total) === totSalvo;
+    // revisar mantém o preço
+    revisarOrcamento(salvo.id); await esp(150);
+    o.revisao = { total: tot() === totSalvo, numero: S.numero };
+    // "Usar os preços de hoje"
+    document.querySelector('#avisoPrecoSalvo button').click(); await esp(600);
+    o.hoje = { total: tot(), mudou: tot() !== totSalvo, aviso: document.getElementById('avisoPrecoSalvo').hidden };
+    forn.precos[esp0] = antigo;
+    // O7: excluir a linha e desfazer
+    const nAntes = S.linhasPerfil.length, lid0 = S.linhasPerfil[0].lid;
+    delLine('linhasPerfil', lid0); await esp(30);
+    const dz = document.getElementById('orcDesfazer');
+    o.desfazer = { saiu: S.linhasPerfil.length === nAntes - 1, aviso: !!(dz && dz.classList.contains('on')) };
+    dz.querySelector('button').click(); await esp(30);
+    o.desfazer.voltou = S.linhasPerfil.length === nAntes && S.linhasPerfil[0].lid === lid0;
+    // O3: o Imprimir do alto imprime o que a aba mostra
+    let qual = ''; const cp = window.cnmPDF, ir = window.imprimirRelatorio;
+    window.cnmPDF = () => { qual = 'cnm'; }; window.imprimirRelatorio = () => { qual = 'rel'; };
+    orcAba('cnm'); await esp(30); imprimirDaAba(); o.impCnm = qual;
+    orcAba('salvos'); await esp(60); imprimirDaAba(); o.impSalvos = qual;
+    orcAba('cob'); await esp(30); o.impCob = document.getElementById('btnImprimirAba').hidden;
+    window.cnmPDF = cp; window.imprimirRelatorio = ir;
+    // O4: sem Novo/Salvar dentro das abas; um Novo orçamento na barra
+    orcAba('esq'); await esp(30);
+    o.esqBtns = [...document.querySelectorAll('#panel-esq .esq-topo button')].map(x => x.textContent.trim()).filter(x => /Novo|Salvar/.test(x));
+    o.barNovo = document.getElementById('bar_novo').textContent;
+    // O12: a cidade da chave na mão vai para "+ Mais campos" e volta
+    orcAba('cnm'); await esp(30);
+    const cc = document.getElementById('cnmCidade'); cc.value = 'Cidade Teste/RS'; cc.dispatchEvent(new Event('input')); await esp(20);
+    o.cidade1 = (document.getElementById('x_cidade') || {}).value;
+    const xc = document.getElementById('x_cidade'); xc.value = 'Outra Cidade/RS'; xc.dispatchEvent(new Event('change', { bubbles: true })); await esp(20);
+    o.cidade2 = { dados: cnmDados().cidade, campo: cc.value };
+    // O11: Banco de dados aceso enquanto aberto
+    openDB('forn'); await esp(60); o.bdOn = document.getElementById('btnBancoDados').classList.contains('on');
+    closeDB(); await esp(30); o.bdOff = !document.getElementById('btnBancoDados').classList.contains('on');
+    // O5: a versão no botão do celular
+    const sel = document.getElementById('orcPrintMode'); sel.value = 'interno'; sel.dispatchEvent(new Event('change'));
+    o.versaoCel = document.getElementById('orcImpCel').textContent; sel.value = 'cliente'; sel.dispatchEvent(new Event('change'));
+    return o;
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r).slice(0, 1500) + ' ' + erros.join(' | ');
+  t.ok('O2: PDF de orçamento não salvo pergunta, e "Salvar e imprimir" salva e imprime', !r.erro && r.pergunta.join('|') === 'Salvar e imprimir|Só imprimir|Cancelar' && r.salvouAoImprimir.n === 1 && r.salvouAoImprimir.imprimiu === 1 && r.semPergunta, J);
+  t.ok('O1: o salvo guarda o preço de cada linha', !r.erro && r.guardou, J);
+  t.ok('O1: o banco mudou e abrir mantém o preço de quando foi salvo, com aviso de quanto daria hoje', !r.erro && r.aoAbrir.igual && r.aoAbrir.aviso && /preços de hoje/.test(r.aoAbrir.txt) && r.previa, J);
+  t.ok('O1: a nova revisão também sai com o preço guardado', !r.erro && r.revisao.total && / R1$/.test(r.revisao.numero), J);
+  t.ok('O1: "Usar os preços de hoje" aplica o banco e o aviso some', !r.erro && r.hoje.mudou && r.hoje.aviso, J);
+  t.ok('O3: o Imprimir do alto imprime a chave na mão, o relatório dos Salvos, e some em Compras da obra', !r.erro && r.impCnm === 'cnm' && r.impSalvos === 'rel' && r.impCob === true, J);
+  t.ok('O4: Novo e Salvar só na barra de baixo ("Novo orçamento")', !r.erro && !r.esqBtns.length && /^Novo orçamento$/.test(r.barNovo), J);
+  t.ok('O5: a versão do impresso aparece no botão do celular', !r.erro && r.versaoCel === 'Interno', J);
+  t.ok('O7: excluir a linha mostra Desfazer e ela volta no mesmo lugar', !r.erro && r.desfazer.saiu && r.desfazer.aviso && r.desfazer.voltou, J);
+  t.ok('O8: a linha do orçamento aberto diz não salvo e depois salvo', !r.erro && /não salvo/.test(r.estado1) && /Cliente Fictício P/.test(r.estado2) && /· salvo$/.test(r.estado2.trim()), J);
+  t.ok('O11: o botão Banco de dados fica aceso enquanto o banco está aberto', !r.erro && r.bdOn && r.bdOff, J);
+  t.ok('O12: a Cidade da chave na mão e a de "+ Mais campos" são a mesma', !r.erro && r.cidade1 === 'Cidade Teste/RS' && r.cidade2.dados === 'Outra Cidade/RS' && r.cidade2.campo === 'Outra Cidade/RS', J);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+  // O6 celular: Quantidade e Total à vista na tabela; abas com nome curto
+  const c = await abre(b, { 'sis.local': 'orcamento-rm' }, 'index.html', { tela: { width: 360, height: 740 } });
+  const m = await c.pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    clearQuote(); addPerfilLine(S.perfis[0].id); await esp(60);
+    const vis = sel => { const e = document.querySelector(sel); return !!e && getComputedStyle(e).display !== 'none'; };
+    const fx = document.querySelector('.orc-tabs'), ultima = document.querySelector('.orc-tab[data-aba="cob"]'), sv = document.querySelector('.orc-tab[data-aba="salvos"]');
+    return { esp: vis('table.items .col-esp'), larg: vis('table.items .col-larg'), cob: (ultima.querySelector('.nm-cel') || {}).textContent,
+      salvos: sv.getBoundingClientRect().right <= fx.getBoundingClientRect().right + 1 && sv.getBoundingClientRect().left >= fx.getBoundingClientRect().left - 1 };
+  }).catch(e => ({ erro: e.message }));
+  t.ok('celular: Espessura e Largura saem da tabela de itens', !m.erro && !m.esp && !m.larg, JSON.stringify(m));
+  t.ok('celular: Salvos à vista logo depois de Orçamento, e nomes curtos (Chave, Compras)', !m.erro && m.cob === 'Compras' && m.salvos, JSON.stringify(m));
+  await c.ctx.close();
+});
+
 teste('orcamento-salvos-previa', async (b, t) => {
   // "Acessar os orçamentos salvos me obriga a abrir na tela do orçamento
   // principal, não me deixa ver ele na própria tela salva, nem uma prévia."
@@ -14914,7 +15229,7 @@ teste('orcamento-salvos-previa', async (b, t) => {
     // Revisar o B: abre e já vira a revisão R1; o B fica guardado como estava
     orcAba('salvos'); await esp(100);
     document.querySelector('#savedList .saved-item[data-sid="' + B.id + '"]').click(); await esp(60);
-    [...prev().querySelectorAll('.sp-acoes button')].find(x => /Revisar/.test(x.textContent)).click(); await esp(150);
+    [...prev().querySelectorAll('.sp-acoes button')].find(x => /Nova revisão/.test(x.textContent)).click(); await esp(150);
     const rev = S.orcamentosSalvos.find(e => e.id === S.orcamentoAtualId) || {};
     const b2 = S.orcamentosSalvos.find(e => e.id === B.id) || {};
     o.revisar = { numero: rev.numero, base: B.numero, revDe: rev.revDe === B.id, subst: b2.substituidoPor === rev.id, cliente: S.cliente, n: S.orcamentosSalvos.length };
@@ -14926,7 +15241,7 @@ teste('orcamento-salvos-previa', async (b, t) => {
     && /Validade 15 dias/.test(r.a.txt) && r.a.linhas === 2 && r.a.txt.includes(String(r.a.total).replace(/\s+/g, ' ')) && /Perfis 2/.test(r.a.txt), J);
   t.ok('ver não troca o orçamento aberto nem sai da aba', !r.erro && r.intacto && r.aba === 'salvos', J);
   // + "Lançar no Compras da obra" (teste orcamento-compras-da-obra)
-  t.ok('botões Editar orçamento, Revisar e Lançar no Compras da obra', !r.erro && JSON.stringify(r.a.botoes) === '["Editar orçamento","Revisar","Lançar no Compras da obra"]', J);
+  t.ok('botões Editar orçamento, Nova revisão (R1) e Lançar no Compras da obra', !r.erro && JSON.stringify(r.a.botoes) === '["Editar orçamento","Nova revisão (R1)","Lançar no Compras da obra"]', J);
   t.ok('Editar orçamento abre na tela principal', !r.erro && r.editar.aberto && r.editar.cliente === 'Cliente Fictício A' && r.editar.aba === 'orc' && r.editar.n === 2, J);
   t.ok('Revisar abre como nova revisão e guarda a anterior', !r.erro && r.revisar.numero === r.revisar.base + ' R1' && r.revisar.revDe && r.revisar.subst && r.revisar.cliente === 'Cliente Fictício B' && r.revisar.n === 3, J);
   t.ok('sem erro na página', !erros.length, erros.join(' | '));
