@@ -14569,6 +14569,76 @@ teste('recibos-pagto-adiantamento-pago', async (b, t) => {
   await ctx.close();
 });
 
+teste('recibos-valores-a-receber', async (b, t) => {
+  // pedido: uma aba de "valores a receber" (o contrário do empréstimo): o
+  // extra que o funcionário vai ter, com motivo e valor; ao gerar o
+  // adiantamento ou o pagamento o sistema avisa e pergunta se entra.
+  // Dados fictícios.
+  if (!fs.existsSync(path.join(RAIZ, 'recibos_rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'recibos_rm' });
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    const l = document.getElementById('loginScreen'); if (l) l.style.setProperty('display', 'none', 'important');
+    window.confirm = () => true;
+    state.employees = [
+      { id: 'g1', nome: 'ANA TESTE', status: 'ativo', salario: 3000, docTipo: 'CPF', doc: '' },
+      { id: 'g2', nome: 'BRUNO TESTE', status: 'ativo', salario: 2000, docTipo: 'CPF', doc: '' }];
+    const e = id => state.employees.find(x => x.id === id);
+    const o = {};
+    // a aba existe, no grupo Salários, e registra pela tela
+    const tab = document.querySelector('.vtab[data-v="receber"]');
+    o.aba = !!tab && /Valores a receber/.test(tab.textContent);
+    tab.click(); await esp(60);
+    const reg = (emp, valor, desc, data, desde) => { document.getElementById('recFunc').value = emp; document.getElementById('recValor').value = valor; document.getElementById('recDesc').value = desc; document.getElementById('recData').value = data; document.getElementById('recDesde').value = desde; document.getElementById('btnRecSalvar').click(); };
+    reg('', '10', 'x', '2031-06-01', 'pagamento'); o.semFunc = (e('g1').aReceber || []).length;
+    reg('g1', '400,00', 'Reembolso de viagem', '2031-06-01', 'pagamento');
+    reg('g2', '150,00', 'Serviço avulso', '2031-05-15', 'adiantamento');
+    o.reg = { g1: (e('g1').aReceber || []).length, g2: (e('g2').aReceber || []).length, linhas: document.querySelectorAll('#recBody tr').length, persiste: (empsToMap().g1.aReceber || []).length };
+    o.seloFuturo = document.getElementById('recSelo').textContent;   // datas de 2031: ainda longe, não conta
+    const dg2 = e('g2').aReceber[0].data; e('g2').aReceber[0].data = rmDiaISO(); renderRecSelo();
+    o.selo = document.getElementById('recSelo').textContent;          // previsto para hoje: conta
+    e('g2').aReceber[0].data = dg2; renderRecSelo();
+    // PAGAMENTO de maio: pergunta, e o valor entra como lançamento da folha
+    abrirCiclo({ tipo: 'pagamento', ano: 2031, mesIdx: 4 }); await esp(40);
+    e('g1').base = 3000; e('g1').valPagamento = calcPag(e('g1')); e('g2').base = 2000; e('g2').valPagamento = calcPag(e('g2'));
+    let seguiu = 0;
+    o.abre = recConferir('pagamento', '2031-06-01', [e('g1'), e('g2')], () => { seguiu++; });
+    o.modal = document.getElementById('recConfModal').classList.contains('open');
+    o.linhasModal = document.querySelectorAll('#recConfBody tr').length;   // só o do pagamento
+    document.getElementById('btnRecConfOk').click(); await esp(40);
+    o.pag = { extra: (e('g1').folhaExtra || []).map(x => [x.desc, x.valor, !!x.rid]), liquido: e('g1').valPagamento, seguiu, modalFechou: !document.getElementById('recConfModal').classList.contains('open') };
+    o.pulo = recConferir('pagamento', '2031-06-01', [e('g1')], () => {});          // consome o "pular" do seguir
+    o.denovo = recConferir('pagamento', '2031-06-01', [e('g1')], () => {});        // já entrou: não pergunta de novo
+    o.semDobro = (e('g1').folhaExtra || []).length;
+    // fechar o ciclo dá baixa; reabrir devolve
+    const baixados = recBaixarNoFechamento('2031-05-pagamento');
+    o.baixa = { n: baixados.length, recebido: e('g1').aReceber[0].recebido };
+    recDesfazerBaixa(baixados); o.reabre = e('g1').aReceber[0].recebido;
+    // ADIANTAMENTO de maio: soma no adicional, com o motivo na observação
+    abrirCiclo({ tipo: 'adiantamento', ano: 2031, mesIdx: 4 }); await esp(40);
+    e('g2').adiantBase = 1000; e('g2').valAdiantamento = calcAdiant(e('g2'));
+    o.adAbre = recConferir('adiantamento', '2031-05-15', [e('g1'), e('g2')], () => {});
+    o.adLinhas = document.querySelectorAll('#recConfBody tr').length;   // o do pagamento não aparece aqui
+    document.getElementById('btnRecConfOk').click(); await esp(40);
+    o.ad = { adicional: e('g2').adicional, valor: e('g2').valAdiantamento, obs: /Serviço avulso/.test(e('g2').obs || ''), lancadaEm: e('g2').aReceber[0].lancadaEm };
+    // Limpar valores no adiantamento devolve o extra a pendente
+    document.getElementById('btnSalLimpa').click(); await esp(40);
+    o.limpou = { adicional: e('g2').adicional, lancadaEm: e('g2').aReceber[0].lancadaEm || '' };
+    return o;
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  t.ok('a aba "Valores a receber" existe e registra pela tela (sem funcionário não registra)', !r.erro && r.aba && r.semFunc === 0 && r.reg.g1 === 1 && r.reg.g2 === 1 && r.reg.linhas === 2 && r.reg.persiste === 1, J);
+  t.ok('o selo da aba conta só o que já está na hora (previsto até hoje): 0 de longe, 1 de hoje', !r.erro && r.seloFuturo === '' && r.selo === '1', J);
+  t.ok('ao gerar o pagamento, pergunta só o valor do pagamento (1 linha)', !r.erro && r.abre === false && r.modal && r.linhasModal === 1, J);
+  t.ok('confirmado, entra em "Vales, extras e descontos" com o motivo e soma no líquido (3.400)', !r.erro && r.pag.extra.length === 1 && r.pag.extra[0][0] === 'Reembolso de viagem' && r.pag.extra[0][1] === 400 && r.pag.extra[0][2] && r.pag.liquido === 3400 && r.pag.seguiu === 1 && r.pag.modalFechou, J);
+  t.ok('não entra duas vezes nem pergunta de novo', !r.erro && r.pulo === true && r.denovo === true && r.semDobro === 1, J);
+  t.ok('fechar o ciclo dá baixa (recebido) e reabrir devolve', !r.erro && r.baixa.n === 1 && r.baixa.recebido === true && r.reabre === false, J);
+  t.ok('no adiantamento pergunta só o do adiantamento e soma no adicional (1.150) com o motivo na observação', !r.erro && r.adAbre === false && r.adLinhas === 1 && r.ad.adicional === 150 && r.ad.valor === 1150 && r.ad.obs && r.ad.lancadaEm === '2031-05-adiantamento', J);
+  t.ok('Limpar valores do adiantamento devolve o extra a pendente', !r.erro && r.limpou.adicional === 0 && r.limpou.lancadaEm === '', J);
+  t.ok('sem erro na página', !erros.length, J);
+  await ctx.close();
+});
+
 teste('propostas-imagem-transparente', async (b, t) => {
   // "Essas imagens foram colocadas sem fundo, porém com temas escuros aparece
   // fundo branco": a imagem era achatada em JPG sobre branco ao entrar (e de
