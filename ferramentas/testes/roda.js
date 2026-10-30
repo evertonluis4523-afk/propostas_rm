@@ -14639,6 +14639,62 @@ teste('recibos-valores-a-receber', async (b, t) => {
   await ctx.close();
 });
 
+teste('recibos-editar-emprestimo-e-valores', async (b, t) => {
+  // pedido: a função de editar ao lado, na aba Empréstimos e na de Valores a
+  // receber. Dados fictícios.
+  if (!fs.existsSync(path.join(RAIZ, 'recibos_rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'recibos_rm' });
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    const l = document.getElementById('loginScreen'); if (l) l.style.setProperty('display', 'none', 'important');
+    window.confirm = () => true;
+    state.employees = [
+      { id: 'g1', nome: 'ANA TESTE', status: 'ativo', salario: 3000, docTipo: 'CPF', doc: '' },
+      { id: 'g2', nome: 'BRUNO TESTE', status: 'ativo', salario: 2000, docTipo: 'CPF', doc: '' }];
+    const e = id => state.employees.find(x => x.id === id);
+    const o = {};
+    // EMPRÉSTIMO: lápis ao lado do olho, abre o editor, e o total acompanha as parcelas
+    gerarParcelamento('g1', 300, 3, '2031-01-10', 'Ferramenta', 'pagamento');
+    document.querySelector('.vtab[data-v="empr"]').click(); await esp(60);
+    const btns = [...document.querySelectorAll('#emprBody .rowact button')].map(x => x.title);
+    o.empBotoes = btns;
+    document.querySelector('#emprBody [data-eedit]').click(); await esp(30);
+    o.empTitulo = document.getElementById('emprMTitle').textContent;
+    o.empAberto = document.getElementById('emprModal').classList.contains('open');
+    document.getElementById('emprEditDesc').value = 'Furadeira';
+    const pv = document.querySelector('#emprParcsBody [data-pval="0"]'); pv.value = '150,00';
+    document.getElementById('btnEmprSave').click(); await esp(30);
+    const em = e('g1').emprestimos[0];
+    o.emp = { desc: em.desc, total: em.valor, parcela: em.parcelas[0].valor };
+    // VALORES A RECEBER: lápis, janela, salvar, trocar de funcionário
+    document.querySelector('.vtab[data-v="receber"]').click(); await esp(60);
+    const set = (id, v) => { document.getElementById(id).value = v; };
+    set('recFunc', 'g1'); set('recValor', '400,00'); set('recDesc', 'Reembolso'); set('recData', '2031-06-01'); set('recDesde', 'pagamento');
+    document.getElementById('btnRecSalvar').click(); await esp(30);
+    o.recBotoes = [...document.querySelectorAll('#recBody .rowact button')].map(x => x.title);
+    document.querySelector('#recBody [data-rcedit]').click(); await esp(30);
+    o.recAberto = document.getElementById('recEditModal').classList.contains('open');
+    o.recCampos = { desc: document.getElementById('recEditDesc').value, valor: document.getElementById('recEditValor').value, func: document.getElementById('recEditFunc').value };
+    set('recEditDesc', 'Reembolso de viagem'); set('recEditValor', '550,00'); set('recEditData', '2031-07-01'); set('recEditDesde', 'adiantamento'); set('recEditFunc', 'g2');
+    document.getElementById('btnRecEditSalvar').click(); await esp(30);
+    o.rec = { g1: (e('g1').aReceber || []).length, g2: (e('g2').aReceber || []).map(x => [x.desc, x.valor, x.data, x.desde]), fechou: !document.getElementById('recEditModal').classList.contains('open') };
+    // valor sem número: não salva
+    document.querySelector('#recBody [data-rcedit]').click(); await esp(30);
+    set('recEditValor', ''); document.getElementById('btnRecEditSalvar').click(); await esp(20);
+    o.invalido = { aberto: document.getElementById('recEditModal').classList.contains('open'), valor: e('g2').aReceber[0].valor };
+    return o;
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  t.ok('Empréstimos: o lápis (Editar) fica ao lado do olho e abre o editor', !r.erro && r.empBotoes.slice(0, 2).join('|') === 'Editar|Detalhes' && r.empAberto && /Editar empréstimo/.test(r.empTitulo), J);
+  t.ok('editar o empréstimo muda a descrição e o valor total acompanha as parcelas (150 + 100 + 100 = 350)', !r.erro && r.emp.desc === 'Furadeira' && r.emp.parcela === 150 && r.emp.total === 350, J);
+  t.ok('Valores a receber: o lápis (Editar) fica ao lado dos outros botões', !r.erro && r.recBotoes[0] === 'Editar', J);
+  t.ok('a janela de edição abre com os dados do valor', !r.erro && r.recAberto && r.recCampos.desc === 'Reembolso' && r.recCampos.valor === '400,00' && r.recCampos.func === 'g1', J);
+  t.ok('salvar muda motivo, valor, data, onde entra e o funcionário', !r.erro && r.rec.g1 === 0 && r.rec.g2.length === 1 && r.rec.g2[0].join('|') === 'Reembolso de viagem|550|2031-07-01|adiantamento' && r.rec.fechou, J);
+  t.ok('sem valor, não salva e a janela continua aberta', !r.erro && r.invalido.aberto && r.invalido.valor === 550, J);
+  t.ok('sem erro na página', !erros.length, J);
+  await ctx.close();
+});
+
 teste('propostas-imagem-transparente', async (b, t) => {
   // "Essas imagens foram colocadas sem fundo, porém com temas escuros aparece
   // fundo branco": a imagem era achatada em JPG sobre branco ao entrar (e de
