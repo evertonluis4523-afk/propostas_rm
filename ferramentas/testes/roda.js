@@ -14526,6 +14526,49 @@ teste('recibos-revisao-ux', async (b, t) => {
   t.ok('epi.html: "Abrir o sistema completo" some no celular', /id="btCompleto"/.test(epi) && /#btCompleto\{display:none\}/.test(epi));
 });
 
+teste('recibos-pagto-adiantamento-pago', async (b, t) => {
+  // pedido: o botão "Pagto = salário − adiant." não puxava o adiantamento
+  // pago (só olhava o valor da planilha da contabilidade), e faltava um
+  // jeito de limpar os valores gerados. Dados fictícios.
+  if (!fs.existsSync(path.join(RAIZ, 'recibos_rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'recibos_rm' });
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    const l = document.getElementById('loginScreen'); if (l) l.style.setProperty('display', 'none', 'important');
+    window.confirm = () => true;
+    state.employees = [
+      { id: 'g1', nome: 'ANA TESTE', status: 'ativo', salario: 3000, docTipo: 'CPF', doc: '' },
+      { id: 'g2', nome: 'BRUNO TESTE', status: 'ativo', salario: 2000, docTipo: 'CPF', doc: '' },
+      { id: 'g3', nome: 'CAIO TESTE', status: 'ativo', salario: 1000, docTipo: 'CPF', doc: '' }];
+    // o adiantamento de maio/2031 foi pago e ficou no registro do ciclo
+    state.ciclos = { '2031-05-adiantamento': { tipo: 'adiantamento', ano: 2031, mesIdx: 4, itens: { g1: { valAdiantamento: 1200, adiantBase: 1200 } } } };
+    abrirCiclo({ tipo: 'pagamento', ano: 2031, mesIdx: 4 }); await esp(40);
+    const e = id => state.employees.find(x => x.id === id);
+    e('g2').adiantBase = 500; e('g2').valAdiantamento = 500;   // este veio da planilha
+    e('g3').folhaExtra = [{ desc: 'Vale', valor: -50 }];
+    document.getElementById('btnSalResto').click(); await esp(40);
+    const o = { base: ['g1', 'g2', 'g3'].map(i => e(i).base), ad: ['g1', 'g2', 'g3'].map(i => e(i).valAdiantamento), adBase1: e('g1').adiantBase,
+      toast: document.getElementById('toast').textContent };
+    document.getElementById('btnSalLimpa').click(); await esp(40);
+    o.limpo = state.employees.map(x => [x.base, x.valAdiantamento, x.adiantBase, x.valPagamento].every(v => !Number(v)));
+    o.mantem = { sal: e('g1').salario, extra: (e('g3').folhaExtra || []).length };
+    o.botoes = { resto: !!document.getElementById('btnSalResto'), limpa: !!document.getElementById('btnSalLimpa') };
+    // ciclo fechado: nem o botão nem o limpar mexem
+    e('g1').base = 777; state.ciclos['2031-05-pagamento'].fechadoEm = Date.now();
+    document.getElementById('btnSalLimpa').click(); document.getElementById('btnSalResto').click(); await esp(30);
+    o.fechado = e('g1').base;
+    return o;
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  t.ok('sem planilha, o botão desconta o adiantamento pago (3.000 − 1.200 = 1.800)', !r.erro && r.base[0] === 1800 && r.ad[0] === 1200 && r.adBase1 === 1200, J);
+  t.ok('com planilha, vale o da planilha (2.000 − 500 = 1.500)', !r.erro && r.base[1] === 1500 && r.ad[1] === 500, J);
+  t.ok('sem adiantamento nenhum, o pagamento é o salário inteiro e o aviso diz', !r.erro && r.base[2] === 1000 && /1 sem adiantamento/.test(r.toast) && /pelo adiantamento já pago/.test(r.toast), J);
+  t.ok('"Limpar valores" zera o ciclo e mantém o salário e os vales, extras e descontos', !r.erro && r.limpo.every(Boolean) && r.mantem.sal === 3000 && r.mantem.extra === 1, J);
+  t.ok('ciclo fechado não é alterado pelos dois botões', !r.erro && r.fechado === 777, J);
+  t.ok('sem erro na página', !erros.length, J);
+  await ctx.close();
+});
+
 teste('propostas-imagem-transparente', async (b, t) => {
   // "Essas imagens foram colocadas sem fundo, porém com temas escuros aparece
   // fundo branco": a imagem era achatada em JPG sobre branco ao entrar (e de
