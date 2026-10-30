@@ -11614,6 +11614,70 @@ teste('orcamento-chave-na-mao-total-do-servico', async (b, t) => {
   await ctx.close();
 });
 
+teste('orcamento-chave-valor-por-item', async (b, t) => {
+  // pedido: na aba Chave na mão, uma opção selecionável de valor por item
+  // (descrição, unidade, quantidade, valor unitário = soma automática),
+  // mantendo o valor geral por m². Trocar de jeito não apaga o que foi
+  // digitado no outro.
+  if (!fs.existsSync(path.join(RAIZ, 'orcamento-rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'orcamento-rm' });
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    window.confirm = () => true;
+    orcAba('cnm'); clearQuote(); await esp(30);
+    const set = (sel, v) => { const i = document.querySelector(sel); i.value = v; i.dispatchEvent(new Event('input')); };
+    const val = sel => (document.querySelector(sel) || {}).value;
+    set('#cnmM2', '100');
+    const [ele, hid] = cnmDados().servicos;
+    set('[data-cnmrm2="' + ele.id + '"]', '50');            // por m²: 5.000
+    const o = { botoes: [...document.querySelectorAll('#cnmModo [data-cnmpor]')].map(x => x.textContent), padrao: document.querySelector('#cnmModo [aria-pressed="true"]').textContent };
+    // liga "Por item"
+    document.querySelector('#cnmModo [data-cnmpor="item"]').click(); await esp(30);
+    o.dica = document.getElementById('cnmDica').textContent;
+    o.cabecalhoLeitura = !!document.querySelector('[data-cnmtot="' + ele.id + '"]').readOnly;
+    // abre a Hidráulica e lança dois itens
+    cnmAcha(hid.id).aberto = true; cnmRender();
+    cnmAddItem(hid.id); cnmAddItem(hid.id); await esp(20);
+    const its = cnmAcha(hid.id).itens;
+    const cel = (it, k, v) => set('[data-cnmit="' + hid.id + '|' + it.id + '"][data-k="' + k + '"]', v);
+    cel(its[0], 'desc', 'TUBO'); cel(its[0], 'un', 'MT'); cel(its[0], 'qtd', '10'); cel(its[0], 'vu', '12,50');   // 125,00
+    cel(its[1], 'desc', 'REGISTRO'); cel(its[1], 'un', 'PC'); cel(its[1], 'qtd', '3'); cel(its[1], 'vu', '1.000,10'); // 3.000,30
+    o.cols = [...document.querySelectorAll('[data-srv="' + hid.id + '"] thead th')].map(x => x.textContent.trim()).filter(Boolean);
+    o.linha1 = (document.querySelector('[data-cnmitot="' + hid.id + '|' + its[0].id + '"]') || {}).textContent;
+    o.linha2 = (document.querySelector('[data-cnmitot="' + hid.id + '|' + its[1].id + '"]') || {}).textContent;
+    o.servTot = val('[data-cnmtot="' + hid.id + '"]'); o.servM2 = val('[data-cnmrm2="' + hid.id + '"]');
+    o.subHid = cnmSub(cnmAcha(hid.id)); o.totalObra = cnmTotal();
+    o.novoServ = (() => { cnmAddServico('Fundação'); const n = cnmDados().servicos.slice(-1)[0]; return n.modo; })();
+    // PDF
+    let html = ''; esqEntregaPDF = h => { html = h; }; cnmPDF();
+    o.pdf = html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
+    // salva e reabre
+    S.orcamentosSalvos = []; salvarOrcamento(); await esp(20);
+    const salvo = S.orcamentosSalvos[0]; clearQuote(); loadOrcamento(salvo.id); await esp(30);
+    o.volta = { total: cnmTotal(), lista: cnmTotalDe(salvo.quote.chaveMao), por: cnmDados().valorPor, ativo: document.querySelector('#cnmModo [aria-pressed="true"]').textContent };
+    // volta para "Por serviço": o m² da Elétrica continua 50 (5.000); a Hidráulica volta ao que tinha (nada)
+    document.querySelector('#cnmModo [data-cnmpor="servico"]').click(); await esp(30);
+    o.depois = { eleTot: val('[data-cnmtot="' + ele.id + '"]'), hidModo: cnmAcha(hid.id).modo, itensGuardados: cnmAcha(hid.id).itens.length, hidSub: cnmSub(cnmAcha(hid.id)) };
+    // antigo: orçamento sem o campo continua como era
+    const velho = { cidade: '', m2: '100', servicos: [{ id: 'a', nome: 'X', rm2: '10', itens: [] }, { id: 'b', nome: 'Y', modo: 'total', total: '500', itens: [] }] };
+    o.velho = cnmTotalDe(velho);
+    return o;
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r).slice(0, 1600) + ' ' + erros.join(' | ');
+  t.ok('a etapa 2 tem "Por serviço" (padrão) e "Por item"', !r.erro && r.botoes.join('|') === 'Por serviço|Por item' && r.padrao === 'Por serviço', J);
+  t.ok('por item: colunas Descrição, Unid., Qtd., Valor unit. e Total, e o serviço vira só leitura', !r.erro && r.cols.join('|') === 'Item / descrição|Unid.|Qtd.|Valor unit. R$|Total R$' && r.cabecalhoLeitura, J);
+  t.ok('o total de cada item sai calculado (10 × 12,50 = 125,00; 3 × 1.000,10 = 3.000,30)', !r.erro && r.linha1 === '125,00' && r.linha2 === '3.000,30', J);
+  t.ok('o serviço soma os itens (3.125,30) e mostra o R$/m² (31,25)', !r.erro && r.servTot === '3.125,30' && r.servM2 === '31,25' && r.subHid === 3125.3, J);
+  t.ok('o total da obra soma os dois (5.000 da Elétrica no m² não conta em modo item: só os itens)', !r.erro && r.totalObra === 3125.3, J);
+  t.ok('serviço novo já nasce por item', !r.erro && r.novoServ === 'item', J);
+  t.ok('o PDF traz valor unitário e total de cada item', !r.erro && /Valor unit\./.test(r.pdf) && /12,50/.test(r.pdf) && /3\.000,30/.test(r.pdf) && /3\.125,30/.test(r.pdf), J);
+  t.ok('salvo e reaberto continua por item com o mesmo total', !r.erro && r.volta.total === 3125.3 && r.volta.lista === 3125.3 && r.volta.por === 'item' && r.volta.ativo === 'Por item', J);
+  t.ok('voltar a "Por serviço" devolve o m² da Elétrica (5.000) e não apaga os itens', !r.erro && r.depois.eleTot === '5.000,00' && r.depois.hidModo !== 'item' && r.depois.itensGuardados === 2, J);
+  t.ok('orçamento antigo (sem o campo) soma como sempre (10 × 100 + 500 = 1.500)', !r.erro && r.velho === 1500, J);
+  t.ok('sem erro na página', !erros.length, J);
+  await ctx.close();
+});
+
 teste('recibos-terceiro-cheque-no-lugar-de-dinheiro', async (b, t) => {
   // pedido: "espécie e dinheiro é a mesma coisa, falta opção de cheque no
   // lugar de um deles". Dinheiro sai, Cheque entra; o que já foi gravado como
