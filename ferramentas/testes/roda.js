@@ -14695,6 +14695,62 @@ teste('recibos-editar-emprestimo-e-valores', async (b, t) => {
   await ctx.close();
 });
 
+teste('recibos-assiduidade-30-dias', async (b, t) => {
+  // pedido: na Assiduidade/Rancho, o funcionário precisa de pelo menos 30 dias
+  // de casa, contando do dia da admissão; aviso na aba e na importação.
+  // Dados fictícios.
+  if (!fs.existsSync(path.join(RAIZ, 'recibos_rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'recibos_rm' });
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    const l = document.getElementById('loginScreen'); if (l) l.style.setProperty('display', 'none', 'important');
+    const mk = (id, nome, adm) => ({ id, nome, status: 'ativo', salario: 2000, docTipo: 'CPF', doc: '', dtInicio: adm });
+    state.employees = [mk('g1', 'ANA ANTIGA', '2031-01-01'), mk('g2', 'BRUNO NOVO', '2031-05-10'), mk('g3', 'CAIO LIMITE', '2031-05-02'),
+      mk('g4', 'DORA QUASE', '2031-05-03'), mk('g5', 'ELI SEMDATA', '')];
+    state.assiduidade = {};
+    document.querySelector('.vtab[data-v="assid"]').click(); await esp(60);
+    const defMes = (m, a) => { document.getElementById('asMes').value = m; document.getElementById('asAno').value = a; renderAssid(); };
+    defMes('4', '2031');
+    const nomes = () => [...document.querySelectorAll('#assidBody tr .forn .forn')].map(x => x.textContent.trim());
+    const o = { lista: nomes(), regra: document.getElementById('asRegra').textContent.replace(/\s+/g, ' ') };
+    o.dias = { g2: assidDiasDeCasa(state.employees[1], '2031-05'), g3: assidDiasDeCasa(state.employees[2], '2031-05'), g4: assidDiasDeCasa(state.employees[3], '2031-05') };
+    o.completa = [assidCompletaEm(state.employees[1]), assidCompletaEm(state.employees[3])];
+    // quem ficou fora não conta no prêmio nem no sorteio
+    document.getElementById('btnAsTodosAssid').click(); await esp(30);
+    o.assiduos = document.getElementById('asAssiduos').textContent;
+    // no SORTEIO entra qualquer um: quem faltou e quem não tem os 30 dias
+    const rec5 = state.assiduidade['2031-05'];
+    o.pool = assidPoolSorteio(rec5).map(e => e.id);
+    o.cartao = { falt: document.getElementById('asFaltaram').textContent, sub: document.getElementById('asFaltaramS').textContent, ranchos: document.getElementById('asRanchos').textContent };
+    o.semSorteio = assidLista();                                   // há quem concorre e ninguém sorteado: não gera
+    rec5.sortId = 'g2'; rec5.sortNome = 'BRUNO NOVO'; renderAssid();
+    o.sorteadoFica = rec5.sortNome;                                // o sorteado sem 30 dias não é apagado
+    const L = assidLista(); o.arquivo = L ? L.assiduos.map(e => e.nome) : null;
+    // junho: o mesmo funcionário já passa dos 30 dias
+    defMes('5', '2031'); o.junho = nomes();
+    // aviso da importação do cartão RHID
+    o.rhid = assidAvisoRhid('2031-05', ['g2', 'g4', 'g1']);
+    o.rhidNenhum = assidAvisoRhid('2031-05', ['g1']);
+    o.rhidChama = /assidAvisoRhid/.test(pfRhidLerArquivo.toString());
+    // mês já decidido antes da regra: quem estava marcado continua
+    defMes('4', '2031'); state.assiduidade['2031-05'].assid['g2'] = true; defMes('4', '2031'); o.decidido = nomes();
+    return o;
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  t.ok('conta do dia da admissão: 2/5 já tem 30 dias em 31/05; 3/5 só 29; 10/5 só 22', !r.erro && r.dias.g3 === 30 && r.dias.g4 === 29 && r.dias.g2 === 22, J);
+  t.ok('em maio ficam na lista só quem tem 30 dias (e quem não tem data, que não dá para conferir)', !r.erro && r.lista.join('|') === 'Ana Antiga|Caio Limite|Eli Semdata', J);
+  t.ok('a aba avisa a regra, quem ficou de fora e quando completa 30 dias', !r.erro && /pelo menos 30 dias de casa/.test(r.regra) && /Bruno Novo/.test(r.regra) && /Dora Quase/.test(r.regra) && r.completa[0] === '2031-06-08' && r.completa[1] === '2031-06-01' && /08\/06\/2031/.test(r.regra), J);
+  t.ok('a aba avisa quem está sem data de admissão', !r.erro && /Sem data de admissão/.test(r.regra) && /Eli Semdata/.test(r.regra), J);
+  t.ok('quem ficou fora não conta nos assíduos nem no arquivo do grupo', !r.erro && r.assiduos === '3' && r.arquivo.length === 3 && !r.arquivo.some(n => /BRUNO|DORA/.test(n)), J);
+  t.ok('no sorteio entra qualquer pessoa, mesmo sem os 30 dias (Bruno e Dora concorrem)', !r.erro && r.pool.join('|') === 'g2|g4' && /\+2 sem 30 dias/.test(r.cartao.sub) && r.cartao.falt === '0' && r.cartao.ranchos === '4', J);
+  t.ok('havendo quem concorre, o arquivo só sai depois do sorteio; e o sorteado sem 30 dias fica', !r.erro && r.semSorteio === null && r.sorteadoFica === 'BRUNO NOVO', J);
+  t.ok('em junho o mesmo funcionário já entra', !r.erro && r.junho.includes('Bruno Novo') && r.junho.includes('Dora Quase'), J);
+  t.ok('o mês já decidido antes da regra não muda (quem estava marcado continua)', !r.erro && r.decidido.includes('Bruno Novo') && !r.decidido.includes('Dora Quase'), J);
+  t.ok('a importação do cartão RHID avisa quem tem menos de 30 dias (e não fala de quem tem)', !r.erro && /2 funcionários com menos de 30 dias de casa/.test(r.rhid) && /Bruno/.test(r.rhid) && /Dora/.test(r.rhid) && !/Ana/.test(r.rhid) && r.rhidNenhum === '' && r.rhidChama, J);
+  t.ok('sem erro na página', !erros.length, J);
+  await ctx.close();
+});
+
 teste('propostas-imagem-transparente', async (b, t) => {
   // "Essas imagens foram colocadas sem fundo, porém com temas escuros aparece
   // fundo branco": a imagem era achatada em JPG sobre branco ao entrar (e de
