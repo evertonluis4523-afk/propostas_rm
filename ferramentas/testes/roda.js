@@ -4237,6 +4237,43 @@ teste('leitor-cobertura-ficha-montador', async (b, t) => {
   await ctx.close();
 });
 
+teste('leitor-cobertura-ficha-sem-corte', async (b, t) => {
+  // "informações cortadas na folha do montador": a lista de telhas passava da
+  // folha e o fim ficava escondido (A-08..A-16, B-10). Mede dentro do app, com
+  // o estilo real, se algum quadro da folha tem conteúdo além da área visível.
+  if (!fs.existsSync(path.join(RAIZ, 'leitor_dwg'))) return;
+  const L = (ax, ay, bx, by) => [ax, ay, bx, by, 7, '0', 'LINE'];
+  const gable = (W, H) => [L(0, H / 2, W, H / 2), L(0, H / 2, 0, H), L(0, H / 2, 0, 0), L(W, H / 2, W, H), L(W, H / 2, W, 0), L(W, 0, 0, 0), L(0, H, W, H)];
+  const diag = (W, H) => [L(0, H / 2, W, H / 2), L(0, H / 2, 0, H), L(0, H / 2, 0, 0), L(W, H / 2, W, H * 0.7), L(W, H / 2, W, 0), L(W, 0, 0, 0), L(0, H, W * 0.75, H), L(W * 0.75, H, W, H * 0.7)];
+  const casos = { quadrada: gable(10000, 10000), diagonal: diag(10000, 10000), media: gable(18000, 8000), comprida: gable(30000, 6000) };
+  const r = {}; let erroGeral = '';
+  for (const [nome, linhas] of Object.entries(casos)) {
+    const arq = dxfTeste('corte_' + nome, linhas, [], 4);
+    const { ctx, pg, erros } = await abre(b, { 'sis.local': 'leitor_dwg' }); await semLogin(pg);
+    try {
+      await pg.click('[data-aba="tel"]').catch(() => {}); await pg.waitForTimeout(400);
+      await pg.setInputFiles('#fileTel', arq); await pg.waitForTimeout(1500);
+      if (await pg.evaluate(() => { const g = document.getElementById('unitGate'); return g && !g.classList.contains('hide'); })) await pg.click('[data-unit-choice="1"]');
+      await pg.waitForTimeout(600);
+      await pg.evaluate(() => { const bt = [...document.querySelectorAll('button')].find(x => x.innerText.trim() === 'Cobertura'); if (bt) bt.click(); }); await pg.waitForTimeout(1500);
+      r[nome] = await pg.evaluate(() => {
+        const C = window.rmCobertura; C.detectar(); C.estado.util = 980; C.estado.confirmada = true;
+        let el = document.getElementById('printArea'); if (!el) { el = document.createElement('div'); el.id = 'printArea'; document.body.appendChild(el); }
+        el.style.cssText = 'display:block;position:absolute;left:0;top:0;width:297mm;z-index:99999';
+        el.innerHTML = C.fichaHTML();
+        const f = [...el.querySelectorAll('.tmf')];
+        return { folhas: f.length, cortados: f.reduce((n, a) => n + [a, ...a.querySelectorAll('div')].filter(d => d.scrollHeight > d.clientHeight + 1).length, 0),
+          faixas: (f[1] && f[1].querySelector('.tf, .tmf-tx b') || {}).textContent };
+      });
+    } catch (e) { r[nome] = { erro: e.message }; }
+    if (erros.length) erroGeral += erros.join(' | ');
+    await ctx.close();
+  }
+  const J = JSON.stringify(r) + ' ' + erroGeral;
+  for (const nome of Object.keys(casos)) t.ok('folha ' + nome + ': nada cortado (lista e desenho cabem na folha)', !r[nome].erro && r[nome].folhas >= 2 && r[nome].cortados === 0, J);
+  t.ok('sem erro na página', !erroGeral, J);
+});
+
 teste('leitor-cobertura-ficha-cumeeira', async (b, t) => {
   if (!fs.existsSync(path.join(RAIZ, 'leitor_dwg'))) return;
   const L = (ax, ay, bx, by, cor) => [ax, ay, bx, by, cor || 7, '0', 'LINE'];
