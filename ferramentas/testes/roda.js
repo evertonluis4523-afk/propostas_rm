@@ -8257,6 +8257,67 @@ teste('recibos-pf-resumo-escolher', async (b, t) => {
   await ctx.close();
 });
 
+teste('recibos-pf-unimed', async (b, t) => {
+  // "Todo mês preciso gerar do site da Unimed e enviar; quero um botão de importar":
+  // titular paga 50% da mensalidade, cônjuge/filhos 100%, sócios 100% em bloco
+  // à parte, desligados avisados. Só a mensalidade conta (não a coparticipação).
+  if (!fs.existsSync(path.join(RAIZ, 'recibos_rm'))) return;
+  const cab = 'UNIMED;CARTEIRA;NOME BENEFICIARIO;CPF;DATA NASCIMENTO;DATA INCLUSAO;MATRICULA;RESPONSAVEL;ESPECIFICO EMPRESA;GRAU PARENTESCO;VL.MENSALIDADE;VL.COPARTICIPACAO;VL.OPERACIONAL;VL.INSCRICAO;VL.REAJUSTE RETROATIVO;VL.TOTAL';
+  const L = (nome, cpf, resp, grau, mens, cop) => ['29', '1,6E+12', nome, cpf, '01/01/1990', '01/02/2026', '', resp, '', grau, mens, cop || '0', '0', '0', '0', mens].join(';');
+  const csv = ['NOME EMPRESA;CNPJ;MOD;TERMO;COD E.M.S.', 'EMPRESA FICTICIA LTDA;;16;1;2', 'PLANO;TIPO PLANO', '8 - PLANO TESTE;1 - TAXA', cab,
+    L('ALFA TESTE', '1234567890', 'ALFA TESTE', 'TITULAR', '100,00'),
+    L('ALFA CONJUGE', '111', 'ALFA TESTE', 'CONJUGE', '80,00', '139'),
+    L('BETA TESTE', '22222222222', 'BETA TESTE', 'TITULAR', '120,50'),
+    L('BETA FILHO', '333', 'BETA TESTE', 'FILHO(A) / ENTEADO(A)', '90,10'),
+    L('SOCIO UM TESTE', '44444444444', 'SOCIO UM TESTE', 'TITULAR', '300,00'),
+    L('SOCIO UM PARCEIRA', '555', 'SOCIO UM TESTE', 'CONJUGE', '200,00'),
+    L('SOCIO UM TESTE JUNIOR', '66666666666', 'SOCIO UM TESTE JUNIOR', 'TITULAR', '100,00'),
+    L('GAMA SAIU ANTES', '77777777777', 'GAMA SAIU ANTES', 'TITULAR', '100,00'),
+    L('DELTA SAIU NO MES', '88888888888', 'DELTA SAIU NO MES', 'TITULAR', '100,00'),
+    L('MARIA JOSÉ SEM CADASTRO', '99999999999', 'MARIA JOSÉ SEM CADASTRO', 'TITULAR', '100,00')].join('\r\n') + '\r\n';
+  const dir = path.join(require('os').tmpdir(), 'rm-testes-unimed'); fs.mkdirSync(dir, { recursive: true });
+  const arq = path.join(dir, 'unimed_teste.csv'); fs.writeFileSync(arq, Buffer.from(csv, 'latin1'));
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'recibos_rm' }, 'index.html', { relogio: '2026-10-01T12:00:00-03:00', fuso: 'America/Sao_Paulo' });
+  let r = {};
+  try {
+    await pg.evaluate(async () => {
+      const l = document.getElementById('loginScreen'); if (l) l.style.setProperty('display', 'none', 'important');
+      state.employees = [
+        { id: 'a', nome: 'ALFA TESTE', doc: '012.345.678-90', status: 'ativo', metodo: 'pf', salario: 2000, dtInicio: '2026-01-05', funcao: 'Pintor' },
+        { id: 'b', nome: 'BETA TESTE', doc: '', status: 'ativo', metodo: 'pf', salario: 2100, dtInicio: '2026-01-05', funcao: 'Soldador' },
+        { id: 'j', nome: 'SOCIO UM TESTE JUNIOR', doc: '', status: 'ativo', metodo: 'pf', salario: 2100, dtInicio: '2026-01-05', funcao: 'Auxiliar' },
+        { id: 'g', nome: 'GAMA SAIU ANTES', doc: '', status: 'desligado', dtDesligamento: '2026-08-15', salario: 2000, dtInicio: '2025-01-05' },
+        { id: 'd', nome: 'DELTA SAIU NO MES', doc: '', status: 'desligado', dtDesligamento: '2026-09-10', salario: 2000, dtInicio: '2025-01-05' }];
+      state.cfg.unimedSocios = ['SOCIO UM TESTE'];
+      document.querySelector('.vtab[data-v="pf"]').click();
+      const m = document.getElementById('pfMes'); m.value = '2026-09'; m.dispatchEvent(new Event('change'));
+    });
+    await pg.setInputFiles('#pfUnimedFile', arq); await pg.waitForTimeout(800);
+    r = await pg.evaluate(() => {
+      const c = pfUnimedCalc('2026-09'), un = id => (c.porEmp.get(id) || {});
+      const lin = pfDadosContabilidade('2026-09').find(x => x.e && x.e.id === 'a');
+      return { corpo: document.getElementById('pfUnimedCorpo').innerText.replace(/\s+/g, ' '),
+        alfa: un('a').descontar, beta: un('b').descontar, junior: un('j').descontar,
+        socios: c.socios.map(x => x.nome + ':' + x.total), totalSocios: c.totalSocios, total: c.total,
+        desl: c.desligados.map(x => x.nome + ':' + x.aviso), sem: c.semCadastro.map(x => x.nome),
+        planoNaLinha: lin && lin.plano, notas: pfUnimedNotasExcel('2026-09').join(' | '),
+        salvo: !!(state.unimed && state.unimed['2026-09'] && state.unimed['2026-09'].linhas.length === 10) };
+    });
+  } catch (e) { r.erro = e.message; }
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  t.ok('titular 50% + cônjuge 100%; coparticipação fica de fora (CPF com zero à esquerda casa)', !r.erro && r.alfa === 130, J);
+  t.ok('titular 50% arredondado + filho 100%', !r.erro && r.beta === 150.35, J);
+  t.ok('"Rudimar Nunes" não puxa o "Rudimar Nunes Junior": só nome exato', !r.erro && r.junior === 50 && JSON.stringify(r.socios) === '["SOCIO UM TESTE:500"]', J);
+  t.ok('sócio com vinculados: 100% de todos, em bloco à parte e fora do total dos funcionários', !r.erro && r.totalSocios === 500 && r.total === 330.35, J);
+  t.ok('desligados na lista avisam: antes do mês e no mês', !r.erro && JSON.stringify(r.desl) === '["DELTA SAIU NO MES:mes","GAMA SAIU ANTES:antes"]' && /tirar da Unimed/.test(r.corpo), J);
+  t.ok('quem não está no cadastro aparece para conferir (arquivo em Latin-1 lido com acento)', !r.erro && r.sem.length === 1 && /JOSÉ/.test(r.sem[0]), J);
+  t.ok('o parentesco sai por extenso (filho/enteado, companheiro)', !r.erro && /filho\(a\)\/enteado\(a\)/.test(r.corpo), J);
+  t.ok('o valor vai para a linha da contabilidade e fica guardado na competência', !r.erro && r.planoNaLinha === 130 && r.salvo, J);
+  t.ok('as notas do Excel levam o sócio e o aviso dos desligados', !r.erro && /Sócio fora da folha/.test(r.notas) && /ATENÇÃO desligado/.test(r.notas), J);
+  t.ok('sem erro na página', !erros.length, J);
+  await ctx.close();
+});
+
 teste('recibos-pf-fechar-selecao-propria', async (b, t) => {
   // "Já fechei o mês PF e continua pedindo para fechar o ponto": a seleção do
   // Resumo contabilidade era a mesma do Fechar mês. Quem foi tirado do resumo
