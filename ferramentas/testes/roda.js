@@ -8318,6 +8318,34 @@ teste('recibos-pf-unimed', async (b, t) => {
   await ctx.close();
 });
 
+teste('recibos-pf-salario-fixo-no-relatorio', async (b, t) => {
+  // "No relatório da aba PF precisa sair uma coluna com o salário fixo antes
+  // da insalubridade": no resumo impresso e no Excel da contabilidade
+  if (!fs.existsSync(path.join(RAIZ, 'recibos_rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'recibos_rm' }, 'index.html', { relogio: '2026-10-01T12:00:00-03:00', fuso: 'America/Sao_Paulo' });
+  let r = {};
+  try {
+    r = await pg.evaluate(async () => {
+      const esp = ms => new Promise(x => setTimeout(x, ms));
+      const l = document.getElementById('loginScreen'); if (l) l.style.setProperty('display', 'none', 'important');
+      state.employees = [{ id: 'pa', nome: 'ALFA TESTE PF', status: 'ativo', metodo: 'pf', salario: 2345.67, insalubridade: 20, dtInicio: '2026-01-05', funcao: 'Pintor' }];
+      document.querySelector('.vtab[data-v="pf"]').click(); await esp(150);
+      const m = document.getElementById('pfMes'); m.value = '2026-09'; m.dispatchEvent(new Event('change')); await esp(100);
+      const dados = pfDadosContabilidade('2026-09');
+      document.getElementById('pfRelatorio').click(); await esp(150);
+      document.getElementById('pfRelGerar').click(); await esp(300);
+      const ths = [...document.querySelectorAll('#printScroll .pf-resumo thead th')].map(x => x.textContent.trim());
+      const tds = [...document.querySelectorAll('#printScroll .pf-resumo tbody tr:first-child td')].map(x => x.textContent.trim());
+      return { ths: ths.slice(0, 4), tds: tds.slice(0, 4), linhas: dados.length };
+    });
+  } catch (e) { r.erro = e.message; }
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  t.ok('no resumo impresso, "Salário fixo" vem logo antes de "Insalub."', !r.erro && r.ths[1] === 'Salário fixo' && r.ths[2] === 'Insalub.', J);
+  t.ok('o valor é o salário mensal do cadastro', !r.erro && /2\.345,67/.test(r.tds[1]) && /20/.test(r.tds[2]), J);
+  t.ok('sem erro na página', !erros.length, J);
+  await ctx.close();
+});
+
 teste('recibos-pf-fechar-selecao-propria', async (b, t) => {
   // "Já fechei o mês PF e continua pedindo para fechar o ponto": a seleção do
   // Resumo contabilidade era a mesma do Fechar mês. Quem foi tirado do resumo
@@ -8396,11 +8424,13 @@ teste('recibos-pf-excel-profissional', async (b, t) => {
     const ws = wb.worksheets[0], ws2 = wb.worksheets[1];
     const textos = []; ws.eachRow(row => row.eachCell(c => { if (typeof c.value === 'string') textos.push(c.value); }));
     let totalRow = null; ws.eachRow((row, n) => { if (/^TOTAL/i.test(String(row.getCell(1).value || ''))) totalRow = n; });
-    const tot = totalRow ? ws.getRow(totalRow).getCell(14).value : null;
+    const tot = totalRow ? ws.getRow(totalRow).getCell(15).value : null;
+    let cab = null, valFixo = null; ws.eachRow((row, n) => { row.eachCell((c, k) => { if (c.value === 'Salário fixo' && !cab) { cab = [String(row.getCell(k).value), String(row.getCell(k + 1).value)]; } }); });
+    ws.eachRow(row => { if (/Alfa Teste/i.test(String(row.getCell(1).value || ''))) valFixo = row.getCell(5).value; });
     let primeira = null; ws.eachRow((row, n) => { if (!primeira && /Alfa Teste/i.test(String(row.getCell(1).value || ''))) primeira = n; });
     const fonteNome = primeira ? (ws.getRow(primeira).getCell(1).font || {}).size : 0, fonteNum = primeira ? (ws.getRow(primeira).getCell(4).font || {}).size : 0;
     const bordas = primeira ? [1, 5, 11, 14].every(c => { const bd = ws.getRow(primeira).getCell(c).border || {}; return bd.top && bd.bottom && bd.left && bd.right; }) : false;
-    return { nome: baixados[0].nome, p1: await proporcao(ws), p2: ws2 ? await proporcao(ws2) : null, textos: [...new Set(textos)].join(' | ').slice(0, 1500),
+    return { cab, valFixo, nome: baixados[0].nome, p1: await proporcao(ws), p2: ws2 ? await proporcao(ws2) : null, textos: [...new Set(textos)].join(' | ').slice(0, 1500),
       totalFormula: tot && tot.formula ? tot.formula : '', bordas, fonteNome, fonteNum, titulos: ws.pageSetup.printTitlesRow || '', titulos2: ws2 ? ws2.pageSetup.printTitlesRow || '' : '' };
   }).catch(e => ({ erro: e.message }));
   const J = JSON.stringify(r).slice(0, 1400);
@@ -8408,7 +8438,8 @@ teste('recibos-pf-excel-profissional', async (b, t) => {
   t.ok('logo na proporção certa (resumo e folha de cada PF)', !r.erro && certo(r.p1) && certo(r.p2), J);
   t.ok('logo grande (pelo menos 40 px de altura no resumo) e letra de 11 pt ou mais nos nomes e números', !r.erro && r.p1.alt >= 40 && r.p2.alt >= 36 && r.fonteNome >= 11 && r.fonteNum >= 11, J);
   t.ok('colunas agrupadas (proventos, horas, descontos)', !r.erro && /Proventos/i.test(r.textos) && /Horas/i.test(r.textos) && /Descontos/i.test(r.textos), J);
-  t.ok('linha de totais com fórmula', !r.erro && /SUM\(N\d+:N\d+\)/.test(r.totalFormula), J);
+  t.ok('linha de totais com fórmula', !r.erro && /SUM\(O\d+:O\d+\)/.test(r.totalFormula), J);
+  t.ok('no Excel, "Salário fixo" vem logo antes de "Insalubridade" e traz o salário mensal', !r.erro && r.cab && r.cab[0] === 'Salário fixo' && r.cab[1] === 'Insalubridade' && r.valFixo === 2000, J);
   t.ok('grade em todas as células e cabeçalho repetido na impressão', !r.erro && r.bordas && /\d+:\d+/.test(r.titulos) && /\d+:\d+/.test(r.titulos2), J);
   t.ok('sem erro na página', !erros.length, erros.join(' | '));
   await ctx.close();
