@@ -8300,8 +8300,20 @@ teste('recibos-pf-unimed', async (b, t) => {
         alfa: un('a').descontar, beta: un('b').descontar, junior: un('j').descontar,
         socios: c.socios.map(x => x.nome + ':' + x.total), totalSocios: c.totalSocios, total: c.total,
         desl: c.desligados.map(x => x.nome + ':' + x.aviso), sem: c.semCadastro.map(x => x.nome),
-        planoNaLinha: lin && lin.plano, notas: pfUnimedNotasExcel('2026-09').join(' | '),
+        planoNaLinha: lin && lin.plano, blocos: pfUnimedBlocos('2026-09'),
+        html: pfResumoContabilHTML(null, '2026-09').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' '),
         salvo: !!(state.unimed && state.unimed['2026-09'] && state.unimed['2026-09'].linhas.length === 10) };
+    });
+    r.excel = await pg.evaluate(async () => {
+      const esp = ms => new Promise(x => setTimeout(x, ms));
+      const baixados = [], clk = HTMLAnchorElement.prototype.click;
+      HTMLAnchorElement.prototype.click = function () { if (this.download) baixados.push({ href: this.href }); else clk.call(this); };
+      pfExcel(); for (let i = 0; i < 60 && !baixados.length; i++) await esp(100);
+      HTMLAnchorElement.prototype.click = clk;
+      if (!baixados.length) return { erro: 'o Excel não foi gerado' };
+      const wb = new ExcelJS.Workbook(); await wb.xlsx.load(await (await fetch(baixados[0].href)).arrayBuffer());
+      const txt = []; wb.worksheets[0].eachRow(row => row.eachCell(c => { if (c.value != null && typeof c.value !== 'object') txt.push(String(c.value)); }));
+      return { texto: txt.join(' | ') };
     });
   } catch (e) { r.erro = e.message; }
   const J = JSON.stringify(r) + ' ' + erros.join(' | ');
@@ -8313,7 +8325,8 @@ teste('recibos-pf-unimed', async (b, t) => {
   t.ok('quem não está no cadastro aparece para conferir (arquivo em Latin-1 lido com acento)', !r.erro && r.sem.length === 1 && /JOSÉ/.test(r.sem[0]), J);
   t.ok('o parentesco sai por extenso (filho/enteado, companheiro)', !r.erro && /filho\(a\)\/enteado\(a\)/.test(r.corpo), J);
   t.ok('o valor vai para a linha da contabilidade e fica guardado na competência', !r.erro && r.planoNaLinha === 130 && r.salvo, J);
-  t.ok('as notas do Excel levam o sócio e o aviso dos desligados', !r.erro && /Sócio fora da folha/.test(r.notas) && /ATENÇÃO desligado/.test(r.notas), J);
+  t.ok('o PDF (resumo impresso) traz os sócios com os vinculados e os desligados ainda na Unimed', !r.erro && /sócios e vinculados/i.test(r.html) && /Socio Um Teste \(titular\) R\$ 300,00/.test(r.html) && /Socio Um Parceira \(cônjuge\) R\$ 200,00/.test(r.html) && /Desligados que ainda estão com a Unimed ativa/i.test(r.html) && /Gama Saiu Antes/.test(r.html), J);
+  t.ok('o Excel traz os quadros dos sócios (total 500) e dos desligados com Unimed ativa', !r.erro && !r.excel.erro && /SÓCIOS E VINCULADOS/.test(r.excel.texto) && /Socio Um Teste \(titular\)/.test(r.excel.texto) && /\| 500 \|/.test(r.excel.texto) && /DESLIGADOS QUE AINDA ESTÃO COM A UNIMED ATIVA/.test(r.excel.texto) && /Delta Saiu No Mes/.test(r.excel.texto), J);
   t.ok('sem erro na página', !erros.length, J);
   await ctx.close();
 });
