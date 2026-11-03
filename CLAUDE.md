@@ -20,6 +20,11 @@ Ao terminar:
 3. Rode `node ferramentas/testes/roda.js /pasta-com-todos`. Só publique com
    **0 falha**. Defeito corrigido ganha teste.
 4. Commit, PR e merge no `main`.
+5. **Atualize o Cloudflare Pages** (sem este passo o app desktop não recebe
+   a versão nova): rode `bash scripts/site.sh "o que mudou"` ou, se `gh`
+   não estiver disponível, rode `python3 ferramentas/monta_site.py` na pasta
+   de todos para `rm-sistemas/`, commit e push no main de `rm-sistemas`.
+   Só diga que publicou quando o Cloudflare confirmar ou o push estiver feito.
 
 Regra mudou? Ela muda no `PADRAO_RM.md` e nos blocos de **todos** os
 sistemas no mesmo trabalho -- nunca em um só.

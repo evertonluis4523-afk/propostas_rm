@@ -4237,6 +4237,42 @@ teste('leitor-cobertura-ficha-montador', async (b, t) => {
   await ctx.close();
 });
 
+teste('leitor-cobertura-ficha-cumeeira', async (b, t) => {
+  if (!fs.existsSync(path.join(RAIZ, 'leitor_dwg'))) return;
+  const L = (ax, ay, bx, by, cor) => [ax, ay, bx, by, cor || 7, '0', 'LINE'];
+  const linhas = [
+    L(0, 5000, 10000, 5000), L(0, 5000, 0, 10000), L(0, 5000, 0, 0),
+    L(10000, 5000, 10000, 10000), L(10000, 5000, 10000, 0),
+    L(10000, 0, 0, 0), L(0, 10000, 10000, 10000)];
+  const arq = dxfTeste('ficha_cum', linhas, [], 4);
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'leitor_dwg' }); await semLogin(pg);
+  let r = {};
+  try {
+    await pg.click('[data-aba="tel"]').catch(() => {}); await pg.waitForTimeout(400);
+    await pg.setInputFiles('#fileTel', arq); await pg.waitForTimeout(1500);
+    if (await pg.evaluate(() => { const g = document.getElementById('unitGate'); return g && !g.classList.contains('hide'); })) await pg.click('[data-unit-choice="1"]');
+    await pg.waitForTimeout(600);
+    await pg.evaluate(() => { const bt = [...document.querySelectorAll('button')].find(x => x.innerText.trim() === 'Cobertura'); if (bt) bt.click(); }); await pg.waitForTimeout(1500);
+    r = await pg.evaluate(() => {
+      const C = window.rmCobertura; C.detectar();
+      C.estado.util = 980; C.estado.confirmada = true;
+      const html = C.fichaHTML();
+      const mLin = html.match(/<line x1="([\d.]+)" y1="([\d.]+)" x2="([\d.]+)" y2="([\d.]+)"[^>]*stroke-dasharray/);
+      const temCumLinha = !!mLin && Math.hypot(+mLin[3] - +mLin[1], +mLin[4] - +mLin[2]) > 300;
+      const temCumTexto = /CUMEEIRA/.test(html);
+      const temFace = /FACE/.test(html);
+      const svgMatch = html.match(/viewBox="0 0 (\d+) (\d+)"/);
+      const svgH = svgMatch ? +svgMatch[2] : 0;
+      return { html: html.length, temCumLinha, temCumTexto, temFace, svgH };
+    });
+  } catch (e) { r.erro = e.message; }
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  t.ok('a ficha de planta tem a linha tracejada da cumeeira, de ponta a ponta do contorno', !r.erro && r.temCumLinha, J);
+  t.ok('o rótulo CUMEEIRA aparece na vista planificada', !r.erro && r.temCumTexto, J);
+  t.ok('sem erro na página', !erros.length, J);
+  await ctx.close();
+});
+
 teste('leitor-cobertura-dxf-arranjo', async (b, t) => {
   // "por que o DXF gerado não se organiza conforme o projeto?" -- dois
   // galpões de duas águas, lado a lado, saíam em escada: as águas eram
