@@ -8542,6 +8542,66 @@ teste('recibos-rhid-conferencia', async (b, t) => {
   await ctx.close();
 });
 
+teste('recibos-assid-atualizar-ponto', async (b, t) => {
+  if (!fs.existsSync(path.join(RAIZ, 'recibos_rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'recibos_rm' });
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    const l = document.getElementById('loginScreen'); if (l) l.style.setProperty('display', 'none', 'important');
+    state.employees = [
+      { id: 'a1', nome: 'MARIA FICTICIA', status: 'ativo', metodo: 'carteira', doc: '111', salario: 2000, dtInicio: '2026-01-01' },
+      { id: 'a2', nome: 'JOAO FICTICIO', status: 'ativo', metodo: 'carteira', doc: '222', salario: 2500, dtInicio: '2026-01-01' }
+    ];
+    const mkItem = (nome, cpf, empId, diasFalta, datasFalta) => ({
+      nome, cpf, empId, pagina: 1,
+      diasFalta, datasFalta, faltaMin: diasFalta * 528,
+      diasAtestado: 0, atestadoMin: 0, abonoMin: 0,
+      diasAfastado: 0, afastadoMin: 0, motivoAfast: '',
+      diasFerias: 0, repousoMin: 0,
+      extra0Min: 0, extra0NotMin: 0, extra50Min: 0, extra50NotMin: 0,
+      extra100Min: 0, extra100NotMin: 0, diurnaTotMin: 0, noturnaTotMin: 0,
+      diasFaltaColuna: diasFalta
+    });
+    state.rhid = { '2026-10': {
+      arquivo: 'primeiro.pdf', importadoEm: new Date().toISOString(), casados: 2, conferir: 0,
+      itens: [mkItem('MARIA FICTICIA', '111', 'a1', 3, ['2026-10-05','2026-10-06','2026-10-07']),
+              mkItem('JOAO FICTICIO', '222', 'a2', 0, [])]
+    }};
+    document.querySelector('.vtab[data-v="assid"]').click(); await esp(80);
+    document.getElementById('asMes').value = '9';
+    document.getElementById('asAno').value = '2026';
+    renderAssid(); await esp(30);
+    const linhas = () => [...document.querySelectorAll('#assidBody tr')].map(tr => ({ nome: (tr.querySelector('.forn .forn') || {}).textContent || '', html: tr.innerHTML }));
+    const temFalta = (ls, nome) => { const l = ls.find(x => x.nome.includes(nome)); return l ? /dias? de falta/.test(l.html) : false; };
+    const antes = linhas();
+    const mariaFaltaAntes = temFalta(antes, 'Maria');
+    const joaoFaltaAntes = temFalta(antes, 'Joao');
+    state.rhid['2026-10'] = {
+      arquivo: 'segundo.pdf', importadoEm: new Date().toISOString(), casados: 2, conferir: 0,
+      itens: [mkItem('MARIA FICTICIA', '111', 'a1', 0, []),
+              mkItem('JOAO FICTICIO', '222', 'a2', 2, ['2026-10-12','2026-10-13'])]
+    };
+    const sem = linhas();
+    const mariaSem = temFalta(sem, 'Maria');
+    const btn = document.getElementById('asAtualizar');
+    const temBotao = !!btn;
+    if (btn) btn.click(); await esp(30);
+    const depois = linhas();
+    const mariaFaltaDepois = temFalta(depois, 'Maria');
+    const joaoFaltaDepois = temFalta(depois, 'Joao');
+    const fonteAtualizado = document.getElementById('asFonte').textContent;
+    return { temBotao, mariaFaltaAntes, joaoFaltaAntes, mariaSem, mariaFaltaDepois, joaoFaltaDepois, fonteAtualizado };
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r);
+  t.ok('botão Atualizar ponto aparece quando há RHID', !r.erro && r.temBotao, J);
+  t.ok('antes da atualização mostra Maria com falta e João sem', !r.erro && r.mariaFaltaAntes && !r.joaoFaltaAntes, J);
+  t.ok('sem clicar Atualizar, os dados antigos continuam (Maria ainda com falta)', !r.erro && r.mariaSem, J);
+  t.ok('depois de clicar Atualizar, Maria fica sem falta e João com 2 faltas', !r.erro && !r.mariaFaltaDepois && r.joaoFaltaDepois, J);
+  t.ok('a fonte mostra o nome do arquivo atualizado', !r.erro && /segundo\.pdf/.test(r.fonteAtualizado), J);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
 teste('recibos-pf-fds-nao-pendente', async (b, t) => {
   if (!fs.existsSync(path.join(RAIZ, 'recibos_rm'))) return;
   const { ctx, pg, erros } = await abre(b, { 'sis.local': 'recibos_rm' });
