@@ -8488,6 +8488,77 @@ teste('recibos-pf-fim-semana-feriado', async (b, t) => {
   await ctx.close();
 });
 
+teste('recibos-rhid-conferencia', async (b, t) => {
+  if (!fs.existsSync(path.join(RAIZ, 'recibos_rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'recibos_rm' });
+  const r = await pg.evaluate(async () => {
+    const l = document.getElementById('loginScreen'); if (l) l.style.setProperty('display', 'none', 'important');
+    state.employees = [
+      { id: 'r1', nome: 'ANA TESTE', status: 'ativo', metodo: 'carteira', doc: '111', salario: 3000, dtInicio: '2026-01-01' },
+      { id: 'r2', nome: 'BRUNO TESTE', status: 'ativo', metodo: 'carteira', doc: '222', salario: 2500, dtInicio: '2026-05-01' }
+    ];
+    const fakeFile = { name: 'teste-rhid.pdf' };
+    const itens = [
+      { nome: 'ANA TESTE', cpf: '111', empId: 'r1', pagina: 1,
+        diasFalta: 2, datasFalta: ['2026-10-05', '2026-10-14'], faltaMin: 1056,
+        diasAtestado: 1, atestadoMin: 528, abonoMin: 528,
+        diasAfastado: 0, afastadoMin: 0, motivoAfast: '',
+        diasFerias: 0, repousoMin: 440,
+        extra0Min: 0, extra0NotMin: 0, extra50Min: 120, extra50NotMin: 0,
+        extra100Min: 0, extra100NotMin: 0, diurnaTotMin: 120, noturnaTotMin: 0,
+        diasFaltaColuna: 2 },
+      { nome: 'BRUNO TESTE', cpf: '222', empId: 'r2', pagina: 2,
+        diasFalta: 0, datasFalta: [], faltaMin: 0,
+        diasAtestado: 0, atestadoMin: 0, abonoMin: 0,
+        diasAfastado: 3, afastadoMin: 1584, motivoAfast: 'Licença médica',
+        diasFerias: 0, repousoMin: 0,
+        extra0Min: 0, extra0NotMin: 0, extra50Min: 60, extra50NotMin: 0,
+        extra100Min: 480, extra100NotMin: 0, diurnaTotMin: 540, noturnaTotMin: 0,
+        diasFaltaColuna: 0 }
+    ];
+    pfRhidMostrarConferencia(fakeFile, '2026-10', itens, 2, 0);
+    const modal = document.getElementById('rhidConfModal');
+    const aberto = modal && modal.classList.contains('open');
+    const titulo = document.getElementById('rhidConfTitle').textContent;
+    const cards = document.getElementById('rhidConfCards').textContent;
+    const body = document.getElementById('rhidConfBody').innerHTML;
+    const detalhe = document.getElementById('rhidConfDetalhe').textContent;
+    document.getElementById('btnRhidConfOk').click();
+    const fechou = modal && !modal.classList.contains('open');
+    const gravou = state.rhid && state.rhid['2026-10'] && state.rhid['2026-10'].itens && state.rhid['2026-10'].itens.length === 2;
+    return { aberto, fechou, gravou, titulo, cards, body, detalhe };
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r);
+  t.ok('modal de conferência abre antes de gravar', !r.erro && r.aberto, J);
+  t.ok('título mostra a competência', !r.erro && /outubro.*2026/i.test(r.titulo), J);
+  t.ok('cards mostram faltas e atestados', !r.erro && /2.*falta/i.test(r.cards) && /1.*atestado/i.test(r.cards), J);
+  t.ok('tabela tem os dois funcionários', !r.erro && /Ana/i.test(r.body) && /Bruno/i.test(r.body), J);
+  t.ok('detalhe lista as datas de falta', !r.erro && /05\/10/.test(r.detalhe) && /14\/10/.test(r.detalhe), J);
+  t.ok('botão confirmar grava e fecha', !r.erro && r.fechou && r.gravou, J);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
+teste('recibos-pf-fds-nao-pendente', async (b, t) => {
+  if (!fs.existsSync(path.join(RAIZ, 'recibos_rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'recibos_rm' });
+  const r = await pg.evaluate(async () => {
+    const l = document.getElementById('loginScreen'); if (l) l.style.setProperty('display', 'none', 'important');
+    const e = { id: 'pw1', nome: 'TESTE FDS PEND', status: 'ativo', metodo: 'pf', salario: 1, dtInicio: '2026-09-01', funcao: 'Aux' };
+    state.employees = [e]; state.pfPontos = {};
+    const comp = '2026-10';
+    const z = pfResumo(e, comp);
+    const datas = pfMesDatas(comp);
+    let fds = 0, fer = 0;
+    datas.forEach(d => { if (!pfPermitido(e, pfISO(d))) return; const dow = d.getDay(); if (dow === 0 || dow === 6) fds++; if (pfFeriado(d)) fer++; });
+    return { pend: z.pend, fds, fer, dias: z.dias };
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r);
+  t.ok('sábado e domingo não contam como pendente', !r.erro && r.fds > 0 && r.pend <= r.dias - r.fds, J);
+  t.ok('sem erro na página', !erros.length, erros.join(' | '));
+  await ctx.close();
+});
+
 teste('recibos-importa-salario-carteira', async (b, t) => {
   // "Relação de Empregados" da contabilidade: código, nome + cargo colados,
   // categoria, horas, admissão e salário numa linha. O salário vai para o
@@ -14731,7 +14802,7 @@ teste('recibos-assiduidade-30-dias', async (b, t) => {
     // aviso da importação do cartão RHID
     o.rhid = assidAvisoRhid('2031-05', ['g2', 'g4', 'g1']);
     o.rhidNenhum = assidAvisoRhid('2031-05', ['g1']);
-    o.rhidChama = /assidAvisoRhid/.test(pfRhidLerArquivo.toString());
+    o.rhidChama = /assidAvisoRhid/.test(pfRhidConfirmar.toString());
     // mês já decidido antes da regra: quem estava marcado continua
     defMes('4', '2031'); state.assiduidade['2031-05'].assid['g2'] = true; defMes('4', '2031'); o.decidido = nomes();
     return o;
