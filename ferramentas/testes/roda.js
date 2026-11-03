@@ -4205,6 +4205,38 @@ teste('leitor-cobertura-parafusos', async (b, t) => {
   await ctx.close();
 });
 
+teste('leitor-cobertura-ficha-montador', async (b, t) => {
+  if (!fs.existsSync(path.join(RAIZ, 'leitor_dwg'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'leitor_dwg' }); await semLogin(pg);
+  let r = {};
+  try {
+    await pg.click('[data-aba="tel"]').catch(() => {}); await pg.waitForTimeout(400);
+    await pg.setInputFiles('#cobSkpDiretoFile', coberturaDuasAguas('ficha_cob')); await pg.waitForTimeout(2000);
+    r = await pg.evaluate(() => {
+      const C = window.rmCobertura;
+      C.estado.util = 980; C.estado.confirmada = true; C.estado.parafM2 = 3;
+      const html = C.fichaHTML();
+      const temSep = /SEPARAÇÃO NA OBRA/.test(html);
+      const temFace = /FACE/.test(html);
+      const temSvg = /<svg/.test(html);
+      const temParafuso = /brocante/.test(html);
+      const temTmf = /class="tmf"/.test(html);
+      const faces = (html.match(/FACE ·/g) || []).length;
+      const btn = document.getElementById('cobFicha');
+      const temBotao = !!btn;
+      return { html: html.length, temSep, temFace, temSvg, temParafuso, temTmf, faces, temBotao };
+    });
+  } catch (e) { r.erro = e.message; }
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  t.ok('a ficha gera HTML com artigos .tmf', !r.erro && r.temTmf && r.html > 500, J);
+  t.ok('página de separação na obra', r.temSep, J);
+  t.ok('uma folha por face com SVG', r.temFace && r.temSvg && r.faces === 2, J);
+  t.ok('informação de parafusos na ficha', r.temParafuso, J);
+  t.ok('botão da ficha no menu', r.temBotao, J);
+  t.ok('sem erro na página', !erros.length, J);
+  await ctx.close();
+});
+
 teste('leitor-cobertura-dxf-arranjo', async (b, t) => {
   // "por que o DXF gerado não se organiza conforme o projeto?" -- dois
   // galpões de duas águas, lado a lado, saíam em escada: as águas eram
@@ -4411,6 +4443,49 @@ teste('leitor-cobertura-dois-telhados-riscados', async (b, t) => {
   const certo = v => v && v.length === 2 && v.every(x => x.ok) && v[0].m2 === 96 && v[1].m2 === 120 && v[0].cum === 8000 && v[1].cum === 10000;
   t.ok('dois telhados dentro de um quadro: dois blocos (96 m² e 120 m²), cada um com a sua cumeeira', !r.erro && certo(r.quadro), J);
   t.ok('com as telhas riscadas por dentro: os dois blocos continuam, e a cumeeira não é uma linha de telha', !r.erro && certo(r.riscados), J);
+  t.ok('sem erro na página', !erros.length, J);
+  await ctx.close();
+});
+
+teste('leitor-cobertura-reuso-largura', async (b, t) => {
+  if (!fs.existsSync(path.join(RAIZ, 'leitor_dwg'))) return;
+  const k = Math.hypot(1000, 5000);
+  const face = (n, x0, W, base) => ({ id: 'skp-' + n, name: n, path: n, holes: [], material: '',
+    normal: [0, (base ? 1000 : -1000) / k, 5000 / k], area_m2: W * k / 1e6,
+    outer: [[x0, base, 0], [x0 + W, base, 0], [x0 + W, 5000, 1000], [x0, 5000, 1000]], edges: [] });
+  const d = { format: 'RM_COBERTURA_SKETCHUP', version: 1, units: 'mm', model: 'Reuso largura', faces: [
+    face('G1 SUL', 0, 5500, 0), face('G1 NORTE', 0, 5500, 10000),
+    face('G2 SUL', 6500, 2400, 0), face('G2 NORTE', 6500, 2400, 10000)] };
+  const arq = path.join(require('os').tmpdir(), 'rm-testes-leitor', 'reuso_largura.rmcob');
+  fs.mkdirSync(path.dirname(arq), { recursive: true }); fs.writeFileSync(arq, JSON.stringify(d));
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'leitor_dwg' }); await semLogin(pg);
+  let r = {};
+  try { await pg.click('[data-aba="tel"]').catch(() => {}); await pg.waitForTimeout(400);
+    await pg.setInputFiles('#cobSkpDiretoFile', arq); await pg.waitForTimeout(2000);
+    r = await pg.evaluate(async () => {
+      const esp = ms => new Promise(x => setTimeout(x, ms)), C = window.rmCobertura;
+      Object.assign(C.estado, { util: 1000, beiral: 0, cumeeira: 0, agrupamento: 1, sentido: 'ltr', confirmada: true, reusarLargura: false, reaproveitar: false });
+      const res0 = C.calcular();
+      const sem = { total: res0.pecas, rl: (res0.reusosLargura || []).length, compradas: (res0.lista || []).reduce((s, x) => s + x.qtd, 0) };
+      const cx = document.getElementById('cobReusarLargura');
+      const temCx = !!cx;
+      if (cx) { cx.checked = true; cx.dispatchEvent(new Event('change', { bubbles: true })); await esp(300); C.estado.confirmada = true; }
+      const res1 = C.calcular();
+      const com = { total: res1.pecas, rl: (res1.reusosLargura || []).length, compradas: (res1.lista || []).reduce((s, x) => s + x.qtd, 0),
+        reusos: (res1.reusosLargura || []).map(x => ({ fonte: x.fonte, destino: x.destino, sobra: x.sobra })) };
+      const avisos = (res1.avisos || []).join(' ');
+      if (window.rmCobertura.abrir) { C.estado.confirmada = true; window.rmCobertura.abrir(); await esp(400); }
+      const html = (document.getElementById('cobTotais') || {}).innerHTML || '';
+      return { temCx, sem, com, avisos, temSobraL: /sobra de largura/i.test(html) };
+    });
+  } catch (e) { r.erro = e.message; }
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  t.ok('checkbox de reuso de largura existe e desligada por padrão', !r.erro && r.temCx && r.sem.rl === 0, J);
+  t.ok('sem a opção, nenhum reuso de largura', !r.erro && r.sem.rl === 0, J);
+  t.ok('com a opção, pelo menos um reuso de largura entre blocos', !r.erro && r.com.rl > 0, J);
+  t.ok('com reuso, compra menos telhas do que sem', !r.erro && r.com.compradas < r.sem.compradas, J);
+  t.ok('aviso menciona reaproveitamento de largura', !r.erro && /largura/.test(r.avisos), J);
+  t.ok('totais mostram a sobra de largura entre blocos', !r.erro && r.temSobraL, J);
   t.ok('sem erro na página', !erros.length, J);
   await ctx.close();
 });
