@@ -8396,6 +8396,40 @@ teste('recibos-pf-salario-fixo-no-relatorio', async (b, t) => {
   await ctx.close();
 });
 
+teste('recibos-pf-excluir-importacao', async (b, t) => {
+  // "Ao importar o RHID ou a Unimed não há opção de excluir, e pode acontecer
+  // de importar no mês errado": cada importação ganha "Excluir importação",
+  // que apaga só a do mês aberto
+  if (!fs.existsSync(path.join(RAIZ, 'recibos_rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'recibos_rm' }, 'index.html', { relogio: '2026-10-01T12:00:00-03:00', fuso: 'America/Sao_Paulo' });
+  let r = {};
+  try {
+    r = await pg.evaluate(async () => {
+      const esp = ms => new Promise(x => setTimeout(x, ms));
+      const l = document.getElementById('loginScreen'); if (l) l.style.setProperty('display', 'none', 'important');
+      state.employees = [{ id: 'a', nome: 'ALFA TESTE', status: 'ativo', metodo: 'pf', salario: 2000, dtInicio: '2026-01-05' }];
+      const it = { empId: 'a', nome: 'ALFA TESTE', falta: 0 };
+      state.rhid = { '2026-08': { arquivo: 'agosto.pdf', itens: [it], casados: 1 }, '2026-09': { arquivo: 'errado.pdf', itens: [it], casados: 1 } };
+      state.unimed = { '2026-08': { arquivo: 'un_ago.csv', linhas: [] }, '2026-09': { arquivo: 'un_set.csv', importadoEm: '2026-10-01T10:00:00Z', linhas: [{ nome: 'ALFA TESTE', cpf: '', resp: 'ALFA TESTE', grau: 'TITULAR', mens: 100, copart: 0, total: 100 }] } };
+      document.querySelector('.vtab[data-v="pf"]').click(); await esp(150);
+      const m = document.getElementById('pfMes'); m.value = '2026-09'; m.dispatchEvent(new Event('change')); await esp(150);
+      const temRhid = !!document.getElementById('pfRhidExcluir'), temUn = !!document.getElementById('pfUnimedExcluir');
+      document.getElementById('pfRhidExcluir').click(); await esp(150);
+      document.getElementById('pfUnimedExcluir').click(); await esp(150);
+      return { temRhid, temUn, rhid: Object.keys(state.rhid), unimed: Object.keys(state.unimed),
+        stRhid: document.getElementById('pfRhidStatus').textContent, stUn: document.getElementById('pfUnimedStatus').textContent,
+        semBotao: !document.getElementById('pfRhidExcluir') && !document.getElementById('pfUnimedExcluir'),
+        planoLinha: (pfDadosContabilidade('2026-09').find(x => x.e && x.e.id === 'a') || {}).plano };
+    });
+  } catch (e) { r.erro = e.message; }
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  t.ok('as duas importações mostram "Excluir importação"', !r.erro && r.temRhid && r.temUn, J);
+  t.ok('excluir apaga só o mês aberto (agosto continua)', !r.erro && JSON.stringify(r.rhid) === '["2026-08"]' && JSON.stringify(r.unimed) === '["2026-08"]', J);
+  t.ok('a tela volta para "nenhum importado" e o plano some da contabilidade', !r.erro && /Nenhum cartão/.test(r.stRhid) && /Nenhum arquivo da Unimed/.test(r.stUn) && r.semBotao && !r.planoLinha, J);
+  t.ok('sem erro na página', !erros.length, J);
+  await ctx.close();
+});
+
 teste('recibos-pf-fechar-selecao-propria', async (b, t) => {
   // "Já fechei o mês PF e continua pedindo para fechar o ponto": a seleção do
   // Resumo contabilidade era a mesma do Fechar mês. Quem foi tirado do resumo
