@@ -1337,6 +1337,32 @@ teste('orcamento-compras-obra-sem-orcamento', async (b, t) => {
   await ctx.close();
 });
 
+teste('orcamento-salvo-nome-acompanha-edicao', async (b, t) => {
+  // "Mesmo editando o orçamento salvo e mudando o nome que estava digitado
+  // errado, ele continua aparecendo com o nome da versão anterior": o nome
+  // da lista era gravado só no primeiro salvamento.
+  if (!fs.existsSync(path.join(RAIZ, 'orcamento-rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'orcamento-rm' });
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    const l = document.getElementById('loginScreen'); if (l) l.style.setProperty('display', 'none', 'important');
+    const e = (id, nome, cli, obra, num) => ({ id, nome, cliente: cli, obra, numero: num, ts: Date.now(), editadoEm: Date.now(), status: 'enviado', statusEm: Date.now(), total: 'R$ 1,00', quote: { cliente: cli, obra } });
+    S.orcamentosSalvos = [e('A', 'Clinte Erado · Proposta Fictícia 1', 'Clinte Erado', 'Proposta Fictícia 1', '0012'),
+      e('B', 'Clinte Erado · Galpão Teste · R1', 'Clinte Erado', 'Galpão Teste', '0013-R1')];
+    const corrige = id => { const a = S.orcamentosSalvos.find(x => x.id === id); S.cliente = 'Cliente Certo'; S.obra = a.obra; S.numero = a.numero; atualizaSalvo(a); return a.nome; };
+    const nomeA = corrige('A'), nomeB = corrige('B');
+    orcAba('salvos'); await esp(150);
+    const lista = [...document.querySelectorAll('#savedList .si-nome')].map(x => x.firstChild ? x.firstChild.textContent.trim() : '');
+    return { nomeA, nomeB, lista };
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  t.ok('corrigir o cliente e salvar por cima corrige o nome do orçamento', !r.erro && r.nomeA === 'Cliente Certo · Proposta Fictícia 1', J);
+  t.ok('revisão continua com a marca R1 depois da correção', !r.erro && r.nomeB === 'Cliente Certo · Galpão Teste · R1', J);
+  t.ok('a lista dos Salvos mostra o nome novo, sem o digitado errado', !r.erro && r.lista.some(x => x === 'Cliente Certo · Proposta Fictícia 1') && !r.lista.some(x => /Clinte Erado/.test(x)), J);
+  t.ok('sem erro na página', !erros.length, J);
+  await ctx.close();
+});
+
 teste('orcamento-salvos-busca-cliente-e-obra', async (b, t) => {
   // "A pesquisa dos Salvos precisa considerar obra/referência e cliente":
   // o texto inteiro tinha de caber num campo só; "silva galpao" (cliente +
