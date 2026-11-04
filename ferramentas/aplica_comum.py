@@ -13,8 +13,10 @@ Uso (na pasta que tem todos os repositórios):
       # aplica e sobe APP_VER + CACHE de quem mudou
 
 Também leva de central_rm para os outros, iguais: PADRAO_RM.md, CLAUDE.md,
-ferramentas/ (verificador, esta ferramenta e os testes) e o corpo do service
-worker (as três linhas de configuração de cada um ficam como estão).
+ferramentas/ (verificador e esta ferramenta) e o corpo do service worker (as
+três linhas de configuração de cada um ficam como estão). Os TESTES ficam só
+na central_rm: as cópias em cada repositório transformavam um teste novo em 14
+PRs. Cópias antigas de ferramentas/testes nos outros são apagadas.
 
 Cada bloco é achado por uma MARCA (texto que só existe nele) e recortado do
 <script>/<style> que abre a linha até o fechamento -- nunca por uma busca
@@ -164,8 +166,14 @@ def aplica(raiz, conferir=False, subir=False):
                 if os.path.exists(o) and (not os.path.exists(dst) or ler(o) != ler(dst)):
                     arquivos.append(doc)
                     if not conferir: shutil.copyfile(o, dst)
+            velho = os.path.join(d, 'ferramentas', 'testes')
+            if os.path.isdir(velho):
+                arquivos.append(os.path.join('ferramentas', 'testes') + ' (apagado: os testes ficam só na central_rm)')
+                if not conferir: shutil.rmtree(velho)
             for raizf, _, nomes in os.walk(AQUI):
                 if '__pycache__' in raizf or os.sep + '.libs' in raizf or os.sep + 'node_modules' in raizf:
+                    continue
+                if os.path.relpath(raizf, AQUI).split(os.sep)[0] == 'testes':
                     continue
                 for n in nomes:
                     if n == 'regras_firebase.json' or n.endswith('.pyc'):
