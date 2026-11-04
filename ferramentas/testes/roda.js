@@ -1337,6 +1337,35 @@ teste('orcamento-compras-obra-sem-orcamento', async (b, t) => {
   await ctx.close();
 });
 
+teste('orcamento-salvos-busca-cliente-e-obra', async (b, t) => {
+  // "A pesquisa dos Salvos precisa considerar obra/referência e cliente":
+  // o texto inteiro tinha de caber num campo só; "silva galpao" (cliente +
+  // obra) não achava nada. Agora cada palavra pode estar em qualquer campo.
+  if (!fs.existsSync(path.join(RAIZ, 'orcamento-rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'orcamento-rm' });
+  const r = await pg.evaluate(async () => {
+    const esp = ms => new Promise(x => setTimeout(x, ms));
+    const l = document.getElementById('loginScreen'); if (l) l.style.setProperty('display', 'none', 'important');
+    const e = (id, cli, obra, num) => ({ id, nome: 'Orçamento ' + id, cliente: cli, obra, numero: num, ts: Date.now(), editadoEm: Date.now(), status: 'aberto', statusEm: Date.now(), total: 'R$ 1,00', quote: { cliente: cli, obra } });
+    S.orcamentosSalvos = [e('A', 'Cliente Silva Fictício', 'Galpão Exemplo Norte', '101'), e('B', 'Cliente Silva Fictício', 'Mezanino Modelo', '102'),
+      e('C', 'Outro Cliente Teste', 'Galpão Exemplo Sul', '103'), { id: 'D', nome: 'Antigo sem topo', numero: '104', ts: Date.now(), status: 'aberto', total: 'R$ 1,00', quote: { cliente: 'Cliente Velho Fictício', obra: 'Cobertura Antiga' } }];
+    orcAba('salvos'); await esp(150);
+    const busca = async q => { const i = document.getElementById('savedSearch'); i.value = q; i.dispatchEvent(new Event('input')); await esp(60);
+      return [...document.querySelectorAll('#savedList .saved-item')].map(x => x.dataset.sid).sort().join(''); };
+    return { clienteObra: await busca('silva galpao'), obraCliente: await busca('galpão silva'), soObra: await busca('galpao exemplo'),
+      soCliente: await busca('silva'), numero: await busca('103'), antigo: await busca('velho cobertura'), nada: await busca('silva sul'),
+      placeholder: document.getElementById('savedSearch').placeholder };
+  }).catch(e => ({ erro: e.message }));
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  t.ok('cliente + obra na mesma busca acha o orçamento (em qualquer ordem)', !r.erro && r.clienteObra === 'A' && r.obraCliente === 'A', J);
+  t.ok('só a obra/referência ou só o cliente continuam funcionando', !r.erro && r.soObra === 'AC' && r.soCliente === 'AB', J);
+  t.ok('número e orçamento antigo (cliente e obra só dentro do orçamento) também são achados', !r.erro && r.numero === 'C' && r.antigo === 'D', J);
+  t.ok('palavras que não estão juntas no mesmo orçamento não trazem nada', !r.erro && r.nada === '', J);
+  t.ok('o campo explica o que dá para buscar', !r.erro && /cliente/.test(r.placeholder) && /obra\/referência/.test(r.placeholder), J);
+  t.ok('sem erro na página', !erros.length, J);
+  await ctx.close();
+});
+
 teste('orcamento-salvos-perda-e-validade', async (b, t) => {
   // Perdido sem motivo não ensina nada: ao marcar Perdido, pergunta por quê
   // (o campo "Motivo" ficava escondido em "Mais campos"). E orçamento com a
