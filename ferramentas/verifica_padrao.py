@@ -307,8 +307,11 @@ def analisa(repo):
         if v != ler(os.path.join(pasta, final)):
             r['erros'].append('comum/%s desatualizada (rode ferramentas/aplica_comum.py)' % final)
     # documentos do padrão
-    for doc in ('PADRAO_RM.md', 'CLAUDE.md', os.path.join('ferramentas', 'verifica_padrao.py'),
-                os.path.join('ferramentas', 'aplica_comum.py'), os.path.join('ferramentas', 'testes', 'roda.js')):
+    # os testes moram só na central_rm (PADRAO_RM 7a)
+    docs = ['PADRAO_RM.md', 'CLAUDE.md', os.path.join('ferramentas', 'verifica_padrao.py'), os.path.join('ferramentas', 'aplica_comum.py')]
+    if os.path.basename(os.path.normpath(repo)) == 'central_rm':
+        docs.append(os.path.join('ferramentas', 'testes', 'roda.js'))
+    for doc in docs:
         if not os.path.exists(os.path.join(repo, doc)):
             r['erros'].append('falta ' + doc)
     r['padrao'] = md5(ler(os.path.join(repo, 'PADRAO_RM.md')) or '')

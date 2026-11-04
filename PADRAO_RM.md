@@ -9,9 +9,11 @@ nunca em um só.
 Conferência automática: `python3 ferramentas/verifica_padrao.py` (roda num
 repositório só ou na pasta com todos). Nenhuma publicação sai com erro nele.
 
-Testes automáticos: `node ferramentas/testes/roda.js /pasta-com-todos` (abre
-cada sistema num navegador de verdade, no computador e no celular). Nenhuma
-publicação sai com teste falhando.
+Testes automáticos: `node central_rm/ferramentas/testes/roda.js /pasta-com-todos`
+(abre cada sistema num navegador de verdade, no computador e no celular). Os
+testes moram só na `central_rm`. Rodam em **níveis** (seção 7a): mudança num
+sistema só roda o nível 1; bloco comum, ferramentas e testes rodam a bateria
+completa. Nenhuma publicação sai com teste falhando.
 
 **Blocos comuns têm fonte única:** `central_rm/comum/`. Nenhum bloco comum é
 editado dentro de um sistema -- muda o arquivo em `comum/` e roda
@@ -380,8 +382,25 @@ Tudo que imprime segue a mesma papelaria:
 
 ## 7a. Testes automáticos
 
-- Ficam em `ferramentas/testes/roda.js` (Node + Playwright, o Firebase de
-  verdade carregado do pacote local, sem internet e sem tocar na nuvem real).
+- Ficam **só** em `central_rm/ferramentas/testes/roda.js` (Node + Playwright,
+  o Firebase de verdade carregado do pacote local, sem internet e sem tocar na
+  nuvem real). Não são copiados para os outros repositórios: com a cópia, um
+  teste novo virava 14 PRs.
+- **Níveis de teste** (a bateria completa leva ~15 min e consome uso; não
+  roda a cada detalhe):
+  - **Nível 1 -- mudança num sistema só** (a maioria): `node
+    central_rm/ferramentas/testes/roda.js /pasta --sistema=<repo>` roda os
+    testes daquele sistema, os dos sistemas que leem os dados dele (lista
+    `NIVEL1` no `roda.js`) e a abertura de todos os sistemas, no computador e
+    no celular. Leva poucos minutos. Publica com 0 falha nele.
+  - **Nível 2 -- bateria completa** (sem filtro): obrigatória quando muda o
+    bloco comum (`central_rm/comum/`), o `PADRAO_RM.md`, as ferramentas
+    (verificador, `aplica_comum`, `monta_site`), os próprios testes de forma
+    ampla, ou quando a mudança mexe em dado que outro sistema lê e esse
+    sistema não está na lista `NIVEL1`.
+  - **Nível 3 -- bateria completa de rotina**: uma vez por rodada de
+    publicações, juntando as mudanças do dia, e não uma por mudança.
+  - Sistema novo ou ligação nova entre sistemas: acrescente-o na `NIVEL1`.
 - Cada incidente vira teste, para não voltar: sistema abre sem erro (computador
   e celular), chave proibida/undefined não derruba a gravação, o orçamento não
   sobe cadastro velho por cima da nuvem, o freio segura apagão, ninguém grava

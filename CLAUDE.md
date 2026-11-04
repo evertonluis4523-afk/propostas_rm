@@ -17,8 +17,11 @@ Ao terminar:
 1. Suba `APP_VER` e o `CACHE` do service worker (mesmo `vNN`).
 2. Rode `python3 ferramentas/verifica_padrao.py` (ou apontando para a pasta
    com todos os repositórios). Só publique com **0 erro**.
-3. Rode `node ferramentas/testes/roda.js /pasta-com-todos`. Só publique com
-   **0 falha**. Defeito corrigido ganha teste.
+3. Rode os testes no nível certo (PADRAO_RM 7a), todos em
+   `central_rm/ferramentas/testes/roda.js`: mudança num sistema só ->
+   `--sistema=<repo>` (nível 1, poucos minutos); bloco comum, padrão ou
+   ferramentas -> bateria completa. Só publique com **0 falha**. Defeito
+   corrigido ganha teste (só na central_rm).
 4. Commit, PR e merge no `main`.
 5. **Atualize o Cloudflare Pages** (sem este passo o app desktop não recebe
    a versão nova): rode `bash scripts/site.sh "o que mudou"` ou, se `gh`
