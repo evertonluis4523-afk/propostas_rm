@@ -8430,6 +8430,40 @@ teste('recibos-pf-excluir-importacao', async (b, t) => {
   await ctx.close();
 });
 
+teste('recibos-pf-adiantamento-bruto', async (b, t) => {
+  // "Ganha 4.500, o adiantamento no relatório deveria ser 2.250 e saiu 2.000
+  // (descontou 250 do empréstimo interno)": para a contabilidade vale o
+  // adiantamento gerado, sem descontos internos, acréscimos e empréstimos
+  if (!fs.existsSync(path.join(RAIZ, 'recibos_rm'))) return;
+  const { ctx, pg, erros } = await abre(b, { 'sis.local': 'recibos_rm' }, 'index.html', { relogio: '2026-10-20T12:00:00-03:00', fuso: 'America/Sao_Paulo' });
+  let r = {};
+  try {
+    r = await pg.evaluate(async () => {
+      const l = document.getElementById('loginScreen'); if (l) l.style.setProperty('display', 'none', 'important');
+      state.employees = [
+        { id: 'n', nome: 'NOVO TESTE', status: 'ativo', metodo: 'pf', salario: 4500, adiantBase: 2250, dtInicio: '2026-01-05' },
+        { id: 'v', nome: 'VELHO TESTE', status: 'ativo', metodo: 'pf', salario: 4500, adiantBase: 9999, dtInicio: '2026-01-05' },
+        { id: 's', nome: 'SEM BASE TESTE', status: 'ativo', metodo: 'pf', salario: 3000, dtInicio: '2026-01-05' }];
+      state.historico = { '2026-09-adiantamento': { itens: [
+        { id: 'n', nome: 'NOVO TESTE', valor: 2000, adiantBase: 2250 },
+        { id: 'v', nome: 'VELHO TESTE', valor: 2000 },
+        { id: 's', nome: 'SEM BASE TESTE', valor: 1200 }] } };
+      state.ciclos = { '2026-09-adiantamento': { tipo: 'adiantamento', ano: 2026, mesIdx: 8, itens: { v: { adiantBase: 2250, valAdiantamento: 2000 } } } };
+      const f = pfAdiantamentoDoMes('2026-09'), E = id => state.employees.find(x => x.id === id);
+      const lin = pfDadosContabilidade('2026-09').find(x => x.e && x.e.id === 'n');
+      return { n: f(E('n')), v: f(E('v')), s: f(E('s')), linha: lin && lin.ad,
+        guarda: /tipo==='adiantamento'\)it\.adiantBase=/.test(document.documentElement.innerHTML) };
+    });
+  } catch (e) { r.erro = e.message; }
+  const J = JSON.stringify(r) + ' ' + erros.join(' | ');
+  t.ok('adiantamento com desconto de empréstimo: o relatório mostra o bruto (2.250, não 2.000)', !r.erro && r.n === 2250 && r.linha === 2250, J);
+  t.ok('mês gerado antes da correção: a base vem do ciclo da folha daquele mês', !r.erro && r.v === 2250, J);
+  t.ok('sem base registrada em lugar nenhum, fica o valor do histórico', !r.erro && r.s === 1200, J);
+  t.ok('a geração do adiantamento passa a guardar a base no histórico', !r.erro && r.guarda, J);
+  t.ok('sem erro na página', !erros.length, J);
+  await ctx.close();
+});
+
 teste('recibos-pf-fechar-selecao-propria', async (b, t) => {
   // "Já fechei o mês PF e continua pedindo para fechar o ponto": a seleção do
   // Resumo contabilidade era a mesma do Fechar mês. Quem foi tirado do resumo
