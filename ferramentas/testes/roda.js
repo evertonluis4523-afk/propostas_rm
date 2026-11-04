@@ -8312,13 +8312,15 @@ teste('recibos-pf-resumo-escolher', async (b, t) => {
     document.getElementById('pfRelGerar').click(); await esp(300);
     const folhas = [...document.querySelectorAll('#printScroll .folha')];
     const resumo = (document.querySelector('#printScroll .pf-folha-resumo') || {}).textContent || '';
-    return { aberto, folhas: folhas.length, resumo: resumo.replace(/\s+/g, ' ').slice(0, 900),
+    return { aberto, folhas: folhas.length, primeiraResumo: !!(folhas[0] && folhas[0].classList.contains('pf-folha-resumo')), depoisPonto: folhas.slice(1).every(f => !f.classList.contains('pf-folha-resumo')),
+      resumo: resumo.replace(/\s+/g, ' ').slice(0, 900),
       excelEscolhe: (() => { closeAll(); document.getElementById('pfExcel').click(); return document.getElementById('pfRelModal').classList.contains('open'); })() };
   }).catch(e => ({ erro: e.message }));
   const J = JSON.stringify(r);
   t.ok('o botão abre a seleção dos PF', !r.erro && r.aberto, J);
   t.ok('só o PF marcado entra nas folhas e no resumo', !r.erro && r.folhas === 2 && /Alfa Teste/i.test(r.resumo) && !/Beta Teste/i.test(r.resumo), J);
   t.ok('o Excel da contabilidade usa a mesma seleção', !r.erro && r.excelEscolhe, J);
+  t.ok('ordem do relatório: primeiro o resumo para a folha, depois o ponto de cada PF', !r.erro && r.primeiraResumo && r.depoisPonto, J);
   t.ok('sem erro na página', !erros.length, erros.join(' | '));
   await ctx.close();
 });
