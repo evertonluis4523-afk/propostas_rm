@@ -334,6 +334,10 @@ Tudo que imprime segue a mesma papelaria:
   `CACHE`, `ASSETS` e `PAGINA`): sempre a rede com `cache:'no-cache'`, cache só
   sem internet. Com ele, a versão publicada aparece na próxima abertura.
 - O service worker é registrado só em `http(s)`.
+- O Cloudflare troca `pagina.html` por `pagina` (desvio). Página que chega
+  por desvio o service worker não entrega como resposta da navegação (o
+  navegador recusa e a tela fica branca): manda o navegador ao endereço
+  final. Teste `pu-sw-desvio-cloudflare`.
 - A cada publicação: sobe `APP_VER` e o `CACHE`, confere com o verificador
   (0 erro) e com os testes (0 falha), commit, PR e merge no `main` (o GitHub
   Pages publica do `main`).
