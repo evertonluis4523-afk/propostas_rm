@@ -463,6 +463,8 @@ Tudo que imprime segue a mesma papelaria:
   pedido ao fabricante, ficha) leva só o título da peça, as cotas e rótulos
   curtos no próprio desenho (FRENTE, dobra para BAIXO, aba, solda aqui).
   Nada de lista de notas embaixo nem parágrafo de aviso: o desenho explica.
+  Pedido ao fabricante vai online de um para o outro: sem campo de
+  assinatura.
   Teste `leitor-escada-pedido-desenhos`.
 - **Desenho em canvas no papel sai em alta:** texto, tabela e logo já vão em
   vetor; o que é desenhado em canvas (vistas 3D do Corte) ia na resolução da
