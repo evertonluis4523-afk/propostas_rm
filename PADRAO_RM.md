@@ -459,6 +459,13 @@ Tudo que imprime segue a mesma papelaria:
   celular e da impressão -- inclusive do PDF do programa: o bloco de
   impressão tira do clone todo canvas de enfeite (`aria-hidden`) e leva o
   `id` dos demais para a imagem (teste `pdf-sem-fundo-em-movimento`).
+- **Desenho técnico sem texto explicativo:** desenho (corte, vista, planta,
+  pedido ao fabricante, ficha) leva só o título da peça, as cotas e rótulos
+  curtos no próprio desenho (FRENTE, dobra para BAIXO, aba, solda aqui).
+  Nada de lista de notas embaixo nem parágrafo de aviso: o desenho explica.
+  Pedido ao fabricante vai online de um para o outro: sem campo de
+  assinatura.
+  Teste `leitor-escada-pedido-desenhos`.
 - **Desenho em canvas no papel sai em alta:** texto, tabela e logo já vão em
   vetor; o que é desenhado em canvas (vistas 3D do Corte) ia na resolução da
   tela (~96 ppp). Na hora de imprimir, o bloco de impressão dispara
