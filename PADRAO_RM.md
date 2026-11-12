@@ -301,7 +301,11 @@ o mesmo motor do Chromium -- é por ele que o papel é medido e testado.
   timbrado (`.tb2`): a tela impressa, o documento montado à parte
   (`rmImprimirHTML`) e o que chega na Central vindo de um sistema. Documento
   de medida exata (etiqueta, envelope, folha em `@page{margin:0}`) e o que
-  não tem timbrado ficam como estão. Teste `papel-timbrado` (gera o PDF de
+  não tem timbrado ficam como estão. No Recibos, a folha do recibo (2 por
+  A4, para cortar) e a lista de ponto PF seguem sem margem e sem rodapé; os
+  papéis de RH de um documento por página (`.folha.rh-folha`) vão na página
+  `@page rh`, com o mesmo rodapé e cabeçalho de continuação. Teste
+  `recibos-rh-rodape`. Teste `papel-timbrado` (gera o PDF de
   cada sistema e lê o texto dele).
 
 - **Timbrado:** logo mono à esquerda; à direita, **duas colunas** separadas
