@@ -73,6 +73,22 @@ embutido e no de arquivo (`rm-logo.svg`), teste `logo-em-arquivo-no-escuro`.
     (`.btn-act.save`, `.btn-red`, `.btn-sm.red`...) já seguem o mesmo visual.
   - O tema decide a APARÊNCIA; posição, largura e mostrar/esconder continuam
     com o sistema.
+  - **Campo:** `var(--rm-ctl)` (38 px) de altura, canto `var(--rm-raio)`
+    (9 px), letra 14 px, rótulo em cima. Campo de busca/filtro pode ser o
+    pequeno (`--rm-ctl-p`, 32 px); campo dentro de célula de tabela fica
+    baixinho. A classe de campo do sistema (`.din`, `.form-input`, `.fld-in`...)
+    escreve essas medidas com as variáveis -- nunca `padding:11px` que dá 45 px
+    num e 30 px no outro. A janela de comando (Ctrl+K) é a exceção.
+  - **Grupo alinhado:** campos lado a lado têm a caixa na mesma linha. Rótulo
+    que quebra em duas linhas não pode empurrar a caixa: a grade do formulário
+    alinha pelo pé (`align-items:end`) ou o rótulo fica curto.
+  - **Texto curto:** sem parágrafo explicando a tela. Nota de ajuda tem uma
+    linha (até ~100 letras); o que precisa de mais do que isso vai para o
+    `title` do botão ou sai. No papel (PDF) vale o mesmo: nada de "Observação:
+    este documento..." -- o documento diz o que é pelos dados.
+  - Teste `campos-padrao` mede altura, canto, letra, rótulo, alinhamento e
+    texto longo em cada sistema (a varredura completa, clicando em tudo, é
+    `AUD_MODO=campos` do `zz-auditoria`).
   - Status (pago, em aberto, atrasado, pedido) usa ok / aviso / perigo /
     informação, sempre com o fundo suave e o texto forte da mesma cor.
   - Tabela: linha sim, linha não, levemente cinza (`--rm-faixa`), a linha sob
@@ -246,7 +262,27 @@ embutido e no de arquivo (`rm-logo.svg`), teste `logo-em-arquivo-no-escuro`.
 
 ## 4. Login (porta de entrada)
 
-Blocos idênticos `rmPortaEstilo` + `rmPortaBloco`:
+Blocos idênticos `rmPortaEstilo` + `rmPortaBloco`. O **cartão é um só** e o
+desenho mora no `rmPortaEstilo` (preso ao `#loginScreen`): fundo escuro com o
+brilho vermelho, cartão branco com fio laranja, **logo completo** (a
+assinatura, nunca só o símbolo), empresa em versalete pequeno, nome do
+sistema em destaque, rótulos "E-mail" e "Senha", campo de 42 px, botão
+"Entrar" com o ícone. Sem frase de rodapé ("Entre com seu e-mail...",
+"Sincronização ativa...", "Acesso protegido por..."). O sistema só escreve a
+marcação comum:
+
+```html
+<div class="login" id="loginScreen"><div class="login-card">
+  <div class="lc-head"><img id="loginLogo" alt="RM Estruturas">
+    <div class="ttl">RM Estruturas Pré-Fabricadas</div><div class="sub">Nome do Sistema</div></div>
+  <div class="lc-body"><div class="login-err" id="loginErr"></div>
+    <div class="f"><span class="lab">E-mail</span><input id="li_user" type="email" placeholder="voce@empresa.com"></div>
+    <div class="f"><span class="lab">Senha</span><input id="li_pass" type="password" placeholder="••••••••"></div>
+    <button id="loginBtn" onclick="doLogin()">Entrar</button></div>
+</div></div>
+```
+
+Teste `login-igual`: o cartão de todos os sistemas tem as mesmas medidas.
 
 - e-mail lembrado e **mostrado pela metade**, "Lembrar" marcado por padrão;
 - foto grande e centralizada; "Não é você?" para trocar de conta;
