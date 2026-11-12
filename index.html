@@ -7085,15 +7085,79 @@ const APP_VER='v51';
       try { im.setAttribute('src', new URL(u, document.baseURI).href); } catch(e){}
     });
     try { var hd = clone.querySelector('head'); if (hd && !hd.querySelector('base')) { var bs = document.createElement('base'); bs.setAttribute('href', document.baseURI); hd.insertBefore(bs, hd.firstChild); } } catch(e){}
+    try { papelA(clone, document.documentElement, nomeProprio()); } catch(e){}
     return '<!DOCTYPE html>' + clone.outerHTML;
   }
+  /* PAPEL TIMBRADO (modelo A, PADRAO_RM 5). Todo documento com o timbrado
+     (.tb2) sai com o mesmo pé e o mesmo cabeçalho de continuação, montados
+     aqui na hora do PDF -- um lugar só para os quinze sistemas:
+       - rodapé em todas as páginas: telefone e Instagram | site | Página X de Y,
+         sobre um fio cinza (caixas de margem do @page, fora do texto);
+       - da página 2 em diante, no alto: o tipo e o título do documento em
+         laranja | RM Estruturas Pré-Fabricadas, sobre um fio cinza;
+       - o fio do cabeçalho: laranja de 2 px e, logo abaixo, o grafite fino.
+     Documento de medida exata (etiqueta, envelope, a folha do recibo em
+     margem 0) e o que não tem timbrado ficam como estão. */
+  var PE_FONE = '51 99789-7879', PE_INSTA = '@rm.estruturas', PE_SITE = 'www.rmestruturas.com.br';
+  function papelA(raiz, viva, nome){
+    if (!raiz || !raiz.querySelector || !raiz.querySelector('.tb2,.tb2-tipo') || raiz.querySelector('#rm-papel-a')) return false;
+    var css = [].map.call(raiz.querySelectorAll('style'), function(x){ return x.textContent || ''; }).join('\n');
+    var pags = css.match(/@page\s*\{[^}]*\}/g) || [], ult = pags.length ? pags[pags.length - 1] : '';
+    var mg = /margin(-bottom)?\s*:\s*([^;}]+)/.exec(ult), mb = mg ? mg[2].trim().split(/\s+/) : ['12mm'];
+    var baixo = mg && mg[1] ? mb[0] : (mb[2] || mb[0]);
+    if (/^0(px|mm)?$/.test(baixo)) return false;
+    var limpa = function(t){ return String(t || '').replace(/\s+/g, ' ').trim().replace(/["\\]/g, ''); };
+    /* o texto como se vê: um .tb2-tipo pode ter três nomes e mostrar um só
+       (o Orçamento: cliente, interno, fornecedor) */
+    var fonteTx = viva || raiz, ve = function(e){ return e ? (viva && e.innerText != null ? e.innerText : e.textContent) : ''; };
+    var tipo = limpa(ve(fonteTx.querySelector('.tb2-tipo'))), h1 = fonteTx.querySelector('h1');
+    var topo = (tipo.toUpperCase() + (h1 && limpa(ve(h1)) ? (tipo ? ' · ' : '') + limpa(ve(h1)) : '')).slice(0, 90);
+    /* o nome que o sistema dá ao arquivo ("Orçamento CLIENTE 12-11-2026")
+       é o nome do documento -- vale mais que o rótulo da folha */
+    nome = limpa(String(nome || '').replace(/\.pdf$/i, '').replace(/[_]+/g, ' '));
+    if (nome) topo = nome.slice(0, 90);
+    /* o pé antigo (fixo, dentro da página) sai: o novo mora na margem.
+       A linha de nota dele ("atualizado em") vai para o fim do documento. */
+    var nota = '';
+    [].slice.call(raiz.querySelectorAll('#rm-pe-imp,.pe,.sheetfoot')).forEach(function(e){
+      if (e.id !== 'rm-pe-imp' && e.textContent.toLowerCase().indexOf(PE_SITE) < 0) return;
+      var n = e.querySelector('.nota'); if (n && e.id === 'rm-pe-imp') nota = limpa(n.textContent);
+      if (e.parentNode) e.parentNode.removeChild(e); });
+    var corpo = raiz.querySelector('body') || raiz;
+    if (nota) { var nd = document.createElement('div'); nd.className = 'rm-nota-fim'; nd.textContent = nota; corpo.appendChild(nd); }
+    var fonte = 'font-family:Satoshi,Arial,sans-serif;font-size:7.5pt;color:#4A515B;';
+    var pe = fonte + 'border-top:.6pt solid #c9cdd2;vertical-align:top;padding-top:2.2mm;';
+    var al = fonte + 'border-bottom:.6pt solid #c9cdd2;vertical-align:bottom;padding-bottom:1.8mm;';
+    var st = document.createElement('style'); st.id = 'rm-papel-a';
+    st.textContent = '@page{margin-bottom:17mm;'
+      + '@bottom-left{content:"' + PE_FONE + ' · ' + PE_INSTA + '";' + pe + '}'
+      + '@bottom-center{content:"' + PE_SITE + '";' + pe + '}'
+      + '@bottom-right{content:"Página " counter(page) " de " counter(pages);' + pe + '}'
+      + '@top-left{content:"' + topo + '";' + al + 'font-weight:700;color:#C1310B;letter-spacing:.06em}'
+      + '@top-right{content:"RM Estruturas Pré-Fabricadas";' + al + 'color:#6E747C}}'
+      + '@page:first{@top-left{content:none;border:0}@top-right{content:none;border:0}}'
+      + '@media print{html body{padding-bottom:0!important}'
+      + '.head::after,.rm-cab::after,.cab::after{height:2px!important;background:#F24619!important;box-shadow:0 3.5px 0 -.5px #141414!important;'
+      + '-webkit-print-color-adjust:exact;print-color-adjust:exact}.head::before{display:none!important}'
+      + '.rm-nota-fim{margin-top:6mm;font-size:7pt;color:#6E747C;text-align:center}}';
+    (raiz.querySelector('head') || raiz).appendChild(st);
+    return true;
+  }
+  function papelAHTML(html, nome){
+    try {
+      var d = new DOMParser().parseFromString(String(html), 'text/html');
+      if (!papelA(d.documentElement, null, nome)) return html;
+      return '<!DOCTYPE html>' + d.documentElement.outerHTML;
+    } catch(e){ return html; }
+  }
+  window.rmPapelA = papelAHTML;
   var ocupado = false;
   /* Documento pronto (HTML inteiro, montado a parte): mesmo caminho do
      Imprimir. Devolve true se a ponte assumiu; false = o chamador segue com
      o jeito dele (janela nova + print no navegador). */
   window.rmImprimirHTML = function(html, nome){
     if (!ponte || ocupado) return false;
-    ocupado = true; nome = nome || nomeDoc();
+    ocupado = true; html = papelAHTML(html, nome); nome = nome || nomeDoc();
     if (ponte === 'app') {
       var gerar = window.rmDesktop.abrirPDF || window.rmDesktop.salvarPDF;
       gerar(html, nome).then(function(){ ocupado = false; }, function(){ ocupado = false; });

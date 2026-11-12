@@ -291,12 +291,24 @@ Teste `login-igual`: o cartão de todos os sistemas tem as mesmas medidas.
 
 ## 5. Papel (impressão e PDF)
 
-Tudo que imprime segue a mesma papelaria:
+Tudo que imprime segue a mesma papelaria: o **modelo A (institucional)**,
+escolhido entre quatro em nov/2026. A impressão é sempre pelo **programa
+instalado** (Central desktop): o PDF sai pelo `printToPDF` do Electron, que é
+o mesmo motor do Chromium -- é por ele que o papel é medido e testado.
+
+- **Um lugar só:** o bloco comum `rmImpressaoBloco` (`comum/impressao.html`)
+  monta o papel na hora do PDF (`papelA`), em todo documento que tem o
+  timbrado (`.tb2`): a tela impressa, o documento montado à parte
+  (`rmImprimirHTML`) e o que chega na Central vindo de um sistema. Documento
+  de medida exata (etiqueta, envelope, folha em `@page{margin:0}`) e o que
+  não tem timbrado ficam como estão. Teste `papel-timbrado` (gera o PDF de
+  cada sistema e lê o texto dele).
 
 - **Timbrado:** logo mono à esquerda; à direita, **duas colunas** separadas
   por um fio fino: **razão social** (negrito) e `CNPJ` | **endereço** (rua) e
-  **cidade · UF · CEP**. Fio laranja embaixo e, logo abaixo dele, o **tipo do
-  documento em laranja** (maiúscula espaçada), acima do título.
+  **cidade · UF · CEP**. Embaixo, o **fio laranja de 2 px** e, 2 px abaixo
+  dele, o **fio grafite fino** (1 px); depois o **tipo do documento em
+  laranja** (maiúscula espaçada), acima do título.
   - Sem o nome fantasia: a logo já diz "RM Estruturas Pré-Fabricadas". Quem
     responde pelo papel é a razão social (Nunes e Kuhn Estruturas Metálicas
     Ltda), em todos os sistemas.
@@ -312,9 +324,16 @@ Tudo que imprime segue a mesma papelaria:
   × º ª “ ” ‘ ’ • ² ³ ½; o jsPDF apaga o resto da linha quando acha um deles.
   Todo texto passa pela troca do `rmFontePDF` (× → x, º → o...).
   Teste `almocos-pdf-glifo`.
-- **Rodapé:** `51 99789-7879 · @rm.estruturas` | `www.rmestruturas.com.br` |
-  símbolo laranja; linha de nota abaixo. Fixo em todas as páginas, com
-  `body{padding-bottom:16mm;box-decoration-break:clone}` para não cobrir texto.
+- **Rodapé (todas as páginas):** `51 99789-7879 · @rm.estruturas` |
+  `www.rmestruturas.com.br` | **Página X de Y**, sobre um fio cinza fino.
+  Mora na margem da folha (caixas `@bottom-*` do `@page`, margem de baixo de
+  17 mm), nunca por cima do texto. O pé antigo dentro da página (`.pe`,
+  `#rm-pe-imp`, `.sheetfoot`) sai do PDF; a nota dele ("atualizado em") vai
+  para o fim do documento.
+- **Cabeçalho de continuação (página 2 em diante):** o nome do documento em
+  laranja (o que o sistema dá ao arquivo em `rmNomePDF`, ou o tipo · título)
+  | `RM Estruturas Pré-Fabricadas`, sobre um fio cinza. A página 1 não leva:
+  ela tem o timbrado inteiro.
 - **Marca d'água:** símbolo escuro, **28% da largura, no máximo 190 px,
   opacidade 3,5%**, `mix-blend-mode:multiply`.
   Documento cujas imagens já trazem a marca gravada nelas (as imagens da
