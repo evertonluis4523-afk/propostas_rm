@@ -118,6 +118,33 @@ embutido e no de arquivo (`rm-logo.svg`), teste `logo-em-arquivo-no-escuro`.
 - **Marca na barra:** "RM ESTRUTURAS · NOME DO SISTEMA" montada pelo bloco da
   barra a partir do símbolo vetorial (`window.RM_SIMBOLO` ou equivalente) --
   nunca logo em imagem nem título em duas linhas.
+- **Linguagem de prancha (o que não se usa):** a casa fala a língua da
+  prancha técnica, a mesma do papel M1 -- não a dos painéis feitos por IA
+  ("20 sinais de que o teu dashboard foi feito por IA"). Kit em
+  `comum/tema-rm.html`, seção LINGUAGEM DE PRANCHA.
+  - **Números do topo** (os KPIs): o contêiner leva `.rm-faixa` -- uma faixa
+    só, células divididas por fio, rótulo em escrita normal em cima, número
+    embaixo com a unidade. Faixa que já mora no alto de um painel:
+    `.rm-faixa.rm-faixa-painel`. Sem cartão escuro ou laranja de destaque, sem
+    ícone colorido, sem faixa colorida na borda, sem bolinha no rótulo.
+  - **Cor só com significado:** vermelho = problema (vencido, atrasado,
+    faltando), âmbar = vence logo / tarefa por fazer, verde = pago ou
+    recebido. Número zero não pinta. No número da faixa: `.rm-fx-ruim`,
+    `.rm-fx-aviso`, `.rm-fx-bom`. Laranja RM só na marca e na ação principal.
+  - **Caixa alta** só no carimbo (a folha "RM · PAINEL GERAL · FOLHA"), no
+    cabeçalho de tabela e no rótulo de campo de formulário. Título, rótulo de
+    número e nome do sistema na barra: escrita normal.
+  - **Sem emoji na interface** (botão, título, aviso, tela vazia): ícone de
+    traço, monocromático, na cor do texto -- ou só a palavra. Emoji só no
+    texto que o usuário escreve e manda (a mensagem de WhatsApp da agenda).
+  - **Sem vidro** (`backdrop-filter`), sem sombra grande, sem brilho correndo
+    em tela carregando, sem saudação ("Bem-vindo") no estilo Prancha.
+  - O selo da nuvem só aparece quando pede atenção (Conectando, Só neste
+    aparelho, Sem conexão); "Nuvem" ligada é o normal e não aparece.
+  - Central: o estilo de painel **Prancha** (Configurações › Aparência) é esta
+    linguagem no Painel Geral; Clássico, Viva e Carimbo continuam como opção.
+  - O verificador acusa emoji na interface e `backdrop-filter`. Testes
+    `central-estilo-prancha` e `prancha-faixa-numeros`.
 - **Sem e-mail na barra:** o topo não mostra o e-mail de quem está logado --
   dentro da Central todos os sistemas entram com a mesma conta. O registro de
   quem fez cada coisa continua sendo gravado; só não aparece no topo.

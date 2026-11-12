@@ -228,6 +228,22 @@ def analisa(repo):
     for m in re.finditer(r'(?:background(?:-color)?|(?<![-\w])color|border(?:-color)?)\s*:\s*(white|black|gray|grey|silver|whitesmoke|lightgray|lightgrey|gainsboro)\b', h, re.I):
         n = h.count('\n', 0, m.start()) + 1
         r['erros'].append('cor por nome (%s) na linha %d: use #hex ou variável (o tema escuro não traduz nome)' % (m.group(1), n))
+    # LINGUAGEM DE PRANCHA (PADRAO_RM 3, "o que não se usa"): sem vidro e sem
+    # emoji na interface. Comentário fica de fora; a lista de emojis que o
+    # usuário põe na mensagem de WhatsApp (WA_EMOJIS) também.
+    sem_coment = re.sub(r'/\*[\s\S]*?\*/|<!--[\s\S]*?-->', lambda m: '\n' * m.group(0).count('\n'), h)
+    if 'backdrop-filter' in sem_coment:
+        n = sem_coment.count('\n', 0, sem_coment.find('backdrop-filter')) + 1
+        r['erros'].append('efeito de vidro (backdrop-filter) na linha %d: a casa usa fio e fundo liso (PADRAO_RM 3, linguagem de prancha)' % n)
+    EMO = re.compile('[\U0001F300-\U0001FAFF\u23F0-\u23FA\u2705\u274C\u2757\u26A1\u2B50\u231A\u231B\u2615\u26D4]')
+    vistos = 0
+    for i, lin in enumerate(sem_coment.split('\n'), 1):
+        if 'WA_EMOJIS' in lin or lin.lstrip().startswith('//'):
+            continue
+        m = EMO.search(lin)
+        if m and vistos < 5:
+            vistos += 1
+            r['erros'].append('emoji na interface na linha %d (%s): use ícone de traço ou só a palavra (PADRAO_RM 3, linguagem de prancha)' % (i, m.group(0)))
     # data de hoje: toISOString() é o dia de Londres -- aqui vira amanhã às 21h
     for m in re.finditer(r"new Date\(\)\.toISOString\(\)\.(?:slice|substring)\(0,\s*10\)|new Date\(\)\.toISOString\(\)\.split\(", h):
         n = h.count('\n', 0, m.start()) + 1
