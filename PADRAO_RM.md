@@ -73,6 +73,22 @@ embutido e no de arquivo (`rm-logo.svg`), teste `logo-em-arquivo-no-escuro`.
     (`.btn-act.save`, `.btn-red`, `.btn-sm.red`...) já seguem o mesmo visual.
   - O tema decide a APARÊNCIA; posição, largura e mostrar/esconder continuam
     com o sistema.
+  - **Campo:** `var(--rm-ctl)` (38 px) de altura, canto `var(--rm-raio)`
+    (9 px), letra 14 px, rótulo em cima. Campo de busca/filtro pode ser o
+    pequeno (`--rm-ctl-p`, 32 px); campo dentro de célula de tabela fica
+    baixinho. A classe de campo do sistema (`.din`, `.form-input`, `.fld-in`...)
+    escreve essas medidas com as variáveis -- nunca `padding:11px` que dá 45 px
+    num e 30 px no outro. A janela de comando (Ctrl+K) é a exceção.
+  - **Grupo alinhado:** campos lado a lado têm a caixa na mesma linha. Rótulo
+    que quebra em duas linhas não pode empurrar a caixa: a grade do formulário
+    alinha pelo pé (`align-items:end`) ou o rótulo fica curto.
+  - **Texto curto:** sem parágrafo explicando a tela. Nota de ajuda tem uma
+    linha (até ~100 letras); o que precisa de mais do que isso vai para o
+    `title` do botão ou sai. No papel (PDF) vale o mesmo: nada de "Observação:
+    este documento..." -- o documento diz o que é pelos dados.
+  - Teste `campos-padrao` mede altura, canto, letra, rótulo, alinhamento e
+    texto longo em cada sistema (a varredura completa, clicando em tudo, é
+    `AUD_MODO=campos` do `zz-auditoria`).
   - Status (pago, em aberto, atrasado, pedido) usa ok / aviso / perigo /
     informação, sempre com o fundo suave e o texto forte da mesma cor.
   - Tabela: linha sim, linha não, levemente cinza (`--rm-faixa`), a linha sob
@@ -246,7 +262,27 @@ embutido e no de arquivo (`rm-logo.svg`), teste `logo-em-arquivo-no-escuro`.
 
 ## 4. Login (porta de entrada)
 
-Blocos idênticos `rmPortaEstilo` + `rmPortaBloco`:
+Blocos idênticos `rmPortaEstilo` + `rmPortaBloco`. O **cartão é um só** e o
+desenho mora no `rmPortaEstilo` (preso ao `#loginScreen`): fundo escuro com o
+brilho vermelho, cartão branco com fio laranja, **logo completo** (a
+assinatura, nunca só o símbolo), empresa em versalete pequeno, nome do
+sistema em destaque, rótulos "E-mail" e "Senha", campo de 42 px, botão
+"Entrar" com o ícone. Sem frase de rodapé ("Entre com seu e-mail...",
+"Sincronização ativa...", "Acesso protegido por..."). O sistema só escreve a
+marcação comum:
+
+```html
+<div class="login" id="loginScreen"><div class="login-card">
+  <div class="lc-head"><img id="loginLogo" alt="RM Estruturas">
+    <div class="ttl">RM Estruturas Pré-Fabricadas</div><div class="sub">Nome do Sistema</div></div>
+  <div class="lc-body"><div class="login-err" id="loginErr"></div>
+    <div class="f"><span class="lab">E-mail</span><input id="li_user" type="email" placeholder="voce@empresa.com"></div>
+    <div class="f"><span class="lab">Senha</span><input id="li_pass" type="password" placeholder="••••••••"></div>
+    <button id="loginBtn" onclick="doLogin()">Entrar</button></div>
+</div></div>
+```
+
+Teste `login-igual`: o cartão de todos os sistemas tem as mesmas medidas.
 
 - e-mail lembrado e **mostrado pela metade**, "Lembrar" marcado por padrão;
 - foto grande e centralizada; "Não é você?" para trocar de conta;
@@ -255,12 +291,24 @@ Blocos idênticos `rmPortaEstilo` + `rmPortaBloco`:
 
 ## 5. Papel (impressão e PDF)
 
-Tudo que imprime segue a mesma papelaria:
+Tudo que imprime segue a mesma papelaria: o **modelo A (institucional)**,
+escolhido entre quatro em nov/2026. A impressão é sempre pelo **programa
+instalado** (Central desktop): o PDF sai pelo `printToPDF` do Electron, que é
+o mesmo motor do Chromium -- é por ele que o papel é medido e testado.
+
+- **Um lugar só:** o bloco comum `rmImpressaoBloco` (`comum/impressao.html`)
+  monta o papel na hora do PDF (`papelA`), em todo documento que tem o
+  timbrado (`.tb2`): a tela impressa, o documento montado à parte
+  (`rmImprimirHTML`) e o que chega na Central vindo de um sistema. Documento
+  de medida exata (etiqueta, envelope, folha em `@page{margin:0}`) e o que
+  não tem timbrado ficam como estão. Teste `papel-timbrado` (gera o PDF de
+  cada sistema e lê o texto dele).
 
 - **Timbrado:** logo mono à esquerda; à direita, **duas colunas** separadas
   por um fio fino: **razão social** (negrito) e `CNPJ` | **endereço** (rua) e
-  **cidade · UF · CEP**. Fio laranja embaixo e, logo abaixo dele, o **tipo do
-  documento em laranja** (maiúscula espaçada), acima do título.
+  **cidade · UF · CEP**. Embaixo, o **fio laranja de 2 px** e, 2 px abaixo
+  dele, o **fio grafite fino** (1 px); depois o **tipo do documento em
+  laranja** (maiúscula espaçada), acima do título.
   - Sem o nome fantasia: a logo já diz "RM Estruturas Pré-Fabricadas". Quem
     responde pelo papel é a razão social (Nunes e Kuhn Estruturas Metálicas
     Ltda), em todos os sistemas.
@@ -276,9 +324,16 @@ Tudo que imprime segue a mesma papelaria:
   × º ª “ ” ‘ ’ • ² ³ ½; o jsPDF apaga o resto da linha quando acha um deles.
   Todo texto passa pela troca do `rmFontePDF` (× → x, º → o...).
   Teste `almocos-pdf-glifo`.
-- **Rodapé:** `51 99789-7879 · @rm.estruturas` | `www.rmestruturas.com.br` |
-  símbolo laranja; linha de nota abaixo. Fixo em todas as páginas, com
-  `body{padding-bottom:16mm;box-decoration-break:clone}` para não cobrir texto.
+- **Rodapé (todas as páginas):** `51 99789-7879 · @rm.estruturas` |
+  `www.rmestruturas.com.br` | **Página X de Y**, sobre um fio cinza fino.
+  Mora na margem da folha (caixas `@bottom-*` do `@page`, margem de baixo de
+  17 mm), nunca por cima do texto. O pé antigo dentro da página (`.pe`,
+  `#rm-pe-imp`, `.sheetfoot`) sai do PDF; a nota dele ("atualizado em") vai
+  para o fim do documento.
+- **Cabeçalho de continuação (página 2 em diante):** o nome do documento em
+  laranja (o que o sistema dá ao arquivo em `rmNomePDF`, ou o tipo · título)
+  | `RM Estruturas Pré-Fabricadas`, sobre um fio cinza. A página 1 não leva:
+  ela tem o timbrado inteiro.
 - **Marca d'água:** símbolo escuro, **28% da largura, no máximo 190 px,
   opacidade 3,5%**, `mix-blend-mode:multiply`.
   Documento cujas imagens já trazem a marca gravada nelas (as imagens da
