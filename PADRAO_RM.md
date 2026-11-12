@@ -320,6 +320,30 @@ o mesmo motor do Chromium -- é por ele que o papel é medido e testado.
   - Conferido pelo verificador (CNPJ colado no telefone, nome fantasia no
     timbrado) e pelos testes `timbrado`, `timbrado-recibos` e
     `recibos-pf-papel`.
+- **Miolo (modelo M1, nov/2026):** as peças de dentro do documento são as do
+  kit do bloco de impressão (`MIOLO` em `comum/impressao.html`), que vale em
+  todo PDF com timbrado:
+  - **tabela** (automática): cabeçalho cinza claro `#F2F4F7` com rótulo de
+    7,5 px em maiúscula, fio fino entre linhas, sem zebra, corpo de 9,5 px;
+  - **título** (`h1` ou `.rmd-tit`): 20 px, negrito, sem maiúscula; a linha
+    cinza embaixo é `.rmd-subtit`;
+  - **dados** (`.rmd-dados`): faixa cinza em 3 colunas, rótulo pequeno em
+    cima (`<span>`) e valor embaixo (`<b>`);
+  - **seção** (`.rmd-sec`): maiúscula pequena com o traço laranja à esquerda;
+  - **grupo** (`.rmd-grupo`): o nome do grupo da tabela em **laranja**;
+    `.rmd-sub` subtotal; `.rmd-tot` total (fio preto em cima);
+  - **resumo** (`.rmd-res`, com `.rmd-res-total` na caixa grafite),
+    **condições** (`.rmd-cond`) e **observação** (`.rmd-obs`);
+  - `table.rmd-grade` mantém o fio em todas as casas (calendário, ficha de
+    marcar); `.rmd-livre` e a ficha do montador (`.tmf`) ficam de fora;
+  - **página que imprime a própria tela** (só no papel; na tela nada muda):
+    os cartões de resumo levam `.rmd-kpis` e viram a faixa cinza (1º filho
+    rótulo, 2º valor, o resto linha de apoio); o cartão em volta de uma
+    seção leva `.rmd-plano` e perde borda, sombra e fundo; busca, filtros e
+    botões levam `.no-print`; o papel é sempre branco.
+  Documento novo usa as classes do kit, não um CSS próprio de papel. Texto
+  que explica a conta na tela não vai ao papel (`.no-print`). Testes
+  `papel-miolo` e `papel-miolo-pagina`.
 - **PDF de jsPDF** (Almoços): a Satoshi embutida é recortada e não tem
   × º ª “ ” ‘ ’ • ² ³ ½; o jsPDF apaga o resto da linha quando acha um deles.
   Todo texto passa pela troca do `rmFontePDF` (× → x, º → o...).
@@ -328,7 +352,7 @@ o mesmo motor do Chromium -- é por ele que o papel é medido e testado.
   `www.rmestruturas.com.br` | **Página X de Y**, sobre um fio cinza fino.
   Mora na margem da folha (caixas `@bottom-*` do `@page`, margem de baixo de
   17 mm), nunca por cima do texto. O pé antigo dentro da página (`.pe`,
-  `#rm-pe-imp`, `.sheetfoot`) sai do PDF; a nota dele ("atualizado em") vai
+  `.rm-pe`, `#rm-pe-imp`, `.sheetfoot`, `.foot`, `.rodape`) sai do PDF; a nota dele ("atualizado em") vai
   para o fim do documento.
 - **Cabeçalho de continuação (página 2 em diante):** o nome do documento em
   laranja (o que o sistema dá ao arquivo em `rmNomePDF`, ou o tipo · título)
