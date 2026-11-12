@@ -335,9 +335,15 @@ o mesmo motor do Chromium -- é por ele que o papel é medido e testado.
   - **resumo** (`.rmd-res`, com `.rmd-res-total` na caixa grafite),
     **condições** (`.rmd-cond`) e **observação** (`.rmd-obs`);
   - `table.rmd-grade` mantém o fio em todas as casas (calendário, ficha de
-    marcar); `.rmd-livre` e a ficha do montador (`.tmf`) ficam de fora.
-  Documento novo usa as classes do kit, não um CSS próprio de papel. Teste
-  `papel-miolo`.
+    marcar); `.rmd-livre` e a ficha do montador (`.tmf`) ficam de fora;
+  - **página que imprime a própria tela** (só no papel; na tela nada muda):
+    os cartões de resumo levam `.rmd-kpis` e viram a faixa cinza (1º filho
+    rótulo, 2º valor, o resto linha de apoio); o cartão em volta de uma
+    seção leva `.rmd-plano` e perde borda, sombra e fundo; busca, filtros e
+    botões levam `.no-print`; o papel é sempre branco.
+  Documento novo usa as classes do kit, não um CSS próprio de papel. Texto
+  que explica a conta na tela não vai ao papel (`.no-print`). Testes
+  `papel-miolo` e `papel-miolo-pagina`.
 - **PDF de jsPDF** (Almoços): a Satoshi embutida é recortada e não tem
   × º ª “ ” ‘ ’ • ² ³ ½; o jsPDF apaga o resto da linha quando acha um deles.
   Todo texto passa pela troca do `rmFontePDF` (× → x, º → o...).
@@ -346,7 +352,7 @@ o mesmo motor do Chromium -- é por ele que o papel é medido e testado.
   `www.rmestruturas.com.br` | **Página X de Y**, sobre um fio cinza fino.
   Mora na margem da folha (caixas `@bottom-*` do `@page`, margem de baixo de
   17 mm), nunca por cima do texto. O pé antigo dentro da página (`.pe`,
-  `#rm-pe-imp`, `.sheetfoot`) sai do PDF; a nota dele ("atualizado em") vai
+  `.rm-pe`, `#rm-pe-imp`, `.sheetfoot`, `.foot`, `.rodape`) sai do PDF; a nota dele ("atualizado em") vai
   para o fim do documento.
 - **Cabeçalho de continuação (página 2 em diante):** o nome do documento em
   laranja (o que o sistema dá ao arquivo em `rmNomePDF`, ou o tipo · título)
