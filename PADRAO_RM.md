@@ -414,6 +414,17 @@ o mesmo motor do Chromium -- é por ele que o papel é medido e testado.
 
   Observação da linha sai como **texto de apoio** (pequeno, cinza, sem negrito,
   quebra linha), nunca como campo.
+- **Ajuste ao papel (automático, no bloco Impressão):** documento de **uma
+  folha** que ocupa **menos de 60%** da altura útil sai com o miolo inteiro
+  maior pelo mesmo fator -- **1,3** (senão 1,2 ou 1,1), o maior que ainda deixa
+  tudo numa folha (até 90% dela) e sem passar da largura. A escala acima vale
+  em proporção; timbrado (marca, empresa, tipo), rodapé e marca d'água ficam do
+  tamanho de sempre. Documento de mais de uma folha não muda. Fora: o que não
+  tem o papel A (recibo, envelope, etiqueta em margem 0), a folha do montador
+  (`.tmf`), a ficha de marcar (`table.rmd-grade`), o que tiver `.rm-papel-fixo`
+  e o que o sistema declarar em `window.rmPapelFixo` (seletor, ou `true` para
+  todos os documentos dele -- Propostas e Contratos; no Recibos, a
+  pré-visualização de recibo, RH, ponto e termos). Teste `papel-ajuste-letra`.
 - Campo digitado vai para o papel como **texto**, não como `<input>`.
 
 ## 6. Botão de impressão
