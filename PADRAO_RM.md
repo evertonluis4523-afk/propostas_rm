@@ -692,6 +692,17 @@ o mesmo motor do Chromium -- é por ele que o papel é medido e testado.
   usuário do Windows que instalou: instale logado no usuário de quem vai usar
   (teste `instalador-atalho-sempre`).
 
+- **Celular: tela inteira.** No celular (tela estreita e de toque, fora do
+  programa) a Central abre o sistema na página inteira, sem o quadro: no
+  iPhone o quadro estica para a largura do conteúdo (a tela escorrega para o
+  lado) e o imprimir de dentro de quadro não funciona. O sistema mostra o
+  botão redondo de volta (bloco comum `comum/volta-central.html`), que some
+  quando a pessoa toca num campo para digitar e ao rolar para baixo. Teste
+  `central-celular-tela-inteira`.
+- **Bloco comum começa no início da linha.** Colado depois de outra tag, o
+  `aplica_comum` pegaria o script anterior junto; agora ele recusa ("bloco
+  ambíguo"). Teste `aplica-comum-bloco-colado`.
+
 ## 9. Sistema novo — checklist
 
 1. Colar uma vez os blocos de `central_rm/comum/` (fonte Satoshi, Tema RM,

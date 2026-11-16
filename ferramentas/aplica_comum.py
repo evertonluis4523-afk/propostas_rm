@@ -71,8 +71,11 @@ def acha_bloco(html, marca):
         raise ValueError('sem </%s> depois da marca %r' % (tag, marca))
     fim = fecha + len('</%s>' % tag)
     miolo = html[abre.end():p]
-    if re.search(r'(?m)^<(script|style)\b', miolo):
-        raise ValueError('bloco ambíguo para a marca %r' % marca)
+    # qualquer <script>/<style> no meio (mesmo fora do começo da linha):
+    # o bloco colado depois de outra tag fazia a ferramenta pegar o script
+    # ANTERIOR -- o simulador de carga perdeu os 6 MB do 3D assim.
+    if re.search(r'<(script|style)\b', miolo):
+        raise ValueError('bloco ambíguo para a marca %r (bloco tem de começar no início da linha)' % marca)
     return abre.start(), fim
 
 
