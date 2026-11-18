@@ -561,12 +561,17 @@ o mesmo motor do Chromium -- é por ele que o papel é medido e testado.
   `{rm:'fundo'}` e lê as chaves `rm_fundo*`). Sem escolha gravada fica o
   canto próprio do sistema. Dentro da Central, no tema claro, a margem do
   sistema é branca e a folha é marcada só pelo fio.
-  Fundos: Treliça, Grade técnica, Planta industrial, Canto discreto, Trama
-  completa, Arcos e Marca. Cores da marca: Laranja, Grafite e Vinho. Fundo
-  novo é minimalista (traço fino, sem desenho de obra) e entra pelo chip nas
-  Preferências + a regra em `fundo-estilo.html`; fundo ou cor que sai perde
-  chip e regra juntos, e quem o tinha gravado cai no primeiro da lista
-  (teste `central-fundos-arcos`).
+  Fundos (composições com a logo da RM): Assinatura, Marca ao centro,
+  Monograma, Contorno, Faixas, Símbolos, Prancha técnica e Degradê; os mesmos
+  oito no "Plano de fundo do Windows" (mais o Papel RM). Cores da marca:
+  Laranja, Grafite e Vinho. Cada composição tem três peças (`pp-a`, `pp-b`,
+  `pp-c` = a logo) medidas pelo tamanho do quadro (cqw/cqh), em
+  `fundo-estilo.html`: atrás dos sistemas a camada inteira fica suave (pela
+  intensidade), na área de trabalho e nas amostras dos botões ela sai inteira
+  (`.rm-papel`). Fundo novo entra pelo chip nas Preferências + as regras em
+  `fundo-estilo.html`; fundo ou cor que sai perde chip e regra juntos, e quem
+  o tinha gravado cai no novo mais parecido (tabela dos antigos) ou no
+  primeiro da lista (teste `central-fundos-novos`).
 - Movimento (bloco comum `comum/fundo-movimento.html`, igual em todos): nas
   Preferências da Central, "Fundo em movimento" (a obra se montando em 3D
   atrás da tela: estrutura metálica, pavilhão pré-moldado com as placas
