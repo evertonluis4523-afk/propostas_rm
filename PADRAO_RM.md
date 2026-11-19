@@ -82,6 +82,12 @@ embutido e no de arquivo (`rm-logo.svg`), teste `logo-em-arquivo-no-escuro`.
   - **Grupo alinhado:** campos lado a lado têm a caixa na mesma linha. Rótulo
     que quebra em duas linhas não pode empurrar a caixa: a grade do formulário
     alinha pelo pé (`align-items:end`) ou o rótulo fica curto.
+    Vale também para **botão e seletor em pílula** na linha dos campos
+    ("Marcar ativos" ao lado da Parcela, 13º/Férias/Avulso ao lado da Data):
+    têm a altura do campo (`var(--rm-ctl)`) e o mesmo topo e pé da caixa --
+    botão pequeno (32 px) não vai ao lado de caixa de 38, e grupo de botões
+    sem rótulo desce para a linha da caixa (`align-self:end`). O teste
+    `campos-padrao` mede isso em cada aba e sub-aba de cada sistema.
   - **Texto curto:** sem parágrafo explicando a tela. Nota de ajuda tem uma
     linha (até ~100 letras); o que precisa de mais do que isso vai para o
     `title` do botão ou sai. No papel (PDF) vale o mesmo: nada de "Observação:
