@@ -75,7 +75,12 @@ O roteiro, para toda função nova ou mudada (responder a cada linha):
    procurar.
 9. **Onde se usa.** Funciona no celular e no programa instalado, e com outro
    usuário (permissão, porta de acesso).
-10. **O que já estava salvo** continua igual (ver Princípios).
+10. **Guardar o trabalho.** Tela onde se monta alguma coisa (medição,
+    cálculo, planificação, escada, orçamento, detalhamento) tem **salvar** e
+    reabrir depois, com nome; fechar, recarregar ou trocar de aba não perde o
+    que foi feito. Quem passou meia hora medindo não pode depender de não
+    fechar a janela.
+11. **O que já estava salvo** continua igual (ver Princípios).
 
 O que é pequeno e óbvio pelo roteiro entra junto, sem esperar pedido (a ação
 de lote numa lista nova, o excluir que faltava). O que muda o jeito de
@@ -88,6 +93,14 @@ item da lista "Travas que já aconteceram", abaixo, e teste.
   só um por um (nov/2026) -- barra de lote com as quatro ações.
 - Chave na mão: importar de novo duplicava as esquadrias -- troca as da
   importação anterior.
+- Leitor DWG, aba Escada: não tinha salvar obra -- entrou na lista de obras
+  do Leitor. Vale para toda aba de trabalho do Leitor e dos outros sistemas.
+- Leitor DWG, aba Chave na mão: só se lembrava sozinha, neste computador,
+  pelo nome do arquivo -- ganhou Salvar obra (lista de obras, nuvem).
+- Contas: selecionar servia só para o relatório; pagar as do dia e excluir
+  lançamento errado eram uma por uma -- barra da seleção com pagar e excluir.
+- Compras: baixa de boleto um por um e sem volta -- baixar o grupo inteiro
+  da agenda e "Desfazer" em toda baixa.
 
 ## 2. Marca
 
