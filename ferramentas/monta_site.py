@@ -42,6 +42,122 @@ def commit_de(pasta):
         return ''
 
 
+def data_de(pasta):
+    # data do commit publicado (a mesma a cada montagem do mesmo commit)
+    try:
+        return subprocess.check_output(['git', '-C', pasta, 'log', '-1', '--format=%cs'], text=True).strip()
+    except Exception:
+        return ''
+
+
+def extensao_de(pasta):
+    # versão da extensão do SketchUp que o Leitor DWG oferece para baixar
+    try:
+        with open(os.path.join(pasta, 'index.html'), encoding='utf-8') as f:
+            html = f.read()
+        i = html.find("TLH_EXT_VERSAO='")
+        return html[i + 16:html.index("'", i + 16)] if i >= 0 else ''
+    except Exception:
+        return ''
+
+
+# PLUGINS E ARQUIVOS PARA BAIXAR (a gaveta "Plugins e arquivos" da Central).
+# A lista sai dos próprios arquivos a cada montagem: extensão do SketchUp
+# (sketchup/*.rbz, nome e versão do .rb que a registra) e rotina do AutoCAD
+# (*.lsp na raiz, versão no RM-VER). Mudou o plugin e publicou, a gaveta já
+# mostra a versão nova e o link baixa o arquivo novo -- ninguém mantém lista.
+# Aqui só o que o arquivo não diz: para que serve e como instalar.
+PLUGINS_TEXTO = {
+    'leitor_dwg/sketchup/RM_Coberturas.rbz': (
+        'Cobertura e fechamento para o Leitor DWG (aba Telhas) e medidas e esquadrias da chave na mão (aba Chave na mão).',
+        'SketchUp › Extensões › Gerenciador de extensões › Instalar extensão, e escolha o arquivo. Reinicie o SketchUp.'),
+    'calculadora-pu/sketchup/RM_Estruturas_PU.rbz': (
+        'Exporta as linhas de PU do modelo para o 3D do Cálculo PU.',
+        'SketchUp › Extensões › Gerenciador de extensões › Instalar extensão, e escolha o arquivo. Reinicie o SketchUp.'),
+    'propostas_rm/sketchup/RM_Cenas.rbz': (
+        'Exporta as cenas do modelo como imagens para a proposta (Propostas e Contratos).',
+        'SketchUp › Extensões › Gerenciador de extensões › Instalar extensão, e escolha o arquivo. Reinicie o SketchUp.'),
+    'leitor_dwg/RM-TELHA.lsp': (
+        'Desenha e cota no AutoCAD o esboço de telhas que o Leitor DWG lê (comandos TL, TLC, TLS; RMONDE mostra a versão carregada).',
+        'AutoCAD › APPLOAD, carregue o arquivo e ponha em Conteúdo da inicialização (Startup Suite).'),
+}
+
+
+def _le(caminho):
+    try:
+        with open(caminho, encoding='utf-8', errors='replace') as f:
+            return f.read()
+    except Exception:
+        return ''
+
+
+def _entre(txt, marca, fim="'"):
+    i = txt.find(marca)
+    if i < 0:
+        return ''
+    i += len(marca)
+    j = txt.find(fim, i)
+    return txt[i:j] if j > i else ''
+
+
+def rbz_desatualizados(raiz_repo, repo):
+    # o .rbz é o que se baixa: se o código da extensão mudou e ele não foi
+    # refeito, o link entregaria a versão velha -- aí a montagem para
+    import zipfile
+    ruins = []
+    skp = os.path.join(raiz_repo, 'sketchup')
+    if not os.path.isdir(skp):
+        return ruins
+    for nome in os.listdir(skp):
+        if not nome.endswith('.rbz'):
+            continue
+        try:
+            z = zipfile.ZipFile(os.path.join(skp, nome))
+            for m in z.namelist():
+                f = os.path.join(skp, m)
+                if not m.endswith('/') and (not os.path.isfile(f) or open(f, 'rb').read() != z.read(m)):
+                    ruins.append(repo + '/sketchup/' + nome + ' (' + m + ')')
+        except Exception as e:
+            ruins.append(repo + '/sketchup/' + nome + ' (' + str(e) + ')')
+    return ruins
+
+
+def plugins_de(raiz_repo, repo):
+    import re
+    achados = []
+    skp = os.path.join(raiz_repo, 'sketchup')
+    if os.path.isdir(skp):
+        for nome in sorted(os.listdir(skp)):
+            if not nome.endswith('.rbz'):
+                continue
+            base = nome[:-4]
+            reg = _le(os.path.join(skp, base + '.rb'))
+            # o .rb que registra a extensão às vezes tem outro nome (RM_Estruturas.rb para RM_Estruturas_PU.rbz)
+            if 'SketchupExtension.new' not in reg:
+                for outro in sorted(os.listdir(skp)):
+                    if outro.endswith('.rb') and 'SketchupExtension.new' in _le(os.path.join(skp, outro)):
+                        reg = _le(os.path.join(skp, outro))
+                        break
+            m = re.search(r"SketchupExtension\.new\(\s*['\"]([^'\"]+)", reg)
+            v = re.search(r"\.version\s*=\s*['\"]([^'\"]+)", reg)
+            achados.append(('sketchup/' + nome, 'SketchUp', m.group(1) if m else base, v.group(1) if v else ''))
+    for nome in sorted(os.listdir(raiz_repo)):
+        if nome.lower().endswith('.lsp'):
+            txt = _le(os.path.join(raiz_repo, nome))
+            m = re.search(r'\(setq RM-VER "([^"]+)"', txt)
+            achados.append((nome, 'AutoCAD', nome[:-4], m.group(1) if m else ''))
+    out = []
+    for rel, tipo, nome, versao in achados:
+        uso, instalar = PLUGINS_TEXTO.get(repo + '/' + rel, ('', ''))
+        try:
+            data = subprocess.check_output(['git', '-C', raiz_repo, 'log', '-1', '--format=%cs', '--', rel], text=True).strip()
+        except Exception:
+            data = ''
+        out.append({'nome': nome, 'tipo': tipo, 'versao': versao, 'sistema': repo, 'arquivo': repo + '/' + rel,
+                    'tamanho': os.path.getsize(os.path.join(raiz_repo, rel)), 'data': data, 'uso': uso, 'instalar': instalar})
+    return out
+
+
 def versao_de(pasta):
     try:
         with open(os.path.join(pasta, 'index.html'), encoding='utf-8') as f:
@@ -65,6 +181,9 @@ def copia(origem, destino):
 
 def monta(raiz, destino):
     raiz = os.path.realpath(raiz)
+    ruins = [r for s in sistemas(raiz) for r in rbz_desatualizados(os.path.realpath(os.path.join(raiz, s)), s)]
+    if ruins:
+        sys.exit('PARADO: extensão do SketchUp mudou e o .rbz não foi refeito -- refaça antes de publicar:\n  ' + '\n  '.join(ruins))
     # limpa tudo menos o .git: o site é sempre remontado do zero, então um
     # arquivo apagado num sistema também some daqui
     os.makedirs(destino, exist_ok=True)
@@ -74,11 +193,15 @@ def monta(raiz, destino):
         p = os.path.join(destino, nome)
         shutil.rmtree(p) if os.path.isdir(p) and not os.path.islink(p) else os.remove(p)
     lista = {}
+    plugins = []
     for s in sistemas(raiz):
         origem = os.path.realpath(os.path.join(raiz, s))
         os.makedirs(os.path.join(destino, s))
         copia(origem, os.path.join(destino, s))
-        lista[s] = {'versao': versao_de(origem), 'commit': commit_de(origem)}
+        lista[s] = {'versao': versao_de(origem), 'commit': commit_de(origem), 'data': data_de(origem)}
+        if extensao_de(origem):
+            lista[s]['extensao'] = extensao_de(origem)
+        plugins += plugins_de(origem, s)
     # página de instalação do programa num endereço curto (/instalar/), sem o
     # nome da conta do GitHub no link que se envia
     inst = os.path.join(raiz, 'central_rm', 'instalar.html')
@@ -97,6 +220,14 @@ def monta(raiz, destino):
     # mesmo arquivo, e nada é enviado quando nada mudou)
     with open(os.path.join(destino, 'versoes.json'), 'w', encoding='utf-8') as f:
         json.dump(lista, f, ensure_ascii=False, indent=1, sort_keys=True)
+    # A aba Versões da Central lê o versoes.json também do programa instalado
+    # e do endereço do GitHub (outra origem): o Cloudflare só deixa com este
+    # cabeçalho. Sem cache, para a lista não ficar atrás da publicação.
+    with open(os.path.join(destino, '_headers'), 'w', encoding='utf-8') as f:
+        f.write('/versoes.json\n  Access-Control-Allow-Origin: *\n  Cache-Control: no-cache\n'
+                '/plugins.json\n  Access-Control-Allow-Origin: *\n  Cache-Control: no-cache\n')
+    with open(os.path.join(destino, 'plugins.json'), 'w', encoding='utf-8') as f:
+        json.dump(plugins, f, ensure_ascii=False, indent=1, sort_keys=True)
     # O Cloudflare oferece dois caminhos para publicar um repositório: Pages
     # (não precisa de nada) e Workers, que pede este arquivo dizendo onde
     # estão os arquivos do site. Com ele, o mesmo repositório serve aos dois.
