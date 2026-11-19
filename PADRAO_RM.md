@@ -42,6 +42,53 @@ service worker) para todos. O verificador acusa bloco diferente da fonte.
   para todos, e cada sistema usa uma parte deles. Os comentários ficam: são o
   registro do porquê.
 
+## 1a. Uso de verdade: prevenção de travas
+
+Função pronta não é só função que funciona com um item no dia em que foi
+pedida. Antes de entregar, simula-se a operação do dia a dia e o que travaria
+quem usa. Caso que deu origem à regra: os recibos do 13º eram emitidos todos
+de uma vez, mas imprimir, mudar a data ou excluir uma simulação era um por um.
+
+O roteiro, para toda função nova ou mudada (responder a cada linha):
+
+1. **Volume.** O que se faz com um, dá para fazer com vários? Lista de
+   documentos (recibos, contas, pedidos, cheques...) tem marcar vários e
+   marcar todos da lista filtrada, e as ações de lote que fazem sentido:
+   imprimir, mudar data, confirmar, excluir, exportar.
+2. **Desfazer.** Tudo que se gera, emite ou confirma tem caminho de volta:
+   editar depois, reabrir, excluir (um e em lote), com confirmação e rastro
+   (auditoria) quando já valeu. Testar e descartar não pode custar trabalho.
+3. **Simular antes de valer.** Quem quer só ver como fica consegue (prévia,
+   rascunho) sem efeito que não volta (número gasto, baixa, envio); se não der,
+   o descarte é completo e de uma vez.
+4. **Refazer sem duplicar.** Importar ou gerar de novo troca o que veio da vez
+   anterior e avisa o que já existe.
+5. **Conferir antes de lançar.** Importação mostra o que vai entrar, o que não
+   casou e deixa corrigir ali.
+6. **Corrigir o erro comum.** Pessoa, data, valor ou competência errados têm
+   correção sem apagar tudo; mudança em massa (data, competência, situação)
+   onde houver lista.
+7. **Achar.** Lista que cresce tem busca e filtro, e o "marcar todos" vale
+   para o que o filtro mostra.
+8. **O próximo passo à mão.** Depois de gerar, o que vem em seguida (imprimir,
+   PDF, enviar pelo WhatsApp, mandar para outro sistema) está ali, sem
+   procurar.
+9. **Onde se usa.** Funciona no celular e no programa instalado, e com outro
+   usuário (permissão, porta de acesso).
+10. **O que já estava salvo** continua igual (ver Princípios).
+
+O que é pequeno e óbvio pelo roteiro entra junto, sem esperar pedido (a ação
+de lote numa lista nova, o excluir que faltava). O que muda o jeito de
+trabalhar ou é grande vai como sugestão na resposta, para decidir. A
+resposta de entrega diz o que foi antecipado. Trava encontrada no uso vira
+item da lista "Travas que já aconteceram", abaixo, e teste.
+
+**Travas que já aconteceram** (para não repetir em outro sistema):
+- Recibos 13º/férias: emitidos em lote, mas imprimir, mudar data e excluir
+  só um por um (nov/2026) -- barra de lote com as quatro ações.
+- Chave na mão: importar de novo duplicava as esquadrias -- troca as da
+  importação anterior.
+
 ## 2. Marca
 
 | Uso | Arquivo / cor |
