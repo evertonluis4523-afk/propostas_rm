@@ -101,6 +101,15 @@ item da lista "Travas que já aconteceram", abaixo, e teste.
   lançamento errado eram uma por uma -- barra da seleção com pagar e excluir.
 - Compras: baixa de boleto um por um e sem volta -- baixar o grupo inteiro
   da agenda e "Desfazer" em toda baixa.
+- Excluir apagava de vez (Contas, Compras, Perfitec, recibos do 13º/férias e
+  de clientes) -- lixeira de 30 dias em todos: o item fica marcado
+  (x.lixeira = quando) no mesmo lugar da nuvem, some das listas e das somas
+  (a Central também ignora), restaura ou apaga de vez. Sistema novo com
+  exclusão segue o mesmo jeito.
+- Perfitec: carga com vários pedidos marcados um por um -- marcar vários e
+  receber/voltar/excluir de uma vez. Máquinas: fim de obra movendo uma por
+  uma -- mover as marcadas. Recibos Terceiros: só "confirmar todos" ou um
+  por um -- confirmar os marcados. Recibos Clientes: excluir em lote.
 
 ## 2. Marca
 
