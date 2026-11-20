@@ -98,6 +98,14 @@ um símbolo não contam. Por isso: botão de ação tem `title` que diz a ação
 ("Excluir recibo"), nunca o dado da linha. Trava que aparecer lá é pedido de
 lote: entra no roteiro acima.
 
+**Medidor de download da nuvem.** O plano gratuito do Firebase dá 10 GB de
+download por mês (estourou em novembro de 2026, com o banco inteiro em 139
+MB). O mesmo bloco comum mede a primeira leitura de cada pasta em cada
+sistema (só caminho e tamanho, `{rm:'uso'}`), a Central mede as dela, e a
+Saúde mostra "Download da nuvem neste mês" por pasta e por quem leu. Leitura
+nova de pasta grande (ouvir um nó inteiro quando bastava um resumo) aparece
+ali: prefira ler o resumo ou o pedaço que a tela usa.
+
 **Travas que já aconteceram** (para não repetir em outro sistema):
 - Recibos 13º/férias: emitidos em lote, mas imprimir, mudar data e excluir
   só um por um (nov/2026) -- barra de lote com as quatro ações.
@@ -626,6 +634,36 @@ o mesmo motor do Chromium -- é por ele que o papel é medido e testado.
   pergunta); `AUD_MODO=nomes` procura nome em MAIÚSCULAS na tela;
   `AUD_MODO=celular` abre em 360 px e lista o que vaza ou fica cortado; `AUD_SO`
   limita a alguns sistemas. Rodar antes de mudar o tema ou o padrão visual.
+- **Simulador de ataque** (não roda sozinho; rodar quando mudarem as regras
+  do Firebase, o login ou uma tela que mostra texto digitado por alguém):
+  - Etapa 1, quem lê/grava/apaga cada nó: `node
+    ferramentas/testes/ataque_regras.js` sobe uma cópia do banco (emulador,
+    precisa de Java) com `regras_firebase.json`, dados fictícios e quatro
+    pessoas (sem login, conta sem acesso, funcionário de um sistema, dono),
+    mais as tentativas de subir de nível. Nó novo nas regras: acrescente-o na
+    tabela `ESPERADO`. Só publica regra nova com 0 falha nele.
+  - Etapa 2, texto que vira código: `AUD_ATAQUE=/pasta-de-saida node
+    ferramentas/testes/roda.js /pasta zz-ataque-texto` põe uma armadilha
+    (`"><img onerror=...>`) em todo campo de todas as abas, salva, reabre as
+    telas e gera os relatórios; lista o campo e o ponto da tela em que a
+    armadilha rodou. Tem um controle que precisa disparar (senão o resultado
+    não vale).
+- **Texto digitado é sempre texto.** Nome, observação, cliente, obra, mensagem
+  de erro: nunca entra cru num `innerHTML` nem num papel (timbrado, pé, título
+  de relatório). Passa pelo escape do sistema (`esc`, `escHtml`, `escapeAttr`)
+  ou vai por `textContent`. Função que recebe texto para montar HTML (o
+  `cabecalhoPDF`, o `papelariaHTML`) escapa ela mesma, não confia em quem
+  chama. Exemplo que já aconteceu: o nome da obra rodava como código no
+  impresso do Orçamento (teste `orcamento-papel-texto-seguro`).
+- **A permissão de excluir de cada login é da tela, não do banco.** As
+  regras do Firebase liberam o nó do sistema inteiro para quem tem o sistema;
+  o "excluir só com autorização" vale nos botões dos sistemas. Quem tiver o
+  login e souber falar direto com o banco passa por cima, item por item.
+  **Apagar o nó inteiro de um sistema** o banco só aceita do dono: cada
+  `.write` de sistema em `regras_firebase.json` termina em `&& (newData.exists()
+  || <dono>)`. Efeito: o "Apagar tudo" do Recibos é só do dono, e o último
+  item que sobrar num sistema também (o resto, item por item, como nas telas).
+  Nó novo de sistema nas regras leva o mesmo final.
 - Roda em paralelo (até 4 ao mesmo tempo, um navegador por frente; o
   relatório sai na ordem de sempre, com o tempo de cada teste). Para caçar
   teste instável, um por vez: `RM_TESTES_PARALELO=1`.
