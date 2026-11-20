@@ -98,6 +98,14 @@ um símbolo não contam. Por isso: botão de ação tem `title` que diz a ação
 ("Excluir recibo"), nunca o dado da linha. Trava que aparecer lá é pedido de
 lote: entra no roteiro acima.
 
+**Medidor de download da nuvem.** O plano gratuito do Firebase dá 10 GB de
+download por mês (estourou em novembro de 2026, com o banco inteiro em 139
+MB). O mesmo bloco comum mede a primeira leitura de cada pasta em cada
+sistema (só caminho e tamanho, `{rm:'uso'}`), a Central mede as dela, e a
+Saúde mostra "Download da nuvem neste mês" por pasta e por quem leu. Leitura
+nova de pasta grande (ouvir um nó inteiro quando bastava um resumo) aparece
+ali: prefira ler o resumo ou o pedaço que a tela usa.
+
 **Travas que já aconteceram** (para não repetir em outro sistema):
 - Recibos 13º/férias: emitidos em lote, mas imprimir, mudar data e excluir
   só um por um (nov/2026) -- barra de lote com as quatro ações.
