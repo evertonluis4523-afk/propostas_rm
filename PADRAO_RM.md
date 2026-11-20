@@ -650,8 +650,12 @@ o mesmo motor do Chromium -- é por ele que o papel é medido e testado.
 - **A permissão de excluir de cada login é da tela, não do banco.** As
   regras do Firebase liberam o nó do sistema inteiro para quem tem o sistema;
   o "excluir só com autorização" vale nos botões dos sistemas. Quem tiver o
-  login e souber falar direto com o banco passa por cima. A proteção contra
-  apagar tudo é o backup.
+  login e souber falar direto com o banco passa por cima, item por item.
+  **Apagar o nó inteiro de um sistema** o banco só aceita do dono: cada
+  `.write` de sistema em `regras_firebase.json` termina em `&& (newData.exists()
+  || <dono>)`. Efeito: o "Apagar tudo" do Recibos é só do dono, e o último
+  item que sobrar num sistema também (o resto, item por item, como nas telas).
+  Nó novo de sistema nas regras leva o mesmo final.
 - Roda em paralelo (até 4 ao mesmo tempo, um navegador por frente; o
   relatório sai na ordem de sempre, com o tempo de cada teste). Para caçar
   teste instável, um por vez: `RM_TESTES_PARALELO=1`.
