@@ -88,6 +88,16 @@ trabalhar ou é grande vai como sugestão na resposta, para decidir. A
 resposta de entrega diz o que foi antecipado. Trava encontrada no uso vira
 item da lista "Travas que já aconteceram", abaixo, e teste.
 
+**Detector de travas.** O bloco comum `relata-erro.html` conta, em cada
+sistema, a mesma ação repetida (nome do botão pelo `title`/`aria-label` ou
+texto, nomes dos `data-*` sem os valores, e a aba aberta; números viram `#`).
+Com 8 vezes em 5 minutos avisa a Central (`{rm:'trava'}`), que guarda no nó
+`central_erros` com `tipo:'trava'` e mostra em Acompanhamento › Travas e no
+relatório de melhorias. Abas, fechar/cancelar, anterior/próximo e botões de
+um símbolo não contam. Por isso: botão de ação tem `title` que diz a ação
+("Excluir recibo"), nunca o dado da linha. Trava que aparecer lá é pedido de
+lote: entra no roteiro acima.
+
 **Travas que já aconteceram** (para não repetir em outro sistema):
 - Recibos 13º/férias: emitidos em lote, mas imprimir, mudar data e excluir
   só um por um (nov/2026) -- barra de lote com as quatro ações.
