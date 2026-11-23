@@ -77,6 +77,9 @@ PLUGINS_TEXTO = {
     'propostas_rm/sketchup/RM_Cenas.rbz': (
         'Exporta as cenas do modelo como imagens para a proposta (Propostas e Contratos).',
         'SketchUp › Extensões › Gerenciador de extensões › Instalar extensão, e escolha o arquivo. Reinicie o SketchUp.'),
+    'leitor_dwg/COTAR_BARRAS.lsp': (
+        'Cota no AutoCAD cada barra selecionada (cota alinhada), sem os suportes de terça, com a letra no tamanho do desenho (comando COTARBARRAS; RMCBVER mostra a versão).',
+        'AutoCAD › APPLOAD, carregue o arquivo e ponha em Conteúdo da inicialização (Startup Suite).'),
     'leitor_dwg/RM-TELHA.lsp': (
         'Desenha e cota no AutoCAD o esboço de telhas que o Leitor DWG lê (comandos TL, TLC, TLS; RMONDE mostra a versão carregada).',
         'AutoCAD › APPLOAD, carregue o arquivo e ponha em Conteúdo da inicialização (Startup Suite).'),
@@ -144,7 +147,7 @@ def plugins_de(raiz_repo, repo):
     for nome in sorted(os.listdir(raiz_repo)):
         if nome.lower().endswith('.lsp'):
             txt = _le(os.path.join(raiz_repo, nome))
-            m = re.search(r'\(setq RM-VER "([^"]+)"', txt)
+            m = re.search(r'\(setq RM-(?:[A-Z]+-)?VER "([^"]+)"', txt)
             achados.append((nome, 'AutoCAD', nome[:-4], m.group(1) if m else ''))
     out = []
     for rel, tipo, nome, versao in achados:

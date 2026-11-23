@@ -661,6 +661,16 @@ o mesmo motor do Chromium -- é por ele que o papel é medido e testado.
   `cabecalhoPDF`, o `papelariaHTML`) escapa ela mesma, não confia em quem
   chama. Exemplo que já aconteceu: o nome da obra rodava como código no
   impresso do Orçamento (teste `orcamento-papel-texto-seguro`).
+- **Recado entre janelas (postMessage) que faz alguma coisa confere a origem.**
+  Abrir planta, importar, nota fiscal, medição, conta, ponte do PDF: o sistema
+  só obedece se `window.rmOrigemRM(ev.origin)` (bloco comum relata-erro.html:
+  o próprio endereço, rm-estruturas.pages.dev, o GitHub Pages e, só no
+  programa do PC, a Central local). Recado só de aparência (tema, fundo,
+  movimento) não precisa. Na Central: erro/trava/download só de sistema aberto
+  nela; PDF, nota fiscal e abrir outro sistema só de sistema da casa
+  (`rmJanelaOficial`), nunca de endereço cadastrado à mão; a janela da nota
+  só abre o meudanfe. O documento do PDF vai só para a origem que respondeu
+  a ponte. Teste `ataque-mensagens-entre-janelas` (etapa 3 do simulador).
 - **A permissão de excluir de cada login é da tela, não do banco.** As
   regras do Firebase liberam o nó do sistema inteiro para quem tem o sistema;
   o "excluir só com autorização" vale nos botões dos sistemas. Quem tiver o
