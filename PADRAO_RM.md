@@ -102,9 +102,15 @@ lote: entra no roteiro acima.
 download por mês (estourou em novembro de 2026, com o banco inteiro em 139
 MB). O mesmo bloco comum mede a primeira leitura de cada pasta em cada
 sistema (só caminho e tamanho, `{rm:'uso'}`), a Central mede as dela, e a
-Saúde mostra "Download da nuvem neste mês" por pasta e por quem leu. Leitura
-nova de pasta grande (ouvir um nó inteiro quando bastava um resumo) aparece
-ali: prefira ler o resumo ou o pedaço que a tela usa.
+Saúde mostra "Download da nuvem neste mês" por pasta e por quem leu (o
+primeiro `on()` de cada pasta e cada `once()`/`get()` avulso). Leitura nova
+de pasta grande (ouvir um nó inteiro quando bastava um resumo) aparece ali:
+prefira ler o resumo ou o pedaço que a tela usa. O culpado de novembro foi a
+cópia de segurança da Central: de 2 em 2 horas relia os anexos (~130 MB).
+Agora ela pede só a lista de nomes (`?shallow=true`) e baixa os anexos
+quando a lista muda ou uma vez por semana (teste `backup-anexos-so-quando-mudam`).
+Anexo novo (imagem, PDF) nunca entra numa pasta que alguém lê inteira com
+frequência.
 
 **Travas que já aconteceram** (para não repetir em outro sistema):
 - Recibos 13º/férias: emitidos em lote, mas imprimir, mudar data e excluir
