@@ -354,8 +354,8 @@ embutido e no de arquivo (`rm-logo.svg`), teste `logo-em-arquivo-no-escuro`.
   preto), `suave` (grafite) e `nitido` (grafite escuro, com o texto
   principal quase branco e o de apoio um degrau abaixo -- no forte os dois
   saíam quase do mesmo cinza). As chaves comuns são `rm_tema` (claro/escuro)
-  e `rm_tom` (forte/suave/nitido/jarvis); o botão anda claro → suave → nítido →
-  escuro → Jarvis, e a Central oferece as cinco em Aparência. Regra que vale
+  e `rm_tom` (forte/suave/nitido/jarvis/operi); o botão anda claro → suave →
+  nítido → escuro → Jarvis → Operi, e a Central oferece as seis em Aparência. Regra que vale
   para o escuro pergunta por `data-theme="escuro"` e vale em todas as
   intensidades.
 - **Tema Jarvis** (`data-tom="jarvis"`, um escuro): o HUD holográfico. Nos
@@ -369,6 +369,15 @@ embutido e no de arquivo (`rm-logo.svg`), teste `logo-em-arquivo-no-escuro`.
   "reduzir movimento", fica fora do celular e do papel, e para com um
   sistema aberto por cima. Testes `central-tema-jarvis` e
   `tema-jarvis-sistemas`.
+- **Tema Operi** (`data-tom="operi"`, um escuro, só do dono como o Jarvis):
+  a marca com que o dono vende os módulos (pacote em `central_rm/comum` no
+  bloco do tema). Fundo grafite-aço do logo (#17212B, nunca o preto da RM);
+  o laranja da RM vira o da Operi por lista exata (perigo e aviso não
+  mudam) e o botão cheio vai a #B45309, que segura 5:1 com a letra branca.
+  O logo da RM nunca sai do lugar: o da Operi entra ao lado, escondido, e só
+  a folha de TELA troca um pelo outro -- **impresso e PDF continuam RM**.
+  Testes `tema-operi-so-dono`, `tema-operi-impresso-rm` e o tom `operi` no
+  `cores-todas-as-telas`.
 - **Fundo:** treliça + marca num desenho vetorial só, preso no canto, atrás do
   conteúdo, **fora da impressão**.
 - **Celular:** `100dvh`, `env(safe-area-inset-*)`, `touch-action:manipulation`
